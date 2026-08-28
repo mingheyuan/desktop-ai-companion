@@ -1,6 +1,6 @@
 # Desktop AI Companion 内部技术架构
 
-> 版本：v0.2 架构基线
+> 版本：v0.3 架构基线
 >
 > 状态：已确认方向，实施前仍需冻结协议字段、数据库迁移和关键状态转移
 >
@@ -8,7 +8,7 @@
 
 ## 1. 文档目标
 
-本文定义 MVP 内部各组件的职责、进程边界、通信方式、状态管理、语音链路、记忆流程和桌宠交互组织方式。
+本文定义 MVP 内部各组件的职责、进程边界、通信方式、状态管理、语音链路、记忆流程和桌宠交互组织方式，并为后续工具调用与按需屏幕感知保留受控扩展点。
 
 这份文档解决的是“各技术如何协作”，不是立即开始编码的信号。在第 13 节列出的实施前门槛完成前，不初始化业务代码骨架。
 
@@ -19,13 +19,15 @@
 - 持续监听只在本地完成唤醒检测，唤醒前音频不进入云端服务。
 - 记忆写入可追溯、可确认、可撤销，角色核心设定不会被普通对话覆盖。
 - 角色表现由统一状态派生，业务模块不能直接争抢动画和表情控制权。
+- 后续工具能力经过统一 schema、权限策略和审计，模型不能直接访问系统 API。
 
 ### MVP 非目标
 
 - 多角色同时运行。
 - 跨设备同步和云端记忆。
 - 向量数据库、复杂自治规划和长期后台任务。
-- 钢琴、MIDI、屏幕理解和完整换装系统。
+- 钢琴、MIDI、完整换装和通用 GUI 自动化。
+- 内置工具执行与按需屏幕理解不进入当前核心 MVP，按照 [`tools-and-vision.md`](tools-and-vision.md) 作为后续 Tool MVP。
 
 ## 2. 总体结构
 
@@ -42,7 +44,9 @@ flowchart LR
         Turn["TurnActor\n单轮对话"]
         AudioWorker["AudioWorker\n音频控制队列"]
         MemoryWorker["MemoryWorker\n记忆串行写入"]
-        Providers["ProviderRegistry\nLLM / ASR / TTS"]
+        Providers["ProviderRegistry\nLLM / ASR / TTS / Vision"]
+        Tools["ToolRuntime（规划）\nRegistry / Policy / Executor"]
+        Screen["ScreenObserver（规划）\n按需单帧"]
         Activity["ActivityStore + AttentionResolver"]
         Behavior["BehaviorScheduler\n角色表现调度"]
         Window["PetOverlayController\n窗口与托盘"]
@@ -62,6 +66,9 @@ flowchart LR
     Supervisor --> MemoryWorker
     Supervisor --> Activity
     Turn --> Providers
+    Turn -.-> Tools
+    Tools -.-> Screen
+    Tools -.-> Providers
     MemoryWorker <--> DB
     Activity --> Behavior
     Behavior --> ViewStore
@@ -95,7 +102,9 @@ Rust 是应用业务状态的唯一事实来源，主要模块如下：
 - `TurnActor`：每轮对话一个实例；管理上下文准备、LLM 流、句子切分、TTS 投递和完成状态。
 - `AudioWorker`：串行处理音频控制请求，维护 AudioHost 连接、唤醒词、VAD、ASR 和播放会话。
 - `MemoryWorker`：记忆唯一写入口；串行执行候选合并、确认、修改、删除和索引更新。
-- `ProviderRegistry`：隔离 LLM、ASR 和 TTS Provider；Provider 不直接修改 UI 或数据库。
+- `ProviderRegistry`：隔离 LLM、ASR、TTS 和 Vision Provider；Provider 不直接修改 UI、工具权限或数据库。
+- `ToolRuntime`（规划）：注册、校验、授权和执行有限工具，并把结果返回当前 `TurnActor`；详细方案见 [`tools-and-vision.md`](tools-and-vision.md)。
+- `ScreenObserver`（规划）：按需捕获当前窗口、显示器或选区，管理临时截图与 Vision Provider 路由；不等同于 GUI 自动化。
 - `ActivityStore`：记录需要呈现给用户的当前活动、结果和阻塞项。
 - `AttentionResolver`：按优先级从多个活动中选出桌宠当前应该表达的状态。
 - `BehaviorScheduler`：把语义状态转换为动作、表情、视线、口型和气泡提示。
@@ -125,6 +134,10 @@ AudioHost 不理解角色、LLM、记忆或业务页面。其崩溃只影响语�
 | 桌宠位置、尺寸、显示器、可见性 | Rust 配置存储 | React 提交意图，窗口控制器应用并回报 |
 | 动作、表情、口型 | Rust 派生语义状态；React 执行渲染 | 动画完成事件可回传，但不能反向改写业务状态 |
 | API Key | macOS Keychain，经 Rust 访问 | 不进入前端持久存储、日志或 SQLite |
+| 工具定义、授权策略、运行记录 | Rust `ToolRuntime` / SQLite | 模型只能提出结构化调用，不能绕过策略直接执行 |
+| 临时屏幕快照 | Rust `ScreenObserver` | 按 TTL 删除；默认不进入聊天、记忆或诊断日志 |
+
+聊天、语音、视觉等 Provider 的凭据按用途保存为独立 Keychain 条目。用户可以主动选择复用同一凭据，但代码不得默认把聊天 Key 暴露给视觉或外部工具。
 
 UI 启动或重载时先请求完整 `AppSnapshot`，之后消费增量事件。若发现事件序号断裂，UI 丢弃本地投影并重新拉取快照，不尝试自行补状态。
 
@@ -145,6 +158,8 @@ PlaybackState: Idle | Buffering | Playing | Stopping
 - `PlaybackState` 表示 TTS 队列与扬声器状态。
 
 桌宠的 `idle / listening / thinking / speaking / needs-input / blocked / ready / sleeping` 是以上状态与活动信息的**派生结果**，不是另一套可被任意模块写入的业务事实。
+
+后续每个工具调用另有独立状态：`Proposed | AwaitingApproval | Running | Succeeded | Cancelled | Failed | Denied`。它属于当前 `TurnActor`，不扩展为第五个全局单例状态机。
 
 ### 代次与迟到事件
 
@@ -259,14 +274,15 @@ MVP 必须保证快捷键、点击和托盘命令可以立即停止 TTS 并开�
   -> 检索已确认记忆
   -> 组装角色核心设定 + 会话上下文 + 记忆数据
   -> LLM 流式生成
+  -> 可选：提出工具调用 -> 校验/授权/执行 -> 回传工具结果 -> 继续生成
   -> UI 批量增量 + 句子 TTS
   -> 完成或取消
   -> 保存聊天记录
   -> 异步生成记忆候选
 ```
 
-- Provider 只暴露能力与会话接口，不参与窗口、角色动作或数据库事务。
-- LLM、ASR 和 TTS 请求均接收取消令牌、超时和 `generation`。
+- Provider 只暴露能力与会话接口，不参与窗口、角色动作、工具授权或数据库事务。
+- LLM、ASR、TTS 和 Vision 请求均接收取消令牌、超时和 `generation`。
 - Provider 错误转换为统一错误类型，再由 `InteractionSupervisor` 决定重试、降级或提示用户。
 - 本地与云端 Provider 使用相同上层事件，不让 UI 感知供应商差异。
 
@@ -366,6 +382,9 @@ MVP 仍只实现单角色，但数据结构不把“天童爱丽丝”写死在�
 - 对话音频默认不保存；若后续增加保存功能，必须单独授权并提供清理入口。
 - API Key 只存 Keychain；UDS 使用用户私有目录、严格权限和会话令牌。
 - 角色提示词、检索记忆和工具输出分区组装，外部文本按不可信数据处理。
+- 屏幕截图默认按需、单帧、可见和短期保存；上传多模态 Provider 前显示目标与数据范围。
+- 屏幕、网页和工具输出中的文字不能提升权限、批准操作或改变工具白名单。
+- 内置工具不提供任意 Shell；外部 MCP 默认禁用，并继续受本项目授权策略约束。
 - 角色与声音资源记录来源和授权，不把第三方受保护素材提交到公开仓库。
 
 ## 13. 开始实现前的冻结门槛
@@ -382,6 +401,8 @@ MVP 仍只实现单角色，但数据结构不把“天童爱丽丝”写死在�
 
 其中第 5 项若验证失败，不阻塞整个 MVP，但必须明确降级为快捷键和点击打断。
 
+工具与屏幕感知有独立的冻结门槛，不阻塞当前核心 MVP；开始 Tool MVP 前必须完成 [`tools-and-vision.md`](tools-and-vision.md) 第 12 节的评审。
+
 ## 14. 参考项目与资料
 
 - [realtime-ai-translation](https://github.com/mingheyuan/realtime-ai-translation)：Provider / Session、macOS Speech Bridge、partial/final 和资源生命周期。
@@ -396,5 +417,10 @@ MVP 仍只实现单角色，但数据结构不把“天童爱丽丝”写死在�
 - [Apple Speech Audio Buffer Recognition](https://developer.apple.com/documentation/speech/sfspeechaudiobufferrecognitionrequest)
 - [AVSpeechSynthesizer Buffer API](https://developer.apple.com/documentation/avfaudio/avspeechsynthesizer/write%28_%3Atobuffercallback%3A%29)
 - [Apple Voice-Processing I/O Audio Unit](https://developer.apple.com/documentation/audiotoolbox/audio-unit-voice-i-o)
+- [工具调用与屏幕感知方案](tools-and-vision.md)：内置工具运行时、MCP 边界、闹钟/提醒和独立 Vision Provider。
+- [modelcontextprotocol/rust-sdk](https://github.com/modelcontextprotocol/rust-sdk)
+- [openclaw/Peekaboo](https://github.com/openclaw/Peekaboo)
+- [CapSoftware/scap](https://github.com/CapSoftware/scap)
+- [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp)
 
 参考项目只用于学习设计与边界，不意味着复制其代码、资产或许可不兼容的内容。
