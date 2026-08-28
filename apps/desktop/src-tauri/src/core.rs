@@ -2,7 +2,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -100,8 +100,10 @@ pub struct AppCore {
     audio_writer: Mutex<Option<AudioWriter>>,
     audio_launch: Mutex<()>,
     voice_command: Mutex<()>,
+    listening_requested: AtomicBool,
     audio_generation: AtomicU64,
     voice_final_tx: tokio::sync::mpsc::UnboundedSender<VoiceFinal>,
+    audio_recovery_tx: tokio::sync::mpsc::UnboundedSender<AppHandle>,
     next_generation: AtomicU64,
     event_sequence: AtomicU64,
 }
@@ -120,6 +122,7 @@ impl AppCore {
         let character = storage.load_character_settings().map_err(storage_error)?;
         let voice_settings = storage.load_voice_settings().map_err(storage_error)?;
         let (voice_final_tx, mut voice_final_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (audio_recovery_tx, mut audio_recovery_rx) = tokio::sync::mpsc::unbounded_channel();
         let core = Arc::new(Self {
             storage,
             conversation_id,
@@ -135,8 +138,10 @@ impl AppCore {
             audio_writer: Mutex::new(None),
             audio_launch: Mutex::new(()),
             voice_command: Mutex::new(()),
+            listening_requested: AtomicBool::new(false),
             audio_generation: AtomicU64::new(0),
             voice_final_tx,
+            audio_recovery_tx,
             next_generation: AtomicU64::new(0),
             event_sequence: AtomicU64::new(0),
         });
@@ -149,6 +154,15 @@ impl AppCore {
                 let _ = core
                     .start_input_turn(final_input.app, final_input.text, &final_input.source)
                     .await;
+            }
+        });
+        let weak_core = Arc::downgrade(&core);
+        tauri::async_runtime::spawn(async move {
+            while let Some(app) = audio_recovery_rx.recv().await {
+                let Some(core) = weak_core.upgrade() else {
+                    break;
+                };
+                core.recover_requested_listening(app).await;
             }
         });
         Ok(core)
@@ -950,10 +964,14 @@ impl AppCore {
         app: &AppHandle,
         enabled: bool,
     ) -> Result<(), AppError> {
+        let _voice_guard = self.voice_command.lock().await;
         if !enabled {
-            if let Some(writer) = self.audio_writer.lock().await.clone() {
-                audio::send(&writer, json!({"type": "listening.set", "enabled": false})).await?;
-            }
+            self.listening_requested.store(false, Ordering::SeqCst);
+            let send_result = if let Some(writer) = self.audio_writer.lock().await.clone() {
+                audio::send(&writer, json!({"type": "listening.set", "enabled": false})).await
+            } else {
+                Ok(())
+            };
             {
                 let mut runtime = self.runtime.write().await;
                 runtime.revision += 1;
@@ -964,7 +982,8 @@ impl AppCore {
                 runtime.asr_partial.clear();
                 runtime.voice_input_route = "unknown".into();
             }
-            return self.emit_snapshot(app).await;
+            self.emit_snapshot(app).await?;
+            return send_result;
         }
         let permissions = self.runtime.read().await.voice_permissions.clone();
         if permissions.microphone != "authorized" || permissions.speech_recognition != "authorized"
@@ -976,7 +995,13 @@ impl AppCore {
             ));
         }
         let writer = self.ensure_audio_host(app).await?;
-        audio::send(&writer, json!({"type": "listening.set", "enabled": true})).await?;
+        self.listening_requested.store(true, Ordering::SeqCst);
+        if let Err(error) =
+            audio::send(&writer, json!({"type": "listening.set", "enabled": true})).await
+        {
+            self.listening_requested.store(false, Ordering::SeqCst);
+            return Err(error);
+        }
         {
             let mut runtime = self.runtime.write().await;
             runtime.revision += 1;
@@ -1076,6 +1101,7 @@ impl AppCore {
     }
 
     pub async fn shutdown_audio_host(&self) {
+        self.listening_requested.store(false, Ordering::SeqCst);
         let writer = self.audio_writer.lock().await.take();
         if let Some(writer) = writer {
             let _ = audio::send(&writer, json!({"type": "shutdown"})).await;
@@ -1193,7 +1219,27 @@ impl AppCore {
                         .unwrap_or("restricted")
                         .into(),
                 };
+                let permissions_authorized = runtime.voice_permissions.microphone == "authorized"
+                    && runtime.voice_permissions.speech_recognition == "authorized";
+                if !permissions_authorized {
+                    self.listening_requested.store(false, Ordering::SeqCst);
+                    runtime.listening_mode = ListeningMode::Disabled;
+                    runtime.input_state = InputState::Stopped;
+                    runtime.active_voice_capture_id = None;
+                    runtime.active_voice_source = None;
+                    runtime.asr_partial.clear();
+                    runtime.voice_input_route = "unknown".into();
+                }
                 drop(runtime);
+                if !permissions_authorized {
+                    if let Some(writer) = self.audio_writer.lock().await.clone() {
+                        let _ = audio::send(
+                            &writer,
+                            json!({"type": "listening.set", "enabled": false}),
+                        )
+                        .await;
+                    }
+                }
                 let _ = self.emit_snapshot(app).await;
             }
             "capture.started" => {
@@ -1392,6 +1438,7 @@ impl AppCore {
                         | "wake_recognition_unavailable"
                         | "permission_denied"
                 ) {
+                    self.listening_requested.store(false, Ordering::SeqCst);
                     runtime.listening_mode = ListeningMode::Disabled;
                 }
                 runtime.last_error = Some(AppError::new(code, message, true));
@@ -1401,22 +1448,133 @@ impl AppCore {
             "host.disconnected" => {
                 *self.audio_writer.lock().await = None;
                 *self.active_playback.lock().await = None;
+                let should_recover = self.listening_requested.load(Ordering::SeqCst);
                 let mut runtime = self.runtime.write().await;
                 runtime.revision += 1;
                 runtime.audio_host_state = "failed".into();
-                runtime.input_state = InputState::Stopped;
+                runtime.input_state = if should_recover {
+                    InputState::Recovering
+                } else {
+                    InputState::Stopped
+                };
                 runtime.playback_state = PlaybackState::Idle;
                 runtime.mouth_level = 0.0;
-                runtime.listening_mode = ListeningMode::Disabled;
+                runtime.listening_mode = if should_recover {
+                    ListeningMode::Armed
+                } else {
+                    ListeningMode::Disabled
+                };
                 runtime.active_voice_capture_id = None;
                 runtime.active_voice_source = None;
                 runtime.asr_partial.clear();
                 runtime.voice_input_route = "unknown".into();
+                runtime.last_error = Some(AppError::new(
+                    "audio_host_disconnected",
+                    if should_recover {
+                        "AudioHost 已断开，正在尝试恢复持续监听。"
+                    } else {
+                        "AudioHost 已断开；文字对话仍可使用。"
+                    },
+                    true,
+                ));
                 drop(runtime);
                 let _ = self.emit_snapshot(app).await;
+                if should_recover {
+                    let _ = self.audio_recovery_tx.send(app.clone());
+                }
             }
             _ => {}
         }
+    }
+
+    async fn recover_requested_listening(self: Arc<Self>, app: AppHandle) {
+        if !self.listening_requested.load(Ordering::SeqCst) {
+            return;
+        }
+        let connection_present = self.audio_writer.lock().await.is_some();
+        let already_recovered = {
+            let runtime = self.runtime.read().await;
+            connection_present
+                && runtime.audio_host_state != "failed"
+                && runtime.input_state == InputState::WakeListening
+                && runtime.listening_mode == ListeningMode::Armed
+        };
+        if already_recovered {
+            return;
+        }
+
+        let retry_delays = [
+            Duration::from_millis(250),
+            Duration::from_secs(1),
+            Duration::from_secs(3),
+        ];
+        let mut last_error = None;
+
+        for delay in retry_delays {
+            if !self.listening_requested.load(Ordering::SeqCst) {
+                return;
+            }
+            tokio::time::sleep(delay).await;
+            if !self.listening_requested.load(Ordering::SeqCst) {
+                return;
+            }
+
+            match self.ensure_audio_host(&app).await {
+                Ok(writer) => {
+                    match audio::send(&writer, json!({"type": "listening.set", "enabled": true}))
+                        .await
+                    {
+                        Ok(()) => {
+                            if !self.listening_requested.load(Ordering::SeqCst) {
+                                let _ = audio::send(
+                                    &writer,
+                                    json!({"type": "listening.set", "enabled": false}),
+                                )
+                                .await;
+                                return;
+                            }
+                            let mut runtime = self.runtime.write().await;
+                            runtime.revision += 1;
+                            runtime.listening_mode = ListeningMode::Armed;
+                            runtime.input_state = InputState::WakeListening;
+                            runtime.last_error = None;
+                            drop(runtime);
+                            let _ = self.emit_snapshot(&app).await;
+                            return;
+                        }
+                        Err(error) => {
+                            last_error = Some(error);
+                            for _ in 0..20 {
+                                if self.audio_writer.lock().await.is_none() {
+                                    break;
+                                }
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                            }
+                            if self.audio_writer.lock().await.is_some() {
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        self.listening_requested.store(false, Ordering::SeqCst);
+        let mut runtime = self.runtime.write().await;
+        runtime.revision += 1;
+        runtime.listening_mode = ListeningMode::Disabled;
+        runtime.input_state = InputState::Stopped;
+        let detail = last_error
+            .map(|error| error.message)
+            .unwrap_or_else(|| "未获得可用连接。".into());
+        runtime.last_error = Some(AppError::new(
+            "audio_host_recovery_failed",
+            format!("AudioHost 恢复失败，已关闭持续监听；文字对话仍可使用。详情：{detail}"),
+            true,
+        ));
+        drop(runtime);
+        let _ = self.emit_snapshot(&app).await;
     }
 
     async fn speak_response(

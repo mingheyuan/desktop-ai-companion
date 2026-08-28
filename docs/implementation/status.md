@@ -12,7 +12,7 @@
 | 本地数据 | SQLite migration、会话恢复、消息提交 | Rust repository 测试和真实数据库迁移 |
 | 显式记忆 | 创建、FTS 搜索、编辑、物理删除、审计、可选上下文注入 | SQLite 事务/FTS 测试、UI 检查 |
 | 桌宠控制 | 显示、缩放、点击穿透、托盘、窗口恢复、全局快捷键；托盘与 `⌘/Ctrl + Shift + L` 可控制持续监听 | Rust 编译和手工 UI 检查 |
-| 语音基础 | 独立 AudioHost、权限、PTT、partial/final、系统 TTS、停止/新输入打断 | Swift 编译、UDS 真实握手测试 |
+| 语音基础 | 独立 AudioHost、权限、PTT、partial/final、系统 TTS、停止/新输入打断；持续监听断线后限三次退避恢复 | Swift 编译、UDS 真实握手测试 |
 | 持续监听 | Apple Speech 设备端识别检测“爱丽丝”；1.1 秒 endpoint | 代码保护已验证；仍需首次授权和长时间实机测试 |
 | 语音数据路径 | `capture.started.on_device` 投影为“本机识别/系统语音服务”；wake 只允许本机 | Rust/React 类型检查；仍需两类设备能力实机检查 |
 | macOS 打包 | Tauri resources 内嵌 `AudioHost.app`；稳定 identity 优先、ad-hoc fallback | debug app bundle 构建、`codesign --verify --deep --strict` |
@@ -36,7 +36,7 @@
 | 稳定 TCC 身份 | 已提供本地签名脚本，但尚未在本机执行 | 用户确认执行脚本后完成首次授权/重建复测 |
 | 本地 KWS/VAD | 当前为 Apple Speech 设备端短语检测 fallback | 接入可分发 Sherpa 模型、PCM media socket、VAD 和误唤醒测试 |
 | TTS 口型 | 发音区间 pulse 已经由轻量事件驱动 VRM `aa`，但不是音频振幅 | buffer 合成或可靠 PCM/RMS 回调替换近似 level |
-| 音频恢复 | 无 heartbeat、设备切换、睡眠恢复和限次重启 | 完成 supervisor 与 30 分钟/睡眠/外设验收 |
+| 音频恢复 | socket 断线会在用户仍期望持续监听时做三次退避重启，主动关闭/权限错误会取消恢复；仍无 heartbeat、设备切换和睡眠恢复 | 完成 heartbeat 与 30 分钟/睡眠/外设验收 |
 | 角色表现 | 已有 idle/listen/think/speak 程序化骨骼姿态、眨眼、呼吸和 fallback 口型 | 授权 VRM + 正式 VRMA 动作验收 |
 | 记忆候选 | 用户可显式 CRUD；无模型自动候选确认流 | 候选表、确认/拒绝 UI 和冲突策略 |
 
