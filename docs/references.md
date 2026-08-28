@@ -142,11 +142,11 @@
 - `src/avatars/13a_Aris/models/ex_skill_1.bbmodel`、`scripts/rail_gun.lua`：技能动画、蓄力和武器表现的拆分方式。
 - `src/avatars/13a_Aris/scripts/blue_archive_character.lua`：角色配置、模型列表、语音和动作入口。
 
-采用：直接接入经用户授权用于个人学习的 `13a_Aris/models/main.bbmodel`，通过 `arisBbmodelPreview.ts` 解析 Blockbench 的 outliner、分层几何和内嵌像素贴图；同时保留 `arisBlockPreview.ts` 作为无资源时的程序化降级预览，并借鉴上游的模型结构/行为脚本分离思路。
+采用：直接接入经用户授权用于个人学习的 `13a_Aris/models/main.bbmodel` 和独立 `gun.bbmodel`，通过 `arisBbmodelPreview.ts` 解析 Blockbench 的 outliner、分层几何和内嵌像素贴图；轨道炮按上游的收纳状态默认挂在背后，也可用 `weapon=off` 隐藏。同时保留 `arisBlockPreview.ts` 作为无资源时的程序化降级预览，并借鉴上游的模型结构/行为脚本分离思路。
 
-改进：当前桌宠的 `avatar=block` 预览已使用复制到本项目的普通服模型文件，但没有复制上游 Lua 逻辑、语音或其他版本资源；资源来源、署名和非商业学习用途说明见 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)。
+改进：当前桌宠的 `avatar=block` 预览已使用复制到本项目的普通服模型和轨道炮模型文件，但没有复制上游 Lua 逻辑、语音或其他版本资源；资源来源、署名和非商业学习用途说明见 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)。
 
-授权边界：上游 LICENSE 将作者原创程序/数据结构与 Blue Archive 的角色设计、视觉标识区分开，并要求遵守官方二次创作规则；当前只纳入普通服模型作为个人学习预览素材，具体边界见 `THIRD_PARTY_NOTICES.md`。
+授权边界：上游 LICENSE 将作者原创程序/数据结构与 Blue Archive 的角色设计、视觉标识区分开，并要求遵守官方二次创作规则；当前只纳入普通服与轨道炮模型作为个人学习预览素材，具体边界见 `THIRD_PARTY_NOTICES.md`。
 
 ## 使用规则
 

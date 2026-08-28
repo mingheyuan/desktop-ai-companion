@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import gunData from "./assets/aris-13a-gun.json";
 import modelData from "./assets/aris-13a-main.json";
 import type { ArisBlockPreview } from "./arisBlockPreview";
 
@@ -47,6 +48,7 @@ type BbModel = {
 
 const PIXELS_PER_UNIT = 16;
 const sourceModel = modelData as unknown as BbModel;
+const sourceGunModel = gunData as unknown as BbModel;
 const faceOrder = ["east", "west", "up", "down", "north", "south"] as const;
 
 function bbVector(values: number[]) {
@@ -168,14 +170,14 @@ function shouldSkipGroup(group: BbGroup) {
  * textures as data URLs. It is intentionally kept behind an explicit preview
  * switch and does not replace the normal VRM renderer.
  */
-export function createArisBbmodelPreview(): ArisBlockPreview {
+function buildBbmodelPreview(model: BbModel, rootName: string) {
   const group = new THREE.Group();
-  group.name = "aris-bbmodel-preview";
+  group.name = rootName;
 
   const textureLoader = new THREE.TextureLoader();
   const textureMaterials: THREE.Material[] = [];
   let haloMaterial: THREE.MeshStandardMaterial | undefined;
-  for (const texture of sourceModel.textures) {
+  for (const texture of model.textures) {
     const loaded = texture.source ? textureLoader.load(texture.source) : new THREE.Texture();
     loaded.colorSpace = THREE.SRGBColorSpace;
     // BBModel UVs use pixel coordinates from the top-left of the image.
@@ -190,8 +192,8 @@ export function createArisBbmodelPreview(): ArisBlockPreview {
   }
   const hiddenSurface = invisibleMaterial();
 
-  const elements = new Map(sourceModel.elements.map((element) => [element.uuid, element]));
-  const groups = new Map(sourceModel.groups.map((entry) => [entry.uuid, entry]));
+  const elements = new Map(model.elements.map((element) => [element.uuid, element]));
+  const groups = new Map(model.groups.map((entry) => [entry.uuid, entry]));
   const elementObjects = new Map<string, THREE.Object3D>();
   const groupObjects = new Map<string, THREE.Object3D>();
   const placedElements = new Set<string>();
@@ -200,7 +202,7 @@ export function createArisBbmodelPreview(): ArisBlockPreview {
     if (typeof entry === "string") {
       const element = elements.get(entry);
       if (!element || shouldSkipElement(element)) return;
-      const part = createCube(element, sourceModel, textureMaterials, hiddenSurface, parentOrigin);
+      const part = createCube(element, model, textureMaterials, hiddenSurface, parentOrigin);
       parent.add(part);
       elementObjects.set(element.name, part);
       placedElements.add(element.uuid);
@@ -225,14 +227,13 @@ export function createArisBbmodelPreview(): ArisBlockPreview {
     for (const child of entry.children ?? []) addEntry(child, node, origin);
   };
 
-  for (const entry of sourceModel.outliner) addEntry(entry, group, new THREE.Vector3());
-  for (const element of sourceModel.elements) {
+  for (const entry of model.outliner) addEntry(entry, group, new THREE.Vector3());
+  for (const element of model.elements) {
     if (placedElements.has(element.uuid) || shouldSkipElement(element)) continue;
-    group.add(createCube(element, sourceModel, textureMaterials, hiddenSurface, new THREE.Vector3()));
+    group.add(createCube(element, model, textureMaterials, hiddenSurface, new THREE.Vector3()));
   }
 
   group.scale.setScalar(0.68);
-  group.position.y = 0.06;
   const head = groupObjects.get("Head") ?? group;
   const body = groupObjects.get("UpperBody") ?? groupObjects.get("Body") ?? group;
   const halo = groupObjects.get("Halo") ?? groupObjects.get("HaloCenter") ?? group;
@@ -258,4 +259,25 @@ export function createArisBbmodelPreview(): ArisBlockPreview {
     accentMaterial,
     haloMaterial: haloMaterial ?? materialForTexture(new THREE.Texture()),
   };
+}
+
+/**
+ * Builds the normal outfit and the author's separate rail-gun model. The
+ * weapon uses the reference package's stored-on-back presentation by default;
+ * the compact preview can hide it with `?avatar=block&weapon=off`.
+ */
+export function createArisBbmodelPreview(): ArisBlockPreview {
+  const main = buildBbmodelPreview(sourceModel, "aris-bbmodel-preview");
+  const weapon = buildBbmodelPreview(sourceGunModel, "aris-railgun-preview");
+  const group = new THREE.Group();
+  group.name = "aris-bbmodel-avatar";
+  group.position.y = 0.06;
+  group.add(main.group, weapon.group);
+
+  weapon.group.scale.setScalar(1.496);
+  weapon.group.position.copy(bbVector([0, 13.5, 6]));
+  weapon.group.rotation.set(0, THREE.MathUtils.degToRad(-90), THREE.MathUtils.degToRad(32.5));
+  weapon.group.visible = true;
+
+  return { ...main, group, weapon: weapon.group };
 }

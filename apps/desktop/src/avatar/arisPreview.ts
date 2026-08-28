@@ -9,6 +9,7 @@ export interface ArisPreview {
   rightEye: THREE.Object3D;
   mouth: THREE.Object3D;
   halo: THREE.Object3D;
+  weapon?: THREE.Object3D;
   accentMaterial: THREE.MeshStandardMaterial;
   haloMaterial: THREE.MeshStandardMaterial;
 }

@@ -37,6 +37,7 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
     if (!host) return;
 
     const avatarMode = new URLSearchParams(window.location.search).get("avatar");
+    const showReferenceWeapon = new URLSearchParams(window.location.search).get("weapon") !== "off";
     const useReferencePreview = avatarMode === "block" || avatarMode === "figura" || avatarMode === "reference";
     const useBlockPreview = avatarMode === "procedural";
     const scene = new THREE.Scene();
@@ -69,6 +70,7 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
         : createArisPreview();
     const fallback = preview.group;
     scene.add(fallback);
+    if ("weapon" in preview && preview.weapon) preview.weapon.visible = showReferenceWeapon;
 
     let vrm: VRM | null = null;
     let vrmHead: THREE.Object3D | null = null;
