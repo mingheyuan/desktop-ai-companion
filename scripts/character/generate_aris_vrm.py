@@ -677,9 +677,9 @@ def create_model() -> tuple[bpy.types.Object, ModelParts, list[bpy.types.Materia
         parts.add(pleat, "hips")
 
     # Layered jacket and inner shirt.
-    parts.add(add_rounded_box("inner_shirt", (0.0, 1.50, 0.02), (0.68, 0.70, 0.42), navy, bevel=0.10), "spine")
-    parts.add(add_rounded_box("coat_back", (0.0, 1.57, -0.15), (0.92, 0.80, 0.24), coat, bevel=0.12), "spine")
-    parts.add(add_rounded_box("coat_chest_overlay", (0.0, 1.68, 0.17), (0.76, 0.46, 0.12), coat, bevel=0.065), "chest")
+    parts.add(add_rounded_box("inner_shirt", (0.0, 1.50, 0.02), (0.68, 0.70, 0.42), navy, bevel=0.15), "spine")
+    parts.add(add_rounded_box("coat_back", (0.0, 1.57, -0.15), (0.92, 0.80, 0.24), coat, bevel=0.18), "spine")
+    parts.add(add_rounded_box("coat_chest_overlay", (0.0, 1.68, 0.17), (0.76, 0.46, 0.12), coat, bevel=0.10), "chest")
     for sign, label in ((-1.0, "left"), (1.0, "right")):
         panel = add_rounded_box(f"{label}_coat_panel", (0.34 * sign, 1.55, 0.20), (0.30, 0.74, 0.14), coat_shadow, bevel=0.055)
         panel.rotation_euler[2] = 0.07 * sign
@@ -728,15 +728,17 @@ def create_model() -> tuple[bpy.types.Object, ModelParts, list[bpy.types.Materia
         parts.add(button, "left_hand")
 
     # Face, eyes, mouth and small expression-friendly details.
-    face = add_uv_sphere("ArisFace", (0.0, 2.39, 0.06), (0.51, 0.60, 0.45), skin, segments=48, rings=32)
+    face = add_uv_sphere("ArisFace", (0.0, 2.39, 0.06), (0.45, 0.53, 0.42), skin, segments=52, rings=36)
     parts.face = face
     parts.add(face, "head")
     parts.add(add_cylinder("neck_mesh", (0.0, 2.00, 0.0), 0.15, 0.22, skin), "neck")
     for sign, label in ((-1.0, "left"), (1.0, "right")):
-        eye_white_obj = add_uv_sphere(f"{label}_eye_white", (0.17 * sign, 2.50, 0.48), (0.128, 0.17, 0.055), eye_white, segments=32, rings=20)
+        eye_white_obj = add_uv_sphere(f"{label}_eye_white", (0.17 * sign, 2.50, 0.48), (0.120, 0.155, 0.055), eye_white, segments=36, rings=24)
         parts.add(eye_white_obj, "head")
-        iris = add_uv_sphere(f"{label}_iris", (0.17 * sign, 2.49, 0.535), (0.080, 0.115, 0.032), eye, segments=28, rings=18)
+        iris = add_uv_sphere(f"{label}_iris", (0.17 * sign, 2.49, 0.535), (0.075, 0.105, 0.032), eye, segments=32, rings=20)
         parts.add(iris, "head")
+        iris_ring = add_torus(f"{label}_iris_ring", (0.17 * sign, 2.49, 0.558), 0.070, 0.010, teal)
+        parts.add(iris_ring, "head")
         pupil = add_uv_sphere(f"{label}_pupil", (0.17 * sign, 2.49, 0.566), (0.032, 0.066, 0.014), navy, segments=20, rings=12)
         parts.add(pupil, "head")
         highlight = add_uv_sphere(f"{label}_eye_highlight", (0.145 * sign, 2.55, 0.584), (0.022, 0.035, 0.010), eye_white, segments=16, rings=10)
@@ -775,7 +777,7 @@ def create_model() -> tuple[bpy.types.Object, ModelParts, list[bpy.types.Materia
     parts.right_eye = right_eye
 
     # Hair cap, layered bangs and long side locks.
-    cap = add_uv_sphere("hair_cap", (0.0, 2.63, -0.15), (0.57, 0.52, 0.46), hair_deep, segments=48, rings=32)
+    cap = add_uv_sphere("hair_cap", (0.0, 2.63, -0.15), (0.53, 0.49, 0.43), hair_deep, segments=52, rings=36)
     parts.add(cap, "head")
     bang_panels = [
         ([(-0.53, 2.78), (-0.37, 2.98), (-0.14, 3.03), (-0.08, 2.55), (-0.23, 2.34), (-0.36, 2.59)], hair_blue),
@@ -783,7 +785,7 @@ def create_model() -> tuple[bpy.types.Object, ModelParts, list[bpy.types.Materia
         ([(0.06, 3.03), (0.28, 3.00), (0.52, 2.86), (0.38, 2.48), (0.21, 2.35), (0.12, 2.60)], hair_blue),
     ]
     for index, (points, surface) in enumerate(bang_panels):
-        panel = add_extruded_panel(f"bang_panel_{index}", points, 0.50, 0.075, surface, bevel=0.022)
+        panel = add_extruded_panel(f"bang_panel_{index}", points, 0.50, 0.060, surface, bevel=0.028)
         parts.add(panel, "head")
     # Thin raised highlight locks break up the broad bang panels in close-up
     # views while keeping the silhouette and the VRM asset fully original.
@@ -791,7 +793,7 @@ def create_model() -> tuple[bpy.types.Object, ModelParts, list[bpy.types.Materia
         highlight_lock = add_curve_lock(
             f"bang_highlight_{index}",
             [(0.12 * sign, 2.96, 0.57), (0.22 * sign, 2.78, 0.58), (0.27 * sign, 2.54, 0.57)],
-            0.022,
+            0.014,
             hair_teal,
         )
         parts.add(highlight_lock, "head")
@@ -802,7 +804,7 @@ def create_model() -> tuple[bpy.types.Object, ModelParts, list[bpy.types.Materia
             0.20,
             0.09,
             hair_blue if sign > 0 else hair_deep,
-            bevel=0.026,
+            bevel=0.030,
         )
         parts.add(side_lock, f"hair_{label}_1")
         tip = add_extruded_panel(
@@ -811,9 +813,16 @@ def create_model() -> tuple[bpy.types.Object, ModelParts, list[bpy.types.Materia
             0.22,
             0.065,
             hair_teal,
-            bevel=0.022,
+            bevel=0.024,
         )
         parts.add(tip, f"hair_{label}_2")
+        second_lock = add_curve_lock(
+            f"{label}_side_lock_secondary",
+            [(0.50 * sign, 2.50, 0.13), (0.72 * sign, 2.17, 0.10), (0.74 * sign, 1.70, 0.06), (0.62 * sign, 1.38, 0.05)],
+            0.050,
+            hair_deep if sign > 0 else hair_blue,
+        )
+        parts.add(second_lock, f"hair_{label}_1")
         # High side ponytail.
         ponytail = add_curve_lock(
             f"{label}_ponytail",
