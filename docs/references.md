@@ -14,6 +14,7 @@
 | [DesktopPetLive2D](https://github.com/Yanchen-J/DesktopPetLive2D) | `/Users/mingyuan.wang/my/参考/desktop-pet-live2d` | [`dc4f701`](https://github.com/Yanchen-J/DesktopPetLive2D/commit/dc4f70111177f760ddf6027b7aaba6ca7417cd3a) | Live2D 桌宠窗口、角色目录、角色配置、双层记忆 |
 | [Live2DPet-modern](https://github.com/MARS-HX/Live2DPet-modern) | `/Users/mingyuan.wang/my/参考/live2dpet-modern` | [`2592a65`](https://github.com/MARS-HX/Live2DPet-modern/commit/2592a658478433a0c892399d277462334146b9b6) | Live2D 适配器、参数映射、情绪/表情/动作、视觉记忆和语音入口 |
 | [Komorebi](https://github.com/kiskaserver/interactive_assistent) | `/Users/mingyuan.wang/my/参考/komorebi` | [`a2df4dc`](https://github.com/kiskaserver/interactive_assistent/commit/a2df4dcc68ff4a03d7701aa02f49354fde66e7b6) | Tauri 2 + Live2D、屏幕视觉、语音、工具权限和失败降级 |
+| [FiguraBlueArchiveCrafters](https://github.com/Gakuto1112/FiguraBlueArchiveCrafters) | `/Users/mingyuan.wang/my/参考/FiguraBlueArchiveCrafters` | [`3cd48d7`](https://github.com/Gakuto1112/FiguraBlueArchiveCrafters/commit/3cd48d7) | Minecraft Figura/Blockbench 方块化角色、分层长发、光环、武器和动画组织 |
 
 ## 1. realtime-ai-translation
 
@@ -129,6 +130,23 @@
 4. 在 Live2D Spike 通过前，主项目默认渲染后端仍是 VRM；不同时把两个 SDK 和两套角色资产塞进 MVP。
 
 详细的候选运行时契约、Spike 验收项和当前未决选择见 [`implementation/live2d-runtime.md`](implementation/live2d-runtime.md)。
+
+## 7. Minecraft 方块化角色参考
+
+### FiguraBlueArchiveCrafters
+
+重点文件：
+
+- `src/avatars/13a_Aris/models/main.bbmodel`：普通服爱丽丝的 Blockbench 模型，包含头部、身体、四肢、前后发、侧马尾、光环和服装标识等分层结构。
+- `src/avatars/13a_Aris/models/gun.bbmodel`：Supernova/轨道炮的独立模型。
+- `src/avatars/13a_Aris/models/ex_skill_1.bbmodel`、`scripts/rail_gun.lua`：技能动画、蓄力和武器表现的拆分方式。
+- `src/avatars/13a_Aris/scripts/blue_archive_character.lua`：角色配置、模型列表、语音和动作入口。
+
+采用：在 `arisBlockPreview.ts` 中借鉴分层长发、前后发分组、可见环形光环、制服 patch、独立武器和“模型结构/行为脚本分离”的思路。
+
+改进：当前桌宠仍使用本项目自己的 Three.js 几何和材质，不复制上游 `.bbmodel`、贴图或 Lua 文件；后续如果要直接转换上游模型，必须单独增加资源 attribution 和非商业使用说明。
+
+授权边界：上游 LICENSE 将作者原创程序/数据结构与 Blue Archive 的角色设计、视觉标识区分开，并要求遵守官方二次创作规则；本项目只将其作为本地独立参考，不将该角色包作为主项目运行时依赖。
 
 ## 使用规则
 

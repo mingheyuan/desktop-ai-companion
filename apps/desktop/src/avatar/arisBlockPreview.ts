@@ -63,8 +63,8 @@ function blockBetween(
 }
 
 function eye(parent: THREE.Object3D, x: number, surface: THREE.MeshStandardMaterial) {
-  const eyePart = block(parent, vector(x, -0.02, 0.235), vector(0.105, 0.145, 0.035), surface, 0.018);
-  const pupil = block(parent, vector(x, -0.02, 0.258), vector(0.045, 0.082, 0.018), material(0x15385f, {
+  const eyePart = block(parent, vector(x, -0.02, 0.235), vector(0.12, 0.17, 0.035), surface, 0.018);
+  const pupil = block(parent, vector(x, -0.02, 0.258), vector(0.05, 0.095, 0.018), material(0x15385f, {
     roughness: 0.24,
     metalness: 0.14,
     emissive: 0x08243e,
@@ -85,8 +85,8 @@ export function createArisBlockPreview(): ArisBlockPreview {
   group.name = "aris-block-preview";
 
   const skin = material(0xffd9d1, { roughness: 0.76 });
-  const hairSurface = material(0x202a4b, { roughness: 0.42, metalness: 0.04 });
-  const hairShadow = material(0x101831, { roughness: 0.46 });
+  const hairSurface = material(0x2a3556, { roughness: 0.42, metalness: 0.04 });
+  const hairShadow = material(0x1a2440, { roughness: 0.46 });
   const hairTip = material(0x2db9c8, {
     roughness: 0.32,
     metalness: 0.1,
@@ -118,6 +118,29 @@ export function createArisBlockPreview(): ArisBlockPreview {
     emissiveIntensity: 0.2,
   });
   const mouthMaterial = new THREE.MeshBasicMaterial({ color: 0x552e48 });
+
+  // Layered back hair follows the reference's stepped Blockbench silhouette.
+  // Keeping it on a separate group makes the body read clearly while preserving
+  // the long-hair shape at desktop-pet scale.
+  const backHair = new THREE.Group();
+  backHair.name = "aris-block-back-hair";
+  for (const [y, width, height, surface] of [
+    [1.54, 0.48, 0.42, hairShadow],
+    [1.22, 0.62, 0.32, hairSurface],
+    [0.94, 0.72, 0.24, hairSurface],
+    [0.72, 0.78, 0.18, hairShadow],
+    [0.54, 0.7, 0.16, hairSurface],
+  ] as const) {
+    for (const sign of [-1, 1] as const) {
+      const lock = block(backHair, vector(sign * width, y, -0.18), vector(0.24, height, 0.28), surface, 0.02);
+      lock.rotation.z = -sign * 0.025;
+    }
+  }
+  for (const sign of [-1, 1] as const) {
+    block(backHair, vector(sign * 0.56, 0.39, -0.18), vector(0.23, 0.22, 0.27), hairSurface, 0.02);
+    block(backHair, vector(sign * 0.58, 0.51, -0.03), vector(0.08, 0.06, 0.32), accentMaterial, 0.01);
+  }
+  group.add(backHair);
 
   const body = new THREE.Group();
   body.name = "aris-block-body";
@@ -158,6 +181,9 @@ export function createArisBlockPreview(): ArisBlockPreview {
     pocket.rotation.z = tilt;
     block(body, vector(x * 0.88, 1.73, 0.17), vector(0.2, 0.034, 0.026), accentMaterial, 0.006).rotation.z = tilt;
   }
+  // Small uniform patches echo the Millennium/GDD identifiers in the reference.
+  block(body, vector(-0.34, 1.58, 0.205), vector(0.055, 0.09, 0.022), accentMaterial, 0.006).rotation.z = -0.06;
+  block(body, vector(-0.34, 1.47, 0.212), vector(0.095, 0.024, 0.02), gold, 0.004).rotation.z = -0.06;
   block(body, vector(0, 1.76, 0.22), vector(0.3, 0.1, 0.08), coat, 0.02);
   const tie = block(body, vector(0, 1.57, 0.245), vector(0.10, 0.3, 0.035), accentMaterial, 0.01);
   tie.rotation.z = Math.PI;
@@ -204,6 +230,10 @@ export function createArisBlockPreview(): ArisBlockPreview {
     bang.position.z += z;
   }
   for (const sign of [-1, 1] as const) {
+    const frontLock = block(hair, vector(sign * 0.3, -0.1, 0.255), vector(0.12, 0.43, 0.08), hairSurface, 0.016);
+    frontLock.rotation.z = -sign * 0.08;
+  }
+  for (const sign of [-1, 1] as const) {
     const x = sign;
     const segments = [
       [0.34, 0.07, 0.28, hairShadow], [0.4, -0.25, 0.31, hairSurface], [0.45, -0.58, 0.31, hairSurface],
@@ -221,16 +251,16 @@ export function createArisBlockPreview(): ArisBlockPreview {
   // Segmented circuit halo: deliberately open at the bottom to avoid covering the face.
   const halo = new THREE.Group();
   halo.name = "aris-block-halo";
-  halo.position.set(0, 2.28, -0.27);
+  halo.position.set(0, 2.28, -0.08);
   for (const [x, y, width, height, rotation] of [
-    [0, 0.47, 0.34, 0.055, 0], [-0.27, 0.33, 0.055, 0.26, -0.18], [0.27, 0.33, 0.055, 0.26, 0.18],
-    [-0.23, 0.08, 0.13, 0.045, 0], [0.23, 0.08, 0.13, 0.045, 0],
+    [0, 0.52, 0.68, 0.055, 0], [-0.43, 0.35, 0.055, 0.38, -0.18], [0.43, 0.35, 0.055, 0.38, 0.18],
+    [-0.3, 0.11, 0.18, 0.045, 0], [0.3, 0.11, 0.18, 0.045, 0],
   ] as const) {
     const segment = block(halo, vector(x, y, 0), vector(width, height, 0.035), haloMaterial, 0.012);
     segment.rotation.z = rotation;
   }
   block(halo, vector(0, 0.48, 0.022), vector(0.12, 0.045, 0.04), gold, 0.01);
-  for (const [x, y] of [[-0.38, 0.38], [0.38, 0.38], [-0.31, 0.03], [0.31, 0.03]]) {
+  for (const [x, y] of [[-0.53, 0.38], [0.53, 0.38], [-0.42, 0.03], [0.42, 0.03]]) {
     block(halo, vector(x, y, 0.02), vector(0.05, 0.075, 0.04), accentMaterial, 0.01);
   }
   group.add(halo);
@@ -244,6 +274,8 @@ export function createArisBlockPreview(): ArisBlockPreview {
   block(weapon, vector(0, 0, 0.11), vector(0.09, 0.72, 0.06), accentMaterial, 0.012);
   block(weapon, vector(0, 0.46, 0.02), vector(0.3, 0.12, 0.22), coat, 0.02);
   block(weapon, vector(0, -0.54, 0), vector(0.14, 0.18, 0.16), dark, 0.018);
+  block(weapon, vector(0.13, 0.16, 0.01), vector(0.08, 0.28, 0.22), dark, 0.014);
+  block(weapon, vector(-0.08, 0.46, 0.14), vector(0.07, 0.06, 0.07), gold, 0.008);
   group.add(weapon);
 
   group.scale.setScalar(0.46);
