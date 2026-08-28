@@ -10,6 +10,7 @@
 - 当前状态：等待已获授权的 `.vrm` 文件；不要把付费模型或受限模型复制到此目录后提交 Git。
 - 当前预览：应用内置一版无外部资产的程序化角色预览，代码位于 `apps/desktop/src/avatar/arisPreview.ts`；它不是正式 VRM 资源。
 - 正式制作：优先使用 Blender + [VRM Add-on for Blender](https://github.com/saturday06/VRM-Addon-for-Blender)，Unity 来源再考虑 [UniVRM](https://github.com/vrm-c/UniVRM)；运行时继续由 `three-vrm` 接入。
+- 原创生成器：`scripts/character/generate_aris_vrm.py` 会根据已记录的公开视觉规格生成一个无第三方资产的可编辑 VRM 原型，并写入本地 `model/`；它用于开发和回归，不宣称是官方模型。
 
 ## 本地目录约定
 
@@ -20,6 +21,20 @@ resources/characters/aris/
 └── model/
     └── avatar.vrm       # 本地文件，默认被 Git 忽略
 ```
+
+如果本机已安装 Blender 和官方 VRM Add-on，可从仓库根目录生成本地原型：
+
+```bash
+BLENDER=/path/to/Blender \
+VRM_ADDON_ROOT=/path/to/VRM-Addon-for-Blender \
+BLENDER_VRM_AUTOMATIC_LICENSE_CONFIRMATION=true \
+"$BLENDER" --background --python scripts/character/generate_aris_vrm.py -- \
+  --out resources/characters/aris/model/aris-original.vrm \
+  --blend resources/characters/aris/model/aris-original.blend \
+  --render /tmp/aris-original-preview.png
+```
+
+`.vrm`、`.blend` 和 Blender 的备份文件默认不提交；桌宠仍通过“导入 VRM”把本地模型复制到应用数据目录。
 
 应用当前通过设置页的“导入 VRM”选择文件，然后由 Rust 复制到应用数据目录：
 

@@ -32,4 +32,6 @@ out/
 # redistribution. The checked-in character README and manifest template are
 # intentionally kept separate from these files.
 resources/characters/*/model/*.vrm
+resources/characters/*/model/*.blend
+resources/characters/*/model/*.blend1
 resources/characters/*/textures/

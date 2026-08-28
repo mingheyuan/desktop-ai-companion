@@ -99,7 +99,7 @@ three-vrm 加载 → 表情 / 口型 / look-at / spring bone / 状态动作验�
 3. 如果模型来自 Unity 工作流，则使用官方 [UniVRM](https://github.com/vrm-c/UniVRM) 完成 VRM 0.x/1.0 的导入导出和表情、揺れ物配置。
 4. 回到本项目，由 [three-vrm](https://github.com/pixiv/three-vrm) 负责运行时加载、look-at、expression、动画和每帧更新。
 
-本机当前没有 Blender 或 Unity，因此仓库先提供可运行的原创程序化预览和资源接入约定；没有把未经授权的第三方模型下载、转换或提交进仓库。安装建模工具并取得可转换授权后，再补充 `.blend`/VRM 制作脚本和自动化模型验收，不改变桌宠、对话、记忆和语音接口。
+仓库同时提供 `scripts/character/generate_aris_vrm.py`：它用 Blender 和官方 VRM Add-on 从零生成原创、无第三方资产的可编辑 VRM 原型，便于先验证 humanoid、表情、MToon 和桌宠运行链路。该原型仍不是最终高质量角色，正式替换时只需把通过授权和验收的 VRM 交给现有“导入 VRM”流程，不改变桌宠、对话、记忆和语音接口。
 
 ### 公开资料驱动的优化闭环
 
