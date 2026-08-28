@@ -13,12 +13,14 @@ resources/characters/aris/README.md for provenance and redistribution rules.
 from __future__ import annotations
 
 import argparse
+import colorsys
 import math
 import os
 import sys
 from pathlib import Path
 
 import bpy
+import bmesh
 from mathutils import Vector
 
 
@@ -48,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--blend", type=Path, required=True)
     parser.add_argument("--render", type=Path, required=True)
+    parser.add_argument("--hair-mode", choices=("base", "custom"), default="base")
     return parser.parse_args(blender_args)
 
 
@@ -132,7 +135,62 @@ def replace_slot(mesh: bpy.types.Mesh, slot_index: int, material: bpy.types.Mate
     mesh.materials[slot_index] = material
 
 
-def recolor_base(armature: bpy.types.Object) -> tuple[bpy.types.Object, bpy.types.Object]:
+def tint_hair_texture(material: bpy.types.Material, hue: float) -> None:
+    """Shift the CC0 hair texture toward blue while preserving highlights."""
+    if not material.node_tree:
+        return
+    for node in material.node_tree.nodes:
+        if node.bl_idname != "ShaderNodeTexImage" or node.image is None:
+            continue
+        if "BaseColorTexture" not in node.name:
+            continue
+        source = node.image
+        tinted = source.copy()
+        tinted.name = f"{source.name}_{material.name}_blue_tint"
+        pixels = list(source.pixels)
+        for index in range(0, len(pixels), 4):
+            red, green, blue = pixels[index : index + 3]
+            value = max(red, green, blue)
+            saturation = min(1.0, max(0.38, max(red, green, blue) - min(red, green, blue) + 0.20))
+            red, green, blue = colorsys.hsv_to_rgb(hue, saturation, value)
+            pixels[index : index + 3] = (red, green, blue)
+        tinted.pixels = pixels
+        tinted.update()
+        node.image = tinted
+
+
+def clone_tinted_hair_material(source: bpy.types.Material, name: str, hue: float, shade: tuple[float, float, float]) -> bpy.types.Material:
+    material = source.copy()
+    material.name = name
+    tint_hair_texture(material, hue)
+    toon = get_material_extension(material).mtoon1.extensions.vrmc_materials_mtoon
+    toon.shade_color_factor = shade
+    toon.outline_width_mode = "worldCoordinates"
+    toon.outline_width_factor = 0.0035
+    toon.outline_color_factor = (0.01, 0.02, 0.06)
+    return material
+
+
+def repair_base_hair(hair: bpy.types.Object, deep_hair: bpy.types.Material, blue_hair: bpy.types.Material) -> None:
+    """Keep detailed CC0 twin-tail geometry, remove only pointed ear faces."""
+    mesh = hair.data
+    assert isinstance(mesh, bpy.types.Mesh)
+    edit_mesh = bmesh.new()
+    edit_mesh.from_mesh(mesh)
+    ear_faces = [
+        face
+        for face in edit_mesh.faces
+        if face.calc_center_median().z > 1.55 and abs(face.calc_center_median().x) > 0.07
+    ]
+    if ear_faces:
+        bmesh.ops.delete(edit_mesh, geom=ear_faces, context="FACES")
+    edit_mesh.to_mesh(mesh)
+    edit_mesh.free()
+    replace_slot(mesh, 0, deep_hair)
+    replace_slot(mesh, 1, blue_hair)
+
+
+def recolor_base(armature: bpy.types.Object, hair_mode: str) -> tuple[bpy.types.Object, bpy.types.Object]:
     body = bpy.data.objects.get("Body")
     face = bpy.data.objects.get("Face")
     hair = bpy.data.objects.get("Hair001")
@@ -142,10 +200,16 @@ def recolor_base(armature: bpy.types.Object) -> tuple[bpy.types.Object, bpy.type
     navy_skirt = toon_material("ArisCC0_Navy_Skirt", (0.025, 0.055, 0.16, 1.0))
     navy_boot = toon_material("ArisCC0_Navy_Boot", (0.02, 0.035, 0.10, 1.0), metallic=0.08)
 
-    # The sample's original hairstyle has pointed side details that do not
-    # belong to Aris. Remove only that mesh and author a new, volumetric twin
-    # tail below; the face/body meshes and their expression shapes stay intact.
-    bpy.data.objects.remove(hair, do_unlink=True)
+    source_deep_hair = hair.data.materials[0]
+    source_blue_hair = hair.data.materials[1] if len(hair.data.materials) > 1 else source_deep_hair
+    if source_deep_hair is None or source_blue_hair is None:
+        raise RuntimeError("The CC0 hair mesh is missing its source materials")
+    deep_hair = clone_tinted_hair_material(source_deep_hair, "ArisCC0_Hair_Deep", 0.62, (0.025, 0.065, 0.22))
+    blue_hair = clone_tinted_hair_material(source_blue_hair, "ArisCC0_Hair_Blue", 0.57, (0.025, 0.15, 0.34))
+    if hair_mode == "custom":
+        bpy.data.objects.remove(hair, do_unlink=True)
+    else:
+        repair_base_hair(hair, deep_hair, blue_hair)
     # The VRoid sample uses one clothing slot for top and skirt. Its skirt is
     # below z≈1.05, so only that region receives the navy Aris palette; the
     # white upper garment and original body texture remain intact.
@@ -159,10 +223,8 @@ def recolor_base(armature: bpy.types.Object) -> tuple[bpy.types.Object, bpy.type
     return body, face
 
 
-def add_aris_details(armature: bpy.types.Object) -> None:
+def add_aris_details(armature: bpy.types.Object, hair_mode: str) -> None:
     skin = toon_material("ArisCC0_Skin", (0.98, 0.76, 0.74, 1.0))
-    deep_hair = toon_material("ArisCC0_Hair_Deep", (0.018, 0.045, 0.16, 1.0), metallic=0.05)
-    blue_hair = toon_material("ArisCC0_Hair_Blue", (0.025, 0.18, 0.40, 1.0), metallic=0.04)
     teal_hair = toon_material("ArisCC0_Hair_Teal", (0.02, 0.58, 0.70, 1.0), metallic=0.08)
     coat = toon_material("ArisCC0_Coat", (0.88, 0.93, 0.99, 1.0))
     coat_shadow = toon_material("ArisCC0_Coat_Shadow", (0.55, 0.66, 0.84, 1.0))
@@ -172,49 +234,50 @@ def add_aris_details(armature: bpy.types.Object) -> None:
     white = toon_material("ArisCC0_Halo", (0.88, 0.94, 1.0, 1.0), metallic=0.05)
     device = toon_material("ArisCC0_Device", (0.012, 0.022, 0.08, 1.0), metallic=0.15)
 
-    # New Aris-style hair: a rounded cap, three layered bangs, two curved
-    # ponytails, and separate teal tips. These objects are intentionally
-    # attached to the head bone so the existing VRM expression mesh remains
-    # independent and replaceable.
-    hair_cap = authored.add_uv_sphere("aris_cc0_hair_cap", (0.0, 0.10, 1.57), (0.215, 0.11, 0.18), deep_hair, segments=48, rings=32)
-    parent_to_bone(hair_cap, armature, "J_Bip_C_Head")
-    bang_specs = [
-        ("left", [(-0.17, 1.64), (-0.04, 1.67), (-0.05, 1.57), (-0.13, 1.58)], blue_hair),
-        ("center", [(-0.05, 1.67), (0.05, 1.67), (0.03, 1.56), (-0.01, 1.55)], deep_hair),
-        ("right", [(0.04, 1.67), (0.17, 1.64), (0.13, 1.58), (0.05, 1.57)], blue_hair),
-    ]
-    for label, points, surface in bang_specs:
-        bang = add_extruded_xz(f"aris_cc0_{label}_bang", points, -0.145, 0.045, surface, bevel=0.014)
-        parent_to_bone(bang, armature, "J_Bip_C_Head")
-    for sign, label in ((-1.0, "left"), (1.0, "right")):
-        side_lock = authored.add_curve_lock(
-            f"aris_cc0_{label}_side_lock",
-            [(0.20 * sign, -0.005, 1.58), (0.30 * sign, -0.005, 1.42), (0.34 * sign, 0.01, 1.12), (0.29 * sign, 0.02, 0.88)],
-            0.030,
-            deep_hair if sign < 0 else blue_hair,
-        )
-        parent_to_bone(side_lock, armature, "J_Bip_C_Head")
-        ponytail = authored.add_curve_lock(
-            f"aris_cc0_{label}_ponytail",
-            [(0.22 * sign, 0.07, 1.56), (0.33 * sign, 0.10, 1.49), (0.43 * sign, 0.09, 1.28), (0.39 * sign, 0.06, 1.02)],
-            0.055,
-            deep_hair if sign < 0 else blue_hair,
-        )
-        parent_to_bone(ponytail, armature, "J_Bip_C_Head")
-        ponytail_highlight = authored.add_curve_lock(
-            f"aris_cc0_{label}_ponytail_highlight",
-            [(0.27 * sign, -0.015, 1.48), (0.36 * sign, -0.01, 1.33), (0.39 * sign, 0.00, 1.13)],
-            0.018,
-            blue_hair if sign < 0 else teal_hair,
-        )
-        parent_to_bone(ponytail_highlight, armature, "J_Bip_C_Head")
-        tip = authored.add_curve_lock(
-            f"aris_cc0_{label}_ponytail_tip",
-            [(0.39 * sign, 0.06, 1.08), (0.38 * sign, 0.05, 0.99), (0.34 * sign, 0.04, 0.93)],
-            0.035,
-            teal_hair,
-        )
-        parent_to_bone(tip, armature, "J_Bip_C_Head")
+    if hair_mode == "custom":
+        deep_hair = toon_material("ArisCC0_Hair_Custom_Deep", (0.018, 0.045, 0.16, 1.0), metallic=0.05)
+        blue_hair = toon_material("ArisCC0_Hair_Custom_Blue", (0.025, 0.18, 0.40, 1.0), metallic=0.04)
+        # Fully original fallback hair: rounded cap, layered bangs, curved
+        # ponytails and separate teal tips.
+        hair_cap = authored.add_uv_sphere("aris_cc0_hair_cap", (0.0, 0.10, 1.57), (0.215, 0.11, 0.18), deep_hair, segments=48, rings=32)
+        parent_to_bone(hair_cap, armature, "J_Bip_C_Head")
+        bang_specs = [
+            ("left", [(-0.17, 1.64), (-0.04, 1.67), (-0.05, 1.57), (-0.13, 1.58)], blue_hair),
+            ("center", [(-0.05, 1.67), (0.05, 1.67), (0.03, 1.56), (-0.01, 1.55)], deep_hair),
+            ("right", [(0.04, 1.67), (0.17, 1.64), (0.13, 1.58), (0.05, 1.57)], blue_hair),
+        ]
+        for label, points, surface in bang_specs:
+            bang = add_extruded_xz(f"aris_cc0_{label}_bang", points, -0.145, 0.045, surface, bevel=0.014)
+            parent_to_bone(bang, armature, "J_Bip_C_Head")
+        for sign, label in ((-1.0, "left"), (1.0, "right")):
+            side_lock = authored.add_curve_lock(
+                f"aris_cc0_{label}_side_lock",
+                [(0.20 * sign, -0.005, 1.58), (0.30 * sign, -0.005, 1.42), (0.34 * sign, 0.01, 1.12), (0.29 * sign, 0.02, 0.88)],
+                0.030,
+                deep_hair if sign < 0 else blue_hair,
+            )
+            parent_to_bone(side_lock, armature, "J_Bip_C_Head")
+            ponytail = authored.add_curve_lock(
+                f"aris_cc0_{label}_ponytail",
+                [(0.22 * sign, 0.07, 1.56), (0.33 * sign, 0.10, 1.49), (0.43 * sign, 0.09, 1.28), (0.39 * sign, 0.06, 1.02)],
+                0.055,
+                deep_hair if sign < 0 else blue_hair,
+            )
+            parent_to_bone(ponytail, armature, "J_Bip_C_Head")
+            ponytail_highlight = authored.add_curve_lock(
+                f"aris_cc0_{label}_ponytail_highlight",
+                [(0.27 * sign, -0.015, 1.48), (0.36 * sign, -0.01, 1.33), (0.39 * sign, 0.00, 1.13)],
+                0.018,
+                blue_hair if sign < 0 else teal_hair,
+            )
+            parent_to_bone(ponytail_highlight, armature, "J_Bip_C_Head")
+            tip = authored.add_curve_lock(
+                f"aris_cc0_{label}_ponytail_tip",
+                [(0.39 * sign, 0.06, 1.08), (0.38 * sign, 0.05, 0.99), (0.34 * sign, 0.04, 0.93)],
+                0.035,
+                teal_hair,
+            )
+            parent_to_bone(tip, armature, "J_Bip_C_Head")
 
     # Open jacket lapels: the CC0 base carries the facial/limb topology and
     # the additions only establish Aris's white/navy/teal garment language.
@@ -362,8 +425,8 @@ def main() -> None:
     if armature is None:
         raise RuntimeError("Base VRM did not import an armature")
 
-    recolor_base(armature)
-    add_aris_details(armature)
+    recolor_base(armature, args.hair_mode)
+    add_aris_details(armature, args.hair_mode)
     setup_render(args.render)
 
     extension = get_armature_extension(armature.data)
