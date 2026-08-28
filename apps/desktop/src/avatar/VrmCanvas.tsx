@@ -5,6 +5,7 @@ import { VRMHumanBoneName, VRMLoaderPlugin, VRMUtils, type VRM } from "@pixiv/th
 import type { AvatarSemanticState } from "../contracts";
 import { createArisPreview } from "./arisPreview";
 import { createArisBlockPreview } from "./arisBlockPreview";
+import { createArisBbmodelPreview } from "./arisBbmodelPreview";
 
 interface VrmCanvasProps {
   state: AvatarSemanticState;
@@ -35,11 +36,13 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
     const host = hostRef.current;
     if (!host) return;
 
-    const useBlockPreview = new URLSearchParams(window.location.search).get("avatar") === "block";
+    const avatarMode = new URLSearchParams(window.location.search).get("avatar");
+    const useReferencePreview = avatarMode === "block" || avatarMode === "figura" || avatarMode === "reference";
+    const useBlockPreview = avatarMode === "procedural";
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
     camera.position.set(0, 0.95, 3.45);
-    camera.lookAt(0, useBlockPreview ? 0.72 : 0.9, 0);
+    camera.lookAt(0, useReferencePreview ? 0.8 : useBlockPreview ? 0.72 : 0.9, 0);
 
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -59,7 +62,11 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
     rim.position.set(-1.2, 1.8, 1.4);
     scene.add(rim);
 
-    const preview = useBlockPreview ? createArisBlockPreview() : createArisPreview();
+    const preview = useReferencePreview
+      ? createArisBbmodelPreview()
+      : useBlockPreview
+        ? createArisBlockPreview()
+        : createArisPreview();
     const fallback = preview.group;
     scene.add(fallback);
 
@@ -143,7 +150,7 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
       preview.accentMaterial.color.setHex(stateColors[semantic]);
       preview.haloMaterial.color.setHex(stateColors[semantic] === stateColors.error ? 0xff93a9 : stateColors[semantic]);
       fallback.position.y = Math.sin(elapsed * (semantic === "speaking" ? 4 : 1.5)) * 0.025;
-      fallback.rotation.y = Math.sin(elapsed * 0.55) * 0.08;
+      fallback.rotation.y = (useReferencePreview ? 0.16 : 0) + Math.sin(elapsed * 0.55) * 0.08;
       preview.head.rotation.set(headPitch, headYaw, headRoll);
       preview.body.scale.y = 1 + breath * 0.012;
       preview.leftEye.scale.y = preview.rightEye.scale.y = Math.max(0.08, 1 - blink);

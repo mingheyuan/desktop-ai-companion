@@ -1,6 +1,6 @@
 # 代码级参考项目
 
-这些仓库以独立浅克隆放在 `/Users/mingyuan.wang/my/` 下，只用于阅读和验证设计，不作为 `desktop-ai-companion` 的子模块、运行时依赖或提交内容。提交任何复制/改写代码前仍需逐项核对上游许可证和 attribution 要求。
+这些仓库以独立浅克隆放在 `/Users/mingyuan.wang/my/` 下；仓库本身只用于阅读和验证设计，不作为 `desktop-ai-companion` 的子模块或运行时依赖。已经复制进主项目的第三方素材会单独记录来源、版本和 attribution。
 
 ## 固定参考版本
 
@@ -142,15 +142,15 @@
 - `src/avatars/13a_Aris/models/ex_skill_1.bbmodel`、`scripts/rail_gun.lua`：技能动画、蓄力和武器表现的拆分方式。
 - `src/avatars/13a_Aris/scripts/blue_archive_character.lua`：角色配置、模型列表、语音和动作入口。
 
-采用：在 `arisBlockPreview.ts` 中借鉴分层长发、前后发分组、可见环形光环、制服 patch、独立武器和“模型结构/行为脚本分离”的思路。
+采用：直接接入经用户授权用于个人学习的 `13a_Aris/models/main.bbmodel`，通过 `arisBbmodelPreview.ts` 解析 Blockbench 的 outliner、分层几何和内嵌像素贴图；同时保留 `arisBlockPreview.ts` 作为无资源时的程序化降级预览，并借鉴上游的模型结构/行为脚本分离思路。
 
-改进：当前桌宠仍使用本项目自己的 Three.js 几何和材质，不复制上游 `.bbmodel`、贴图或 Lua 文件；后续如果要直接转换上游模型，必须单独增加资源 attribution 和非商业使用说明。
+改进：当前桌宠的 `avatar=block` 预览已使用复制到本项目的普通服模型文件，但没有复制上游 Lua 逻辑、语音或其他版本资源；资源来源、署名和非商业学习用途说明见 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)。
 
-授权边界：上游 LICENSE 将作者原创程序/数据结构与 Blue Archive 的角色设计、视觉标识区分开，并要求遵守官方二次创作规则；本项目只将其作为本地独立参考，不将该角色包作为主项目运行时依赖。
+授权边界：上游 LICENSE 将作者原创程序/数据结构与 Blue Archive 的角色设计、视觉标识区分开，并要求遵守官方二次创作规则；当前只纳入普通服模型作为个人学习预览素材，具体边界见 `THIRD_PARTY_NOTICES.md`。
 
 ## 使用规则
 
 1. 参考仓库只用于阅读、Spike 和测试思路；主项目构建不得依赖这些绝对路径。
-2. 需要复制上游代码时，先记录文件、commit、许可证和改动，再单独提交 attribution。
-3. 不复制第三方角色模型、贴图、语音或其他内容资产。
+2. 需要复制上游代码或内容资产时，先记录文件、commit、许可证和改动，再单独提交 attribution。
+3. 未经单独复核，不复制第三方语音、Lua 逻辑或其他内容资产；已纳入的模型素材必须遵守 `THIRD_PARTY_NOTICES.md` 中的边界。
 4. 上游更新不会自动进入方案；升级参考 commit 后先复核差异，再修改本文和相关实现规格。
