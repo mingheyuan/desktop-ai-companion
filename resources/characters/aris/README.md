@@ -9,6 +9,7 @@
 - 角色来源：必须是自制、用户拥有，或获得明确授权的资源。
 - 当前状态：等待已获授权的 `.vrm` 文件；不要把付费模型或受限模型复制到此目录后提交 Git。
 - 当前预览：应用内置一版无外部资产的程序化角色预览，代码位于 `apps/desktop/src/avatar/arisPreview.ts`；它不是正式 VRM 资源。
+- 正式制作：优先使用 Blender + [VRM Add-on for Blender](https://github.com/saturday06/VRM-Addon-for-Blender)，Unity 来源再考虑 [UniVRM](https://github.com/vrm-c/UniVRM)；运行时继续由 `three-vrm` 接入。
 
 ## 本地目录约定
 
@@ -36,6 +37,8 @@ $APPDATA/characters/aris/
 4. 头发、裙摆、领带等可动部分在 `vrm.update(delta)` 下稳定，不出现持续抖动或严重穿模。
 5. 在本项目透明桌宠窗口中完成 idle、listening、thinking、speaking、sleeping 五种状态检查。
 6. 记录模型来源、作者、购买/授权凭证、允许的使用场景、是否允许 VRM 转换和是否允许随应用分发。
+
+公开图片只用于整理造型规格和视觉验收，不作为可直接打包的模型或贴图来源。
 
 详细检查项见 [`docs/character/aris-model-research.md`](../../../docs/character/aris-model-research.md) 和 [`docs/implementation/vrm-runtime.md`](../../../docs/implementation/vrm-runtime.md)。
 

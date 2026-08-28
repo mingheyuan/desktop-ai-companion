@@ -64,6 +64,14 @@
 - [CGTrader BA Arisu](https://www.cgtrader.com/3d-models/character/woman/anime-character-ba-arisu)：有 OBJ、FBX、STL、BLEND 等格式和 PBR 信息，但不是 VRM；购买页的通用 royalty-free 标识不能自动覆盖《蔚蓝档案》二创模型在本桌面应用中的使用范围，除非完成单独的授权核验。
 - [Good Smile Aris (Maid)](https://www.goodsmile.info/en/product/15107)：官方手办页面，可用来参考官方造型、发型和配件，但不是数字模型。
 
+### E. Sketchfab 免费页面：仅作视觉参考
+
+来源：[Blue Archive - Tendou Aris（Joseph1026）](https://sketchfab.com/3d-models/blue-archive-tendou-aris-253b3c3e5674437486103fd870ebac9a)
+
+公开页面标注为 CC Attribution，并展示了约 26,230 三角面、13,608 顶点、5 张纹理；但页面同时显示当前匿名访问不能直接下载该模型，而且模型没有 humanoid 骨骼、表情 morph 或动画。即便未来取得下载资格，它也不能直接作为 VRM，需要作者许可核验、重新绑定骨骼和制作表情。
+
+因此目前只把它用于近景比例、发束体积、制服结构和材质质感的视觉 benchmark，不把页面中的模型文件或贴图复制到项目。CC BY 的署名和二创授权也不能替代《蔚蓝档案》角色权利确认。
+
 ## 接入流程
 
 ```text
@@ -79,6 +87,39 @@ three-vrm 加载 → 表情 / 口型 / look-at / spring bone / 状态动作验�
 ```
 
 代码侧已经具备受控导入链路：文件选择器只接受 `.vrm`，Rust 校验容器和 VRM 扩展后复制到应用数据目录，WebView 只允许访问角色管理目录中的模型。资源包清单模板位于 [`resources/characters/aris/manifest.example.json`](../../resources/characters/aris/manifest.example.json)。
+
+## 正式模型的生产工具链
+
+公开图片可以帮助确定脸部比例、发型轮廓、制服层次、配色、光环和配件等视觉规格；它们不能直接生成可用的 humanoid 骨骼、表情绑定、spring bone 或 VRM 元数据。因此正式模型仍需要经过可编辑的 3D 工具链制作和验收。
+
+当前锁定的可执行路线如下：
+
+1. 使用 Blender 建立或编辑拥有明确授权的角色网格、材质、骨骼和表情。
+2. 使用官方维护的 [VRM Add-on for Blender](https://github.com/saturday06/VRM-Addon-for-Blender) 导入、检查和导出 VRM；该插件也提供 Python API，后续可以把比例检查、命名检查和导出做成可重复脚本。
+3. 如果模型来自 Unity 工作流，则使用官方 [UniVRM](https://github.com/vrm-c/UniVRM) 完成 VRM 0.x/1.0 的导入导出和表情、揺れ物配置。
+4. 回到本项目，由 [three-vrm](https://github.com/pixiv/three-vrm) 负责运行时加载、look-at、expression、动画和每帧更新。
+
+本机当前没有 Blender 或 Unity，因此仓库先提供可运行的原创程序化预览和资源接入约定；没有把未经授权的第三方模型下载、转换或提交进仓库。安装建模工具并取得可转换授权后，再补充 `.blend`/VRM 制作脚本和自动化模型验收，不改变桌宠、对话、记忆和语音接口。
+
+### 公开资料驱动的优化闭环
+
+后续每次模型迭代都按以下顺序记录，而不是让模型“自行抓图训练”：
+
+```text
+公开资料与授权模型
+    ↓
+视觉规格表（比例、颜色、配件、材质、动作重点）
+    ↓
+Blender/UniVRM 中的可编辑模型修改
+    ↓
+VRM 校验（骨骼、表情、揺れ物、材质、面数、授权）
+    ↓
+桌宠五状态回归 + 近景视觉检查
+    ↓
+记录差异，进入下一轮修改
+```
+
+这里的“优化”是基于公开资料整理出的规格和人工/工具辅助的模型迭代，不会自动抓取受限图片、绕过下载权限、复制原作贴图，也不会把第三方角色素材训练成新的资产。
 
 ## 质量验收建议
 
