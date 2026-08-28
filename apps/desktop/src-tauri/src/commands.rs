@@ -232,6 +232,16 @@ pub async fn voice_request_permissions(
 }
 
 #[tauri::command]
+pub async fn voice_open_privacy_settings(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: ActionRequest,
+) -> Result<(), AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.open_voice_privacy_settings(&app).await
+}
+
+#[tauri::command]
 pub async fn voice_set_listening_mode(
     app: AppHandle,
     state: State<'_, CoreState>,

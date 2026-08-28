@@ -18,7 +18,11 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
-        .with_shortcuts(["CommandOrControl+Shift+Space", "CommandOrControl+Shift+M"])
+        .with_shortcuts([
+            "CommandOrControl+Shift+Space",
+            "CommandOrControl+Shift+L",
+            "CommandOrControl+Shift+M",
+        ])
         .expect("valid companion global shortcuts")
         .with_handler(|app, shortcut, event| {
             let primary = if cfg!(target_os = "macos") {
@@ -30,6 +34,16 @@ pub fn run() {
                 && event.state == ShortcutState::Pressed
             {
                 let _ = desktop::toggle_main_window(app);
+            } else if shortcut.matches(primary | Modifiers::SHIFT, Code::KeyL)
+                && event.state == ShortcutState::Pressed
+            {
+                let core = std::sync::Arc::clone(&app.state::<CoreState>().0);
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if core.toggle_listening(&app).await.is_err() {
+                        let _ = desktop::show_main_window(&app);
+                    }
+                });
             } else if shortcut.matches(primary | Modifiers::SHIFT, Code::KeyM) {
                 let core = std::sync::Arc::clone(&app.state::<CoreState>().0);
                 let app = app.clone();
@@ -72,6 +86,7 @@ pub fn run() {
             commands::data_clear_conversation,
             commands::data_clear_memories,
             commands::voice_request_permissions,
+            commands::voice_open_privacy_settings,
             commands::voice_set_listening_mode,
             commands::voice_ptt_start,
             commands::voice_ptt_finish,

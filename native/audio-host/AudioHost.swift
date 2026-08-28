@@ -110,6 +110,20 @@ private func requestPermissions(completion: @escaping () -> Void) {
     }
 }
 
+private func openPrivacySettings() {
+    let settingsURL = URL(fileURLWithPath: "/System/Applications/System Settings.app")
+    guard FileManager.default.fileExists(atPath: settingsURL.path) else {
+        emit(["type": "host.error", "code": "settings_unavailable", "message": "找不到 macOS 系统设置。"])
+        return
+    }
+    let configuration = NSWorkspace.OpenConfiguration()
+    NSWorkspace.shared.openApplication(at: settingsURL, configuration: configuration) { _, error in
+        if let error {
+            emit(["type": "host.error", "code": "settings_unavailable", "message": error.localizedDescription])
+        }
+    }
+}
+
 private final class VoiceController {
     private enum Mode { case wake, pushToTalk }
 
@@ -480,6 +494,8 @@ DispatchQueue.global(qos: .userInitiated).async {
             DispatchQueue.main.async { requestPermissions {} }
         case "permissions.status":
             emitPermissionStatus()
+        case "settings.open_privacy":
+            DispatchQueue.main.async { openPrivacySettings() }
         case "listening.set":
             voiceController.setArmed((message["enabled"] as? Bool) == true)
         case "asr.start":

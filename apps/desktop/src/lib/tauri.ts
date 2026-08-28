@@ -119,6 +119,12 @@ export async function requestVoicePermissions(): Promise<void> {
   });
 }
 
+export async function openVoicePrivacySettings(): Promise<void> {
+  await invoke("voice_open_privacy_settings", {
+    request: { request_id: crypto.randomUUID() },
+  });
+}
+
 export async function setListening(enabled: boolean): Promise<void> {
   await invoke("voice_set_listening_mode", {
     request: { request_id: crypto.randomUUID(), enabled },

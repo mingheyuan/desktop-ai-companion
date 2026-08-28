@@ -932,6 +932,19 @@ impl AppCore {
         audio::send(&writer, json!({"type": "permissions.request"})).await
     }
 
+    pub async fn open_voice_privacy_settings(
+        self: &Arc<Self>,
+        app: &AppHandle,
+    ) -> Result<(), AppError> {
+        let writer = self.ensure_audio_host(app).await?;
+        audio::send(&writer, json!({"type": "settings.open_privacy"})).await
+    }
+
+    pub async fn toggle_listening(self: &Arc<Self>, app: &AppHandle) -> Result<(), AppError> {
+        let enabled = self.runtime.read().await.listening_mode != ListeningMode::Armed;
+        self.set_listening(app, enabled).await
+    }
+
     pub async fn set_listening(
         self: &Arc<Self>,
         app: &AppHandle,
@@ -976,6 +989,14 @@ impl AppCore {
 
     pub async fn start_push_to_talk(self: &Arc<Self>, app: &AppHandle) -> Result<(), AppError> {
         let _voice_guard = self.voice_command.lock().await;
+        {
+            let runtime = self.runtime.read().await;
+            if runtime.active_voice_source.as_deref() == Some("push_to_talk")
+                && runtime.active_voice_capture_id.is_some()
+            {
+                return Ok(());
+            }
+        }
         let permissions = self.runtime.read().await.voice_permissions.clone();
         if permissions.microphone != "authorized" || permissions.speech_recognition != "authorized"
         {
@@ -1017,6 +1038,14 @@ impl AppCore {
 
     pub async fn finish_push_to_talk(&self, app: &AppHandle) -> Result<(), AppError> {
         let _voice_guard = self.voice_command.lock().await;
+        {
+            let runtime = self.runtime.read().await;
+            if runtime.active_voice_source.as_deref() != Some("push_to_talk")
+                || runtime.active_voice_capture_id.is_none()
+            {
+                return Ok(());
+            }
+        }
         let writer = self
             .audio_writer
             .lock()
@@ -1044,6 +1073,13 @@ impl AppCore {
             runtime.mouth_level = 0.0;
         }
         self.emit_snapshot(app).await
+    }
+
+    pub async fn shutdown_audio_host(&self) {
+        let writer = self.audio_writer.lock().await.take();
+        if let Some(writer) = writer {
+            let _ = audio::send(&writer, json!({"type": "shutdown"})).await;
+        }
     }
 
     pub async fn update_voice_settings(

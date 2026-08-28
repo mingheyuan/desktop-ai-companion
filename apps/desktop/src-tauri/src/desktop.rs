@@ -78,7 +78,13 @@ pub fn setup(app: &mut App, core: Arc<AppCore>) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
+    let enable_listening =
+        MenuItem::with_id(app, "enable-listening", "开启持续监听", true, None::<&str>)?;
+    let disable_listening =
+        MenuItem::with_id(app, "disable-listening", "关闭持续监听", true, None::<&str>)?;
+    let stop_playback = MenuItem::with_id(app, "stop-playback", "停止朗读", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
+    let voice_separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
@@ -87,6 +93,10 @@ pub fn setup(app: &mut App, core: Arc<AppCore>) -> tauri::Result<()> {
             &toggle_pet,
             &toggle_click_through,
             &separator,
+            &enable_listening,
+            &disable_listening,
+            &stop_playback,
+            &voice_separator,
             &quit,
         ],
     )?;
@@ -106,7 +116,16 @@ pub fn setup(app: &mut App, core: Arc<AppCore>) -> tauri::Result<()> {
             "toggle-click-through" => {
                 spawn_pet_toggle(app.clone(), Arc::clone(&tray_core), true);
             }
-            "quit" => app.exit(0),
+            "enable-listening" => {
+                spawn_listening_change(app.clone(), Arc::clone(&tray_core), true);
+            }
+            "disable-listening" => {
+                spawn_listening_change(app.clone(), Arc::clone(&tray_core), false);
+            }
+            "stop-playback" => {
+                spawn_stop_playback(app.clone(), Arc::clone(&tray_core));
+            }
+            "quit" => spawn_quit(app.clone(), Arc::clone(&tray_core)),
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {
@@ -144,6 +163,36 @@ fn spawn_pet_toggle(app: AppHandle, core: Arc<AppCore>, click_through: bool) {
                 error.diagnostic_id, error.message
             );
         }
+    });
+}
+
+fn spawn_listening_change(app: AppHandle, core: Arc<AppCore>, enabled: bool) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = core.set_listening(&app, enabled).await {
+            eprintln!(
+                "desktop action failed [{}]: {}",
+                error.diagnostic_id, error.message
+            );
+            let _ = show_main_window(&app);
+        }
+    });
+}
+
+fn spawn_stop_playback(app: AppHandle, core: Arc<AppCore>) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = core.stop_playback(&app).await {
+            eprintln!(
+                "desktop action failed [{}]: {}",
+                error.diagnostic_id, error.message
+            );
+        }
+    });
+}
+
+fn spawn_quit(app: AppHandle, core: Arc<AppCore>) {
+    tauri::async_runtime::spawn(async move {
+        core.shutdown_audio_host().await;
+        app.exit(0);
     });
 }
 

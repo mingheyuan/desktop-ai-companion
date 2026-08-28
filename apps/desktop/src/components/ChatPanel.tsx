@@ -1,5 +1,5 @@
 import { FormEvent, useRef, useState } from "react";
-import { cancelTurn, finishPushToTalk, importCharacterVrm, isTauri, requestVoicePermissions, setListening, startPushToTalk, stopPlayback, submitText, updatePetSettings, updateVoiceSettings } from "../lib/tauri";
+import { cancelTurn, finishPushToTalk, importCharacterVrm, isTauri, openVoicePrivacySettings, requestVoicePermissions, setListening, startPushToTalk, stopPlayback, submitText, updatePetSettings, updateVoiceSettings } from "../lib/tauri";
 import { useAppStore } from "../stores/app";
 import { ProviderSettingsDialog } from "./ProviderSettingsDialog";
 import { MemoryPanel } from "./MemoryPanel";
@@ -16,6 +16,12 @@ export function ChatPanel() {
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceError, setVoiceError] = useState("");
   const pttStart = useRef<Promise<void> | null>(null);
+  const voicePermissionNotDetermined = snapshot.voice_permissions.microphone === "not_determined"
+    || snapshot.voice_permissions.speech_recognition === "not_determined";
+  const voicePermissionDenied = snapshot.voice_permissions.microphone === "denied"
+    || snapshot.voice_permissions.speech_recognition === "denied";
+  const voicePermissionRestricted = snapshot.voice_permissions.microphone === "restricted"
+    || snapshot.voice_permissions.speech_recognition === "restricted";
 
   const beginPtt = () => {
     if (pttStart.current || !isTauri()) return;
@@ -169,9 +175,16 @@ export function ChatPanel() {
             {snapshot.voice_input_route === "on_device" ? "本机识别" : "系统语音服务"}
           </span>
         )}
-        {(snapshot.voice_permissions.microphone !== "authorized" || snapshot.voice_permissions.speech_recognition !== "authorized") && (
+        {voicePermissionNotDetermined && (
           <button type="button" disabled={voiceBusy || !isTauri()} onClick={() => runVoiceAction(requestVoicePermissions)}>授权语音</button>
         )}
+        {voicePermissionDenied && (
+          <>
+            <button type="button" disabled={voiceBusy || !isTauri()} onClick={() => runVoiceAction(openVoicePrivacySettings)}>打开系统设置</button>
+            <button type="button" disabled={voiceBusy || !isTauri()} onClick={() => runVoiceAction(requestVoicePermissions)}>刷新权限</button>
+          </>
+        )}
+        {voicePermissionRestricted && <span className="voice-error">语音权限受系统策略限制</span>}
         <button
           type="button"
           disabled={voiceBusy || !isTauri() || snapshot.voice_permissions.microphone !== "authorized" || snapshot.voice_permissions.speech_recognition !== "authorized"}
@@ -203,7 +216,7 @@ export function ChatPanel() {
           朗读回复
         </label>
         {snapshot.playback_state !== "idle" && <button type="button" onClick={() => runVoiceAction(stopPlayback)}>停止朗读</button>}
-        <span className="voice-shortcut">PTT：⌘/Ctrl + Shift + M</span>
+        <span className="voice-shortcut">监听：⌘/Ctrl + Shift + L · PTT：⌘/Ctrl + Shift + M</span>
         {voiceError && <span className="voice-error">{voiceError}</span>}
       </nav>
 
