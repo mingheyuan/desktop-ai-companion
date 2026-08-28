@@ -21,7 +21,7 @@ sequenceDiagram
         Host->>Core: host.hello(version, token, capabilities)
         Core-->>Host: core.welcome(heartbeat, limits)
         Host-->>Core: host.ready(permissions, devices)
-        Core-->>UI: state.changed(audio=ready/degraded)
+    Core-->>UI: state:changed(audio=ready/degraded)
     end
 ```
 
@@ -47,7 +47,7 @@ sequenceDiagram
     Core->>LLM: start(turn_id, generation, context)
     loop streaming
         LLM-->>Core: TextDelta
-        Core-->>UI: turn.text_delta (batched)
+        Core-->>UI: turn:text-delta (batched)
         opt sentence boundary
             Core->>TTS: synthesize(chunk_index, canonical, spoken)
             TTS-->>Host: tts.enqueue(next ordered chunk)
@@ -59,7 +59,7 @@ sequenceDiagram
     Core->>TTS: seal remaining chunk
     TTS-->>Core: playback.drained or playback.not_required
     Core->>DB: commit assistant message + turn completed
-    Core-->>UI: turn.message_committed + turn.ended
+    Core-->>UI: turn:message-committed + turn:ended
     Core->>Mem: enqueue memory extraction
 ```
 
@@ -87,12 +87,12 @@ sequenceDiagram
     loop speech
         Host-->>ASR: microphone audio
         ASR-->>Core: asr.partial(revision, full_text)
-        Core-->>UI: voice.asr_partial (replace)
+    Core-->>UI: voice:asr-partial (replace)
     end
     Audio->>Core: speech.ended
     Core->>ASR: asr.finalize
     ASR-->>Core: asr.final(text)
-    Core-->>UI: voice.asr_final
+    Core-->>UI: voice:asr-final
     Core->>Core: create text-equivalent turn(source=wake_word)
 ```
 
@@ -141,7 +141,7 @@ sequenceDiagram
         Core-->>Host: tts.stop / asr.stop as applicable
     end
     Core->>DB: mark old turn/messages cancelled
-    Core-->>UI: clear transient subtitle + turn.ended(cancelled)
+    Core-->>UI: clear transient subtitle + turn:ended(cancelled)
     Core->>Core: create new turn
     Note over LLM,Host: late old-generation events are discarded
 ```
@@ -160,15 +160,15 @@ sequenceDiagram
     Core->>Worker: extract(completed turn canonical text)
     Worker->>DB: dedupe against confirmed memories
     Worker->>DB: insert pending candidate(s)
-    Worker-->>UI: memory.candidate_created
+    Worker-->>UI: memory:candidate-created
     alt user confirms or edits
         UI->>Worker: confirm(candidate_id, edited_content?)
         Worker->>DB: transaction: upsert memory + FTS + audit + candidate confirmed
-        Worker-->>UI: memory.changed
+        Worker-->>UI: memory:changed
     else user rejects
         UI->>Worker: reject(candidate_id)
         Worker->>DB: candidate rejected
-        Worker-->>UI: memory.changed
+        Worker-->>UI: memory:changed
     end
 ```
 

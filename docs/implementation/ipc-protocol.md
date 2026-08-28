@@ -13,7 +13,7 @@ Rust → React 事件 envelope：
   "event_seq": 42,
   "snapshot_revision": 18,
   "occurred_at": "2026-08-28T12:00:00.000Z",
-  "type": "turn.text_delta",
+  "type": "turn:text-delta",
   "turn_id": "0194...",
   "generation": 7,
   "payload": {}
@@ -50,20 +50,20 @@ Rust → React 事件 envelope：
 
 | event | 用途 |
 |---|---|
-| `state.changed` | 小体积状态差量；含新 snapshot revision |
-| `turn.started` | 新 turn 与输入来源 |
-| `turn.text_delta` | 助手 canonical 文本增量；30ms 或 24 字符批量发送 |
-| `turn.message_committed` | 消息终态与可持久化 ID |
-| `turn.ended` | completed/cancelled/failed 与原因 |
-| `voice.asr_partial` | 临时识别文本和 revision |
-| `voice.asr_final` | 最终用户文本；随后会出现 turn.started |
-| `playback.chunk_started` | 口型和 speaking 状态起点 |
-| `playback.level` | 归一化振幅；最大 20Hz，允许丢帧 |
-| `playback.chunk_finished` | chunk 顺序推进 |
-| `memory.candidate_created` | 等待用户确认的候选 |
-| `memory.changed` | 确认、修改或删除后刷新 |
-| `permission.changed` | 麦克风/语音识别权限 |
-| `error.raised` / `error.cleared` | 带作用域和可恢复动作的错误 |
+| `state:changed` | 小体积状态差量；含新 snapshot revision |
+| `turn:started` | 新 turn 与输入来源 |
+| `turn:text-delta` | 助手 canonical 文本增量；30ms 或 24 字符批量发送 |
+| `turn:message-committed` | 消息终态与可持久化 ID |
+| `turn:ended` | completed/cancelled/failed 与原因 |
+| `voice:asr-partial` | 临时识别文本和 revision |
+| `voice:asr-final` | 最终用户文本；随后会出现 turn:started |
+| `playback:chunk-started` | 口型和 speaking 状态起点 |
+| `playback:level` | 归一化振幅；最大 20Hz，允许丢帧 |
+| `playback:chunk-finished` | chunk 顺序推进 |
+| `memory:candidate-created` | 等待用户确认的候选 |
+| `memory:changed` | 确认、修改或删除后刷新 |
+| `permission:changed` | 麦克风/语音识别权限 |
+| `error:raised` / `error:cleared` | 带作用域和可恢复动作的错误 |
 
 文本 delta 与振幅事件属于可丢弃流；终态事件不可丢弃。UI 始终能够通过快照恢复。
 

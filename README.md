@@ -4,7 +4,7 @@
 
 项目希望结合“钢琴女友”类产品的陪伴感、记忆管理和低频互动，以及桌宠应用的便捷性、可移动性和可动表现，再加入自然的语音交互能力。
 
-当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线；状态机、IPC、SQLite、Provider、AudioHost、关键时序与 VRM 运行时均已形成实现规格。工具调用与屏幕感知作为后续 Tool MVP 单独规划。项目仍处于设计与验证期，尚未开始业务实现。
+当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线，并已进入业务实现。现有代码可以启动 Tauri 双窗口应用，运行透明桌宠占位表现、文字流式对话、可取消 turn、mock/OpenAI-compatible LLM Provider 和 SQLite 会话恢复；语音、记忆管理与完整桌宠控制仍在实现中。工具调用与屏幕感知作为后续 Tool MVP 单独规划。
 
 ## 初始角色设定
 
@@ -282,9 +282,20 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 ## 当前状态
 
-项目已完成 GitHub 仓库初始化，MVP 范围、技术选型和 v0.4 实现规格已经写入文档；四个真实项目已固定到具体 commit 作为代码级参考，工具调用与屏幕感知作为后续 Tool MVP 独立规划。目前尚未初始化业务代码。
+项目已完成首个可运行实现切片：React/Tauri 双窗口、three-vrm 运行时适配、Rust 状态核心、流式 LLM Provider、取消代次、SQLite v1 schema 与会话恢复均已通过编译或单元测试。默认使用不联网的 mock Provider；设置界面、Keychain、原生 AudioHost、语音和记忆闭环仍待继续实现。
 
-下一步评审 [`docs/implementation/`](docs/implementation/README.md)，完成五项技术 Spike；确认规格和降级策略后，再初始化可运行的项目骨架。
+下一步继续实现 Provider 设置与 Keychain、VRM 资源导入和桌宠控制，再接入 AudioHost、PTT/ASR/TTS、唤醒词和记忆闭环。
+
+## 本地开发
+
+```bash
+pnpm install
+pnpm build
+cargo test --workspace
+pnpm tauri dev
+```
+
+应用默认使用 `mock` Provider，因此无需 API key 即可验证文字流式对话。切换 OpenAI-compatible Provider 的设置界面尚在实现；当前开发调试可临时使用环境变量 `DESKTOP_AI_LLM_API_KEY`。
 
 ## 目录约定
 

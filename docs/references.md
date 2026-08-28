@@ -10,6 +10,7 @@
 | [Warashi](https://github.com/inni918/warashi) | `/Users/mingyuan.wang/my/参考/warashi` | [`8c71103`](https://github.com/inni918/warashi/commit/8c71103978dbd34b8595af34eefd14c3028655f6) | 对话中断、TTS 有序队列、记忆检索与完成后整理 |
 | [three-vrm](https://github.com/pixiv/three-vrm) | `/Users/mingyuan.wang/my/参考/three-vrm` | [`76e0109`](https://github.com/pixiv/three-vrm/commit/76e0109ef36f30f620e7c7883c2f893b22ca72d4) | VRM 加载、表情、look-at、动画与资源优化 |
 | [Tauri plugins workspace](https://github.com/tauri-apps/plugins-workspace) | `/Users/mingyuan.wang/my/参考/tauri-plugins` | [`9d6d032`](https://github.com/tauri-apps/plugins-workspace/commit/9d6d03269a3dea3e9dbf4635fe0fd68f23f750fa) | 全局快捷键、窗口状态、通知和平台线程约束 |
+| [create-tauri-app](https://github.com/tauri-apps/create-tauri-app) | `/Users/mingyuan.wang/my/参考/create-tauri-app` | [`2b8ce19`](https://github.com/tauri-apps/create-tauri-app/commit/2b8ce19844f37aaae8fd483e5a60ac0add9c2924) | 当前 Tauri 2 + React/TypeScript 工程模板与配置字段 |
 
 ## 1. realtime-ai-translation
 
@@ -61,6 +62,17 @@
 采用：优先使用官方插件承载快捷键、窗口恢复和通知基础能力。
 
 改进：透明桌宠窗口的点击穿透、VRM hit-test、全屏空间行为和恢复交互入口仍由本项目显式设计，不能把 window-state 插件当完整桌宠方案。
+
+## 5. create-tauri-app
+
+重点文件：
+
+- [`template-react-ts`](https://github.com/tauri-apps/create-tauri-app/tree/2b8ce19844f37aaae8fd483e5a60ac0add9c2924/templates/template-react-ts)：React 19、TypeScript 6、Vite 8 和 Tauri CLI 的当前组合。
+- [`src-tauri` base template](https://github.com/tauri-apps/create-tauri-app/tree/2b8ce19844f37aaae8fd483e5a60ac0add9c2924/templates/_base_/src-tauri)：Tauri 2 config、capabilities、Rust lib/bin 和 build script 结构。
+
+采用：以官方当前模板为工程骨架来源，并保持 `src-tauri` capability 与 config schema 可由 Tauri CLI 校验。
+
+改进：本项目使用 workspace 目录、主面板/桌宠双窗口、透明 macOS private API、Rust 状态核心和更严格 CSP，不保留示例 greet/opener 逻辑。
 
 ## 使用规则
 
