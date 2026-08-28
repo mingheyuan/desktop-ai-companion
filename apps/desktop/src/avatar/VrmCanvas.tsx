@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VRMHumanBoneName, VRMLoaderPlugin, VRMUtils, type VRM } from "@pixiv/three-vrm";
 import type { AvatarSemanticState } from "../contracts";
+import { createArisPreview } from "./arisPreview";
 
 interface VrmCanvasProps {
   state: AvatarSemanticState;
@@ -41,6 +42,8 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.12;
     renderer.domElement.style.width = "100%";
     renderer.domElement.style.height = "100%";
     renderer.domElement.style.display = "block";
@@ -50,22 +53,12 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
     const key = new THREE.DirectionalLight(0xffffff, 2.2);
     key.position.set(1.5, 2.5, 2);
     scene.add(key);
+    const rim = new THREE.PointLight(0x66dfff, 1.8, 4.5);
+    rim.position.set(-1.2, 1.8, 1.4);
+    scene.add(rim);
 
-    const fallbackMaterial = new THREE.MeshStandardMaterial({ color: stateColors[state], roughness: 0.32, metalness: 0.08 });
-    const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xbfe8ff });
-    const mouthMaterial = new THREE.MeshBasicMaterial({ color: 0x19345f });
-    const fallback = new THREE.Group();
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 32, 32), fallbackMaterial);
-    head.position.y = 1.45;
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 0.65, 8, 24), fallbackMaterial);
-    body.position.y = 0.72;
-    const leftEye = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.045, 0.025), eyeMaterial);
-    leftEye.position.set(-0.115, 1.52, 0.315);
-    const rightEye = leftEye.clone();
-    rightEye.position.x = 0.115;
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.025, 0.025), mouthMaterial);
-    mouth.position.set(0, 1.38, 0.32);
-    fallback.add(head, body, leftEye, rightEye, mouth);
+    const preview = createArisPreview();
+    const fallback = preview.group;
     scene.add(fallback);
 
     let vrm: VRM | null = null;
@@ -145,13 +138,15 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
       const headYaw = listeningWeight * Math.sin(elapsed * 1.2) * 0.075 + thinkingWeight * 0.11 + speakingWeight * Math.sin(elapsed * 2.1) * 0.04;
       const headRoll = listeningWeight * -0.065 + thinkingWeight * 0.085;
       const breath = Math.sin(elapsed * (sleepingWeight ? 0.8 : 1.55));
-      fallbackMaterial.color.setHex(stateColors[semantic]);
+      preview.accentMaterial.color.setHex(stateColors[semantic]);
+      preview.haloMaterial.color.setHex(stateColors[semantic] === stateColors.error ? 0xff93a9 : stateColors[semantic]);
       fallback.position.y = Math.sin(elapsed * (semantic === "speaking" ? 4 : 1.5)) * 0.025;
       fallback.rotation.y = Math.sin(elapsed * 0.55) * 0.08;
-      head.rotation.set(headPitch, headYaw, headRoll);
-      body.scale.y = 1 + breath * 0.012;
-      leftEye.scale.y = rightEye.scale.y = Math.max(0.08, 1 - blink);
-      mouth.scale.y = 1 + smoothedMouth * 5;
+      preview.head.rotation.set(headPitch, headYaw, headRoll);
+      preview.body.scale.y = 1 + breath * 0.012;
+      preview.leftEye.scale.y = preview.rightEye.scale.y = Math.max(0.08, 1 - blink);
+      preview.mouth.scale.y = 0.15 * (1 + smoothedMouth * 5);
+      preview.halo.rotation.y = Math.sin(elapsed * 0.45) * 0.06;
       if (vrm) {
         vrm.expressionManager?.setValue("happy", semantic === "ready" ? 0.55 : 0);
         vrm.expressionManager?.setValue("surprised", semantic === "needs_input" ? 0.35 : 0);
@@ -178,11 +173,11 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
         VRMUtils.deepDispose(vrm.scene);
       }
       fallback.traverse((object) => {
-        if (object instanceof THREE.Mesh) object.geometry.dispose();
+        if (!(object instanceof THREE.Mesh)) return;
+        object.geometry.dispose();
+        if (Array.isArray(object.material)) object.material.forEach((surface) => surface.dispose());
+        else object.material.dispose();
       });
-      fallbackMaterial.dispose();
-      eyeMaterial.dispose();
-      mouthMaterial.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };
