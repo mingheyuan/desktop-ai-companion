@@ -8,7 +8,7 @@ use std::{
 
 use futures_util::StreamExt;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -16,9 +16,9 @@ use uuid::Uuid;
 
 use crate::{
     contracts::{
-        AppError, AppSnapshot, AvatarSemanticState, EventEnvelope, GenerationState, InputState,
-        ListeningMode, PetSettings, PlaybackState, ProviderSettings, TextDeltaPayload,
-        TurnEndedPayload, TurnState,
+        AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, EventEnvelope,
+        GenerationState, InputState, ListeningMode, PetSettings, PlaybackState, ProviderSettings,
+        TextDeltaPayload, TurnEndedPayload, TurnState,
     },
     desktop::apply_pet_window_settings,
     provider::{create_provider, LlmEvent, LlmRequest},
@@ -66,6 +66,7 @@ pub struct AppCore {
     runtime: RwLock<RuntimeState>,
     provider: RwLock<ProviderSettings>,
     pet: RwLock<PetSettings>,
+    character: RwLock<CharacterSettings>,
     secrets: SecretStore,
     active_turn: Mutex<Option<ActiveTurn>>,
     next_generation: AtomicU64,
@@ -83,12 +84,14 @@ impl AppCore {
         let mut provider = storage.load_provider_settings().map_err(storage_error)?;
         provider.has_api_key = secrets.resolve_llm_api_key()?.is_some();
         let pet = storage.load_pet_settings().map_err(storage_error)?;
+        let character = storage.load_character_settings().map_err(storage_error)?;
         Ok(Arc::new(Self {
             storage,
             conversation_id,
             runtime: RwLock::new(RuntimeState::default()),
             provider: RwLock::new(provider),
             pet: RwLock::new(pet),
+            character: RwLock::new(character),
             secrets,
             active_turn: Mutex::new(None),
             next_generation: AtomicU64::new(0),
@@ -100,6 +103,7 @@ impl AppCore {
         let runtime = self.runtime.read().await;
         let provider = self.provider.read().await.clone();
         let pet = self.pet.read().await.clone();
+        let character = self.character.read().await.clone();
         let messages = self
             .storage
             .list_messages(&self.conversation_id, 200)
@@ -118,8 +122,69 @@ impl AppCore {
             messages,
             provider,
             pet,
+            character,
             last_error: runtime.last_error.clone(),
         })
+    }
+
+    pub async fn import_character_vrm(
+        &self,
+        app: &AppHandle,
+        source: std::path::PathBuf,
+    ) -> Result<CharacterSettings, AppError> {
+        let active_character = self.character.read().await.clone();
+        if active_character.character_id.is_empty()
+            || !active_character
+                .character_id
+                .chars()
+                .all(|value| value.is_ascii_alphanumeric() || matches!(value, '-' | '_'))
+        {
+            return Err(AppError::new(
+                "character_import",
+                "当前角色 ID 不能用于管理目录。",
+                false,
+            ));
+        }
+        let data_dir = app.path().app_data_dir().map_err(|error| {
+            AppError::new(
+                "character_import",
+                format!("无法定位角色目录：{error}"),
+                false,
+            )
+        })?;
+        let managed_dir = data_dir
+            .join("characters")
+            .join(&active_character.character_id);
+        let source_for_copy = source.clone();
+        let copied = tokio::task::spawn_blocking(move || {
+            validate_and_copy_vrm(&source_for_copy, &managed_dir)
+        })
+        .await
+        .map_err(|error| {
+            AppError::new(
+                "character_import",
+                format!("角色复制任务失败：{error}"),
+                true,
+            )
+        })??;
+
+        let mut character = self.character.write().await;
+        let updated = CharacterSettings {
+            model_path: Some(copied.managed_path.to_string_lossy().into_owned()),
+            model_file_name: Some(copied.original_file_name),
+            model_size_bytes: Some(copied.size_bytes),
+            revision: character.revision + 1,
+            ..character.clone()
+        };
+        if let Err(error) = self.storage.save_character_settings(&updated, now_ms()) {
+            let _ = std::fs::remove_file(&copied.managed_path);
+            return Err(storage_error(error));
+        }
+        *character = updated.clone();
+        drop(character);
+        self.runtime.write().await.revision += 1;
+        self.emit_snapshot(app).await?;
+        Ok(updated)
     }
 
     pub async fn apply_current_pet_settings(&self, app: &AppHandle) -> Result<(), AppError> {
@@ -805,6 +870,158 @@ fn validate_pet_settings(value: &PetSettings) -> Result<(), AppError> {
     Ok(())
 }
 
+const MAX_VRM_BYTES: u64 = 200 * 1024 * 1024;
+
+struct CopiedVrm {
+    managed_path: std::path::PathBuf,
+    original_file_name: String,
+    size_bytes: u64,
+}
+
+fn validate_and_copy_vrm(
+    source: &std::path::Path,
+    managed_dir: &std::path::Path,
+) -> Result<CopiedVrm, AppError> {
+    use std::io::Read;
+
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if !extension.eq_ignore_ascii_case("vrm") {
+        return Err(AppError::new(
+            "invalid_character_asset",
+            "只能导入 .vrm 角色文件。",
+            false,
+        ));
+    }
+    let metadata = std::fs::metadata(source).map_err(|error| {
+        AppError::new(
+            "character_import",
+            format!("无法读取 VRM 文件信息：{error}"),
+            false,
+        )
+    })?;
+    if !metadata.is_file() || metadata.len() < 20 || metadata.len() > MAX_VRM_BYTES {
+        return Err(AppError::new(
+            "invalid_character_asset",
+            "VRM 文件必须是 20 字节到 200 MB 的普通文件。",
+            false,
+        ));
+    }
+    let mut file = std::fs::File::open(source).map_err(|error| {
+        AppError::new(
+            "character_import",
+            format!("无法打开 VRM 文件：{error}"),
+            false,
+        )
+    })?;
+    let mut header = [0_u8; 12];
+    file.read_exact(&mut header).map_err(|error| {
+        AppError::new(
+            "invalid_character_asset",
+            format!("无法读取 VRM 文件头：{error}"),
+            false,
+        )
+    })?;
+    let version = u32::from_le_bytes(header[4..8].try_into().expect("fixed header"));
+    let declared_length = u32::from_le_bytes(header[8..12].try_into().expect("fixed header"));
+    if &header[0..4] != b"glTF" || version != 2 || u64::from(declared_length) != metadata.len() {
+        return Err(AppError::new(
+            "invalid_character_asset",
+            "文件不是有效的 glTF 2.0 二进制容器。",
+            false,
+        ));
+    }
+    let mut chunk_header = [0_u8; 8];
+    file.read_exact(&mut chunk_header).map_err(|error| {
+        AppError::new(
+            "invalid_character_asset",
+            format!("无法读取 VRM JSON 块：{error}"),
+            false,
+        )
+    })?;
+    let json_length =
+        u32::from_le_bytes(chunk_header[0..4].try_into().expect("fixed chunk header")) as u64;
+    if &chunk_header[4..8] != b"JSON" || json_length > metadata.len().saturating_sub(20) {
+        return Err(AppError::new(
+            "invalid_character_asset",
+            "VRM 缺少有效的 glTF JSON 块。",
+            false,
+        ));
+    }
+    let mut json_bytes = vec![0_u8; json_length as usize];
+    file.read_exact(&mut json_bytes).map_err(|error| {
+        AppError::new(
+            "invalid_character_asset",
+            format!("无法读取 VRM 元数据：{error}"),
+            false,
+        )
+    })?;
+    while matches!(json_bytes.last(), Some(b' ' | 0)) {
+        json_bytes.pop();
+    }
+    let document: serde_json::Value = serde_json::from_slice(&json_bytes).map_err(|_| {
+        AppError::new(
+            "invalid_character_asset",
+            "VRM 的 glTF 元数据不是有效 JSON。",
+            false,
+        )
+    })?;
+    let has_vrm_extension = ["VRMC_vrm", "VRM"].iter().any(|extension| {
+        document
+            .get("extensions")
+            .and_then(|value| value.get(extension))
+            .is_some()
+            || document
+                .get("extensionsUsed")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(extension)))
+    });
+    if !has_vrm_extension {
+        return Err(AppError::new(
+            "invalid_character_asset",
+            "所选 glTF 文件不包含 VRM 0.x 或 VRM 1.0 扩展。",
+            false,
+        ));
+    }
+
+    std::fs::create_dir_all(managed_dir).map_err(|error| {
+        AppError::new(
+            "character_import",
+            format!("无法创建角色目录：{error}"),
+            false,
+        )
+    })?;
+    let id = Uuid::now_v7();
+    let temporary = managed_dir.join(format!(".{id}.tmp"));
+    let destination = managed_dir.join(format!("model-{id}.vrm"));
+    std::fs::copy(source, &temporary).map_err(|error| {
+        AppError::new(
+            "character_import",
+            format!("无法复制 VRM 文件：{error}"),
+            false,
+        )
+    })?;
+    if let Err(error) = std::fs::rename(&temporary, &destination) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(AppError::new(
+            "character_import",
+            format!("无法完成 VRM 导入：{error}"),
+            false,
+        ));
+    }
+    Ok(CopiedVrm {
+        managed_path: destination,
+        original_file_name: source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("model.vrm")
+            .to_owned(),
+        size_bytes: metadata.len(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,5 +1063,34 @@ mod tests {
             ..PetSettings::default()
         })
         .is_err());
+    }
+
+    #[test]
+    fn validates_and_copies_vrm_magic() {
+        use std::io::Write;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("avatar.vrm");
+        let mut json = br#"{"extensions":{"VRMC_vrm":{}}}"#.to_vec();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let total_length = 12 + 8 + json.len();
+        let mut file = std::fs::File::create(&source).unwrap();
+        file.write_all(b"glTF").unwrap();
+        file.write_all(&2_u32.to_le_bytes()).unwrap();
+        file.write_all(&(total_length as u32).to_le_bytes())
+            .unwrap();
+        file.write_all(&(json.len() as u32).to_le_bytes()).unwrap();
+        file.write_all(b"JSON").unwrap();
+        file.write_all(&json).unwrap();
+        let copied = validate_and_copy_vrm(&source, &temp.path().join("managed")).unwrap();
+        assert!(copied.managed_path.exists());
+        assert_eq!(copied.original_file_name, "avatar.vrm");
+
+        let invalid = temp.path().join("invalid.vrm");
+        let mut file = std::fs::File::create(&invalid).unwrap();
+        file.write_all(b"nope0123456789012345").unwrap();
+        assert!(validate_and_copy_vrm(&invalid, &temp.path().join("managed")).is_err());
     }
 }

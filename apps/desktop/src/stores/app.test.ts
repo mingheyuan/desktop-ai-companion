@@ -27,6 +27,14 @@ const snapshot: AppSnapshot = {
     scale: 1,
     revision: 0,
   },
+  character: {
+    character_id: "aris",
+    display_name: "爱丽丝",
+    model_path: null,
+    model_file_name: null,
+    model_size_bytes: null,
+    revision: 0,
+  },
   last_error: null,
 };
 

@@ -130,6 +130,29 @@ impl Default for PetSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CharacterSettings {
+    pub character_id: String,
+    pub display_name: String,
+    pub model_path: Option<String>,
+    pub model_file_name: Option<String>,
+    pub model_size_bytes: Option<u64>,
+    pub revision: u64,
+}
+
+impl Default for CharacterSettings {
+    fn default() -> Self {
+        Self {
+            character_id: "aris".into(),
+            display_name: "爱丽丝".into(),
+            model_path: None,
+            model_file_name: None,
+            model_size_bytes: None,
+            revision: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppError {
     pub code: String,
@@ -172,6 +195,7 @@ pub struct AppSnapshot {
     pub messages: Vec<ChatMessage>,
     pub provider: ProviderSettings,
     pub pet: PetSettings,
+    pub character: CharacterSettings,
     pub last_error: Option<AppError>,
 }
 

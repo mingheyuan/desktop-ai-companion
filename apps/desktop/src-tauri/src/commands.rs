@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     contracts::{
-        AppError, AppSnapshot, CancelTurnRequest, PetSettings, ProviderSettings, SubmitTextRequest,
-        UpdatePetSettingsRequest, UpdateProviderRequest,
+        AppError, AppSnapshot, CancelTurnRequest, CharacterSettings, PetSettings, ProviderSettings,
+        SubmitTextRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
     },
     core::AppCore,
     desktop,
@@ -113,4 +114,28 @@ pub async fn pet_update_settings(
             request.expected_revision,
         )
         .await
+}
+
+#[tauri::command]
+pub async fn character_import_vrm(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+) -> Result<Option<CharacterSettings>, AppError> {
+    let selected = app
+        .dialog()
+        .file()
+        .set_title("导入 VRM 角色")
+        .add_filter("VRM 角色", &["vrm"])
+        .blocking_pick_file();
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let path = selected.into_path().map_err(|error| {
+        AppError::new(
+            "character_import",
+            format!("无法读取所选文件路径：{error}"),
+            false,
+        )
+    })?;
+    state.0.import_character_vrm(&app, path).await.map(Some)
 }

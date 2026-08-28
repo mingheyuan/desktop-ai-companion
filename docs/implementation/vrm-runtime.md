@@ -119,6 +119,8 @@ MVP 不承诺逐像素透明区域穿透。该能力需要 macOS 原生命中测
 - 点击穿透使用 Tauri `set_ignore_cursor_events`，主面板和托盘都保留恢复入口。
 - 系统托盘提供打开主面板、显示/隐藏桌宠、切换点击穿透和退出；主窗口关闭按钮默认隐藏而不是终止后台进程。
 - 全局 `CommandOrControl+Shift+Space` 切换主面板显示，确保桌宠隐藏或穿透时仍能恢复控制。
+- 原生文件对话框只选择 `.vrm`；Rust 校验 200 MB 上限、glTF 2.0 容器长度、JSON 块和 VRM 0.x/1.0 扩展，再原子复制到 `$APPDATA/characters/<character_id>/`。WebView 的 asset protocol 仅放行角色管理目录下一层的 VRM 文件。
+- three-vrm 加载后执行无用顶点移除、骨架合并和 VRM0 朝向修正；加载失败、文件损坏或卸载竞态都回退到自制几何占位并释放 GPU 资源。
 
 命中测试只在 pointer down/move 的受控频率运行。点击动作由 `AvatarHit(area)` 映射到本地表现事件；它不能直接写记忆或拼接 LLM system prompt。
 

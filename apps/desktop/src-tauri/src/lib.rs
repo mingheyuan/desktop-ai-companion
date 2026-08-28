@@ -27,6 +27,7 @@ pub fn run() {
         .build();
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(shortcut_plugin)
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -44,6 +45,7 @@ pub fn run() {
             commands::settings_update_provider,
             commands::pet_open_panel,
             commands::pet_update_settings,
+            commands::character_import_vrm,
         ])
         .run(tauri::generate_context!())
         .expect("error while running desktop AI companion");

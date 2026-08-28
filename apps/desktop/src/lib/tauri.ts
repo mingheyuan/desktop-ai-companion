@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppSnapshot, EventEnvelope, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload } from "../contracts";
+import type { AppSnapshot, CharacterSettings, EventEnvelope, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload } from "../contracts";
 
 export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
@@ -50,6 +50,15 @@ export async function updatePetSettings(input: UpdatePetSettingsInput): Promise<
   return invoke<PetSettings>("pet_update_settings", {
     request: { request_id: crypto.randomUUID(), ...input },
   });
+}
+
+export async function importCharacterVrm(): Promise<CharacterSettings | null> {
+  return invoke<CharacterSettings | null>("character_import_vrm");
+}
+
+export function characterModelUrl(settings: CharacterSettings): string | undefined {
+  if (!settings.model_path || !isTauri()) return undefined;
+  return convertFileSrc(settings.model_path);
 }
 
 export interface CoreEventHandlers {

@@ -55,6 +55,7 @@ export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
     scene.add(fallback);
 
     let vrm: VRM | null = null;
+    let disposed = false;
     if (modelUrl) {
       const loader = new GLTFLoader();
       loader.register((parser) => new VRMLoaderPlugin(parser));
@@ -63,12 +64,26 @@ export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
         if (!loaded) return;
         VRMUtils.removeUnnecessaryVertices(gltf.scene);
         VRMUtils.combineSkeletons(gltf.scene);
+        VRMUtils.rotateVRM0(loaded);
+        if (disposed) {
+          VRMUtils.deepDispose(loaded.scene);
+          return;
+        }
         loaded.scene.traverse((object) => {
           object.frustumCulled = false;
         });
+        const bounds = new THREE.Box3().setFromObject(loaded.scene);
+        const size = bounds.getSize(new THREE.Vector3());
+        if (size.y > 0) loaded.scene.scale.setScalar(1.7 / size.y);
+        const fitted = new THREE.Box3().setFromObject(loaded.scene);
+        const center = fitted.getCenter(new THREE.Vector3());
+        loaded.scene.position.x -= center.x;
+        loaded.scene.position.y -= fitted.min.y;
         vrm = loaded;
         fallback.visible = false;
         scene.add(loaded.scene);
+      }, undefined, () => {
+        fallback.visible = true;
       });
     }
 
@@ -85,10 +100,16 @@ export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
     observer.observe(host);
     resize();
 
-    const render = () => {
+    let lastRenderAt = 0;
+    const render = (now = 0) => {
+      frame = requestAnimationFrame(render);
+      if (document.hidden) return;
+      const semantic = stateRef.current;
+      const minimumFrameTime = semantic === "sleeping" ? 66 : semantic === "idle" ? 33 : 16;
+      if (now - lastRenderAt < minimumFrameTime) return;
+      lastRenderAt = now;
       const delta = Math.min(clock.getDelta(), 0.05);
       const elapsed = clock.elapsedTime;
-      const semantic = stateRef.current;
       fallbackMaterial.color.setHex(stateColors[semantic]);
       fallback.position.y = Math.sin(elapsed * (semantic === "speaking" ? 4 : 1.5)) * 0.025;
       fallback.rotation.y = Math.sin(elapsed * 0.55) * 0.08;
@@ -99,11 +120,11 @@ export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
         vrm.update(delta);
       }
       renderer.render(scene, camera);
-      frame = requestAnimationFrame(render);
     };
     render();
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(frame);
       observer.disconnect();
       if (vrm) {

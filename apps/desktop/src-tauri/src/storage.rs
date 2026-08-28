@@ -3,7 +3,9 @@ use std::{path::Path, sync::Mutex};
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
-use crate::contracts::{ChatMessage, MessageRole, MessageStatus, PetSettings, ProviderSettings};
+use crate::contracts::{
+    CharacterSettings, ChatMessage, MessageRole, MessageStatus, PetSettings, ProviderSettings,
+};
 
 pub struct Storage {
     connection: Mutex<Connection>,
@@ -403,6 +405,40 @@ impl Storage {
         )?;
         Ok(())
     }
+
+    pub fn load_character_settings(&self) -> Result<CharacterSettings, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let stored = connection
+            .query_row(
+                "SELECT value_json, revision FROM app_settings WHERE key='character.active'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .optional()?;
+        match stored {
+            Some((json, revision)) => {
+                let mut value: CharacterSettings = serde_json::from_str(&json).unwrap_or_default();
+                value.revision = revision;
+                Ok(value)
+            }
+            None => Ok(CharacterSettings::default()),
+        }
+    }
+
+    pub fn save_character_settings(
+        &self,
+        value: &CharacterSettings,
+        now_ms: i64,
+    ) -> Result<(), rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let json = serde_json::to_string(value).expect("character settings serialize");
+        connection.execute(
+            "INSERT INTO app_settings(key, value_json, revision, updated_at_ms) VALUES('character.active', ?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, revision=excluded.revision, updated_at_ms=excluded.updated_at_ms",
+            params![json, value.revision, now_ms],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -449,5 +485,19 @@ mod tests {
         };
         storage.save_pet_settings(&settings, 10).unwrap();
         assert_eq!(storage.load_pet_settings().unwrap(), settings);
+    }
+
+    #[test]
+    fn character_settings_round_trip() {
+        let storage = Storage::open_in_memory().unwrap();
+        let settings = CharacterSettings {
+            model_path: Some("/managed/model.vrm".into()),
+            model_file_name: Some("model.vrm".into()),
+            model_size_bytes: Some(42),
+            revision: 2,
+            ..CharacterSettings::default()
+        };
+        storage.save_character_settings(&settings, 10).unwrap();
+        assert_eq!(storage.load_character_settings().unwrap(), settings);
     }
 }

@@ -38,6 +38,15 @@ export interface PetSettings {
   revision: number;
 }
 
+export interface CharacterSettings {
+  character_id: string;
+  display_name: string;
+  model_path: string | null;
+  model_file_name: string | null;
+  model_size_bytes: number | null;
+  revision: number;
+}
+
 export interface AppSnapshot {
   revision: number;
   listening_mode: ListeningMode;
@@ -52,6 +61,7 @@ export interface AppSnapshot {
   messages: ChatMessage[];
   provider: ProviderSettings;
   pet: PetSettings;
+  character: CharacterSettings;
   last_error: AppError | null;
 }
 

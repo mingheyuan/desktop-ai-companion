@@ -1,15 +1,36 @@
 import { FormEvent, useState } from "react";
-import { cancelTurn, submitText, updatePetSettings } from "../lib/tauri";
+import { cancelTurn, importCharacterVrm, isTauri, submitText, updatePetSettings } from "../lib/tauri";
 import { useAppStore } from "../stores/app";
 import { ProviderSettingsDialog } from "./ProviderSettingsDialog";
 
 export function ChatPanel() {
-  const { snapshot, streamingText, booting, setProvider, setPet } = useAppStore();
+  const { snapshot, streamingText, booting, setProvider, setPet, setCharacter } = useAppStore();
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [petUpdating, setPetUpdating] = useState(false);
   const [petError, setPetError] = useState("");
+  const [importingVrm, setImportingVrm] = useState(false);
+
+  const importVrm = async () => {
+    if (importingVrm || !isTauri()) return;
+    setImportingVrm(true);
+    setPetError("");
+    try {
+      const character = await importCharacterVrm();
+      if (character) setCharacter(character);
+    } catch (reason) {
+      if (typeof reason === "string") {
+        setPetError(reason);
+      } else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") {
+        setPetError(reason.message);
+      } else {
+        setPetError("导入 VRM 角色失败。");
+      }
+    } finally {
+      setImportingVrm(false);
+    }
+  };
 
   const patchPet = async (patch: Partial<typeof snapshot.pet>) => {
     if (petUpdating) return;
@@ -88,6 +109,9 @@ export function ChatPanel() {
             <option value={1.5}>150%</option>
           </select>
         </label>
+        <button type="button" disabled={importingVrm || !isTauri()} onClick={importVrm}>
+          {importingVrm ? "导入中…" : snapshot.character.model_file_name ?? "导入 VRM"}
+        </button>
         {petError && <span className="pet-control-error">{petError}</span>}
         <span className="pet-shortcut-hint">快捷键：⌘/Ctrl + Shift + Space</span>
       </nav>
