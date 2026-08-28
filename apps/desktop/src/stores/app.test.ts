@@ -21,6 +21,12 @@ const snapshot: AppSnapshot = {
     has_api_key: false,
     revision: 0,
   },
+  pet: {
+    visible: true,
+    click_through: false,
+    scale: 1,
+    revision: 0,
+  },
   last_error: null,
 };
 
@@ -44,5 +50,21 @@ describe("app store generation projection", () => {
     useAppStore.getState().appendDelta({ text: "回答" }, "turn-current");
     useAppStore.getState().finishTurn({ status: "completed" });
     expect(useAppStore.getState().streamingText).toBe("");
+  });
+
+  it("merges desktop settings without replacing a newer snapshot", () => {
+    useAppStore.getState().setSnapshot({ ...snapshot, revision: 8, messages: [{
+      id: "m1",
+      turn_id: "turn-current",
+      role: "user",
+      canonical_text: "保留我",
+      status: "completed",
+      created_at_ms: 1,
+    }] });
+    useAppStore.getState().setPet({ ...snapshot.pet, visible: false, revision: 1 });
+    const state = useAppStore.getState().snapshot;
+    expect(state.revision).toBe(8);
+    expect(state.messages[0].canonical_text).toBe("保留我");
+    expect(state.pet.visible).toBe(false);
   });
 });

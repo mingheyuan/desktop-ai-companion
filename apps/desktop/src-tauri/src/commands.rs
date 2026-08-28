@@ -1,13 +1,14 @@
 use std::sync::Arc;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::{
     contracts::{
-        AppError, AppSnapshot, CancelTurnRequest, ProviderSettings, SubmitTextRequest,
-        UpdateProviderRequest,
+        AppError, AppSnapshot, CancelTurnRequest, PetSettings, ProviderSettings, SubmitTextRequest,
+        UpdatePetSettingsRequest, UpdateProviderRequest,
     },
     core::AppCore,
+    desktop,
 };
 
 pub struct CoreState(pub Arc<AppCore>);
@@ -83,13 +84,33 @@ pub async fn settings_update_provider(
 
 #[tauri::command]
 pub fn pet_open_panel(app: AppHandle) -> Result<(), AppError> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| AppError::new("internal", "主窗口不存在。", false))?;
-    window
-        .show()
-        .map_err(|error| AppError::new("internal", format!("无法显示主窗口：{error}"), true))?;
-    window
-        .set_focus()
-        .map_err(|error| AppError::new("internal", format!("无法聚焦主窗口：{error}"), true))
+    desktop::show_main_window(&app)
+}
+
+#[tauri::command]
+pub async fn pet_update_settings(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: UpdatePetSettingsRequest,
+) -> Result<PetSettings, AppError> {
+    if request.request_id.trim().is_empty() {
+        return Err(AppError::new(
+            "invalid_request",
+            "request_id 不能为空。",
+            false,
+        ));
+    }
+    state
+        .0
+        .update_pet_settings(
+            &app,
+            PetSettings {
+                visible: request.visible,
+                click_through: request.click_through,
+                scale: request.scale,
+                revision: request.expected_revision,
+            },
+            request.expected_revision,
+        )
+        .await
 }

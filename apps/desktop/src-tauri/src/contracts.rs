@@ -111,6 +111,25 @@ impl Default for ProviderSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PetSettings {
+    pub visible: bool,
+    pub click_through: bool,
+    pub scale: f64,
+    pub revision: u64,
+}
+
+impl Default for PetSettings {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            click_through: false,
+            scale: 1.0,
+            revision: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppError {
     pub code: String,
@@ -152,6 +171,7 @@ pub struct AppSnapshot {
     pub conversation_id: String,
     pub messages: Vec<ChatMessage>,
     pub provider: ProviderSettings,
+    pub pet: PetSettings,
     pub last_error: Option<AppError>,
 }
 
@@ -205,5 +225,14 @@ pub struct UpdateProviderRequest {
     pub api_key: Option<String>,
     #[serde(default)]
     pub clear_api_key: bool,
+    pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdatePetSettingsRequest {
+    pub request_id: String,
+    pub visible: bool,
+    pub click_through: bool,
+    pub scale: f64,
     pub expected_revision: u64,
 }

@@ -112,6 +112,14 @@ MVP 不承诺逐像素透明区域穿透。该能力需要 macOS 原生命中测
 
 角色拖拽只改变窗口位置，不移动 3D 模型世界坐标。结束时把位置交给窗口状态服务保存；恢复时复用 Tauri window-state 的“必须与现有显示器相交”原则，若显示器已移除则回到主屏安全边界。
 
+### 已实现的窗口控制基线
+
+- Rust `PetSettings` 是可见性、点击穿透、缩放和修订号的事实来源，使用 SQLite `app_settings` 的 `desktop.pet` 键持久化。
+- 缩放通过 Tauri 物理窗口尺寸实现，允许范围为 60%–150%；React 只提交带 `expected_revision` 的更新意图。
+- 点击穿透使用 Tauri `set_ignore_cursor_events`，主面板和托盘都保留恢复入口。
+- 系统托盘提供打开主面板、显示/隐藏桌宠、切换点击穿透和退出；主窗口关闭按钮默认隐藏而不是终止后台进程。
+- 全局 `CommandOrControl+Shift+Space` 切换主面板显示，确保桌宠隐藏或穿透时仍能恢复控制。
+
 命中测试只在 pointer down/move 的受控频率运行。点击动作由 `AvatarHit(area)` 映射到本地表现事件；它不能直接写记忆或拼接 LLM system prompt。
 
 ## 7. 渲染与电量预算

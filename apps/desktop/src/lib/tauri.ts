@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppSnapshot, EventEnvelope, ProviderSettings, TextDeltaPayload, TurnEndedPayload } from "../contracts";
+import type { AppSnapshot, EventEnvelope, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload } from "../contracts";
 
 export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
@@ -35,6 +35,19 @@ export interface UpdateProviderInput {
 
 export async function updateProvider(input: UpdateProviderInput): Promise<ProviderSettings> {
   return invoke<ProviderSettings>("settings_update_provider", {
+    request: { request_id: crypto.randomUUID(), ...input },
+  });
+}
+
+export interface UpdatePetSettingsInput {
+  visible: boolean;
+  click_through: boolean;
+  scale: number;
+  expected_revision: number;
+}
+
+export async function updatePetSettings(input: UpdatePetSettingsInput): Promise<PetSettings> {
+  return invoke<PetSettings>("pet_update_settings", {
     request: { request_id: crypto.randomUUID(), ...input },
   });
 }

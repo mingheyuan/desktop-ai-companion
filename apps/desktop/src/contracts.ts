@@ -31,6 +31,13 @@ export interface ProviderSettings {
   revision: number;
 }
 
+export interface PetSettings {
+  visible: boolean;
+  click_through: boolean;
+  scale: number;
+  revision: number;
+}
+
 export interface AppSnapshot {
   revision: number;
   listening_mode: ListeningMode;
@@ -44,6 +51,7 @@ export interface AppSnapshot {
   conversation_id: string;
   messages: ChatMessage[];
   provider: ProviderSettings;
+  pet: PetSettings;
   last_error: AppError | null;
 }
 

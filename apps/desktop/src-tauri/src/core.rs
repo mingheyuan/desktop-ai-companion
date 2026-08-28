@@ -17,9 +17,10 @@ use uuid::Uuid;
 use crate::{
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, EventEnvelope, GenerationState, InputState,
-        ListeningMode, PlaybackState, ProviderSettings, TextDeltaPayload, TurnEndedPayload,
-        TurnState,
+        ListeningMode, PetSettings, PlaybackState, ProviderSettings, TextDeltaPayload,
+        TurnEndedPayload, TurnState,
     },
+    desktop::apply_pet_window_settings,
     provider::{create_provider, LlmEvent, LlmRequest},
     secret::SecretStore,
     storage::Storage,
@@ -64,6 +65,7 @@ pub struct AppCore {
     conversation_id: String,
     runtime: RwLock<RuntimeState>,
     provider: RwLock<ProviderSettings>,
+    pet: RwLock<PetSettings>,
     secrets: SecretStore,
     active_turn: Mutex<Option<ActiveTurn>>,
     next_generation: AtomicU64,
@@ -80,11 +82,13 @@ impl AppCore {
         let secrets = SecretStore;
         let mut provider = storage.load_provider_settings().map_err(storage_error)?;
         provider.has_api_key = secrets.resolve_llm_api_key()?.is_some();
+        let pet = storage.load_pet_settings().map_err(storage_error)?;
         Ok(Arc::new(Self {
             storage,
             conversation_id,
             runtime: RwLock::new(RuntimeState::default()),
             provider: RwLock::new(provider),
+            pet: RwLock::new(pet),
             secrets,
             active_turn: Mutex::new(None),
             next_generation: AtomicU64::new(0),
@@ -95,6 +99,7 @@ impl AppCore {
     pub async fn snapshot(&self) -> Result<AppSnapshot, AppError> {
         let runtime = self.runtime.read().await;
         let provider = self.provider.read().await.clone();
+        let pet = self.pet.read().await.clone();
         let messages = self
             .storage
             .list_messages(&self.conversation_id, 200)
@@ -112,8 +117,72 @@ impl AppCore {
             conversation_id: self.conversation_id.clone(),
             messages,
             provider,
+            pet,
             last_error: runtime.last_error.clone(),
         })
+    }
+
+    pub async fn apply_current_pet_settings(&self, app: &AppHandle) -> Result<(), AppError> {
+        let settings = self.pet.read().await.clone();
+        apply_pet_window_settings(app, &settings)
+    }
+
+    pub async fn update_pet_settings(
+        &self,
+        app: &AppHandle,
+        value: PetSettings,
+        expected_revision: u64,
+    ) -> Result<PetSettings, AppError> {
+        let mut pet = self.pet.write().await;
+        if pet.revision != expected_revision {
+            return Err(AppError::new(
+                "conflict",
+                "桌宠设置已在其他入口更新，请刷新后重试。",
+                true,
+            ));
+        }
+        validate_pet_settings(&value)?;
+        let previous = pet.clone();
+        let updated = PetSettings {
+            revision: pet.revision + 1,
+            ..value
+        };
+        apply_pet_window_settings(app, &updated)?;
+        if let Err(error) = self.storage.save_pet_settings(&updated, now_ms()) {
+            let _ = apply_pet_window_settings(app, &previous);
+            return Err(storage_error(error));
+        }
+        *pet = updated.clone();
+        drop(pet);
+        self.runtime.write().await.revision += 1;
+        self.emit_snapshot(app).await?;
+        Ok(updated)
+    }
+
+    pub async fn toggle_pet_visibility(&self, app: &AppHandle) -> Result<PetSettings, AppError> {
+        let current = self.pet.read().await.clone();
+        self.update_pet_settings(
+            app,
+            PetSettings {
+                visible: !current.visible,
+                ..current.clone()
+            },
+            current.revision,
+        )
+        .await
+    }
+
+    pub async fn toggle_pet_click_through(&self, app: &AppHandle) -> Result<PetSettings, AppError> {
+        let current = self.pet.read().await.clone();
+        self.update_pet_settings(
+            app,
+            PetSettings {
+                click_through: !current.click_through,
+                ..current.clone()
+            },
+            current.revision,
+        )
+        .await
     }
 
     pub async fn start_text_turn(
@@ -725,6 +794,17 @@ fn validate_provider_settings(value: &ProviderSettings) -> Result<(), AppError> 
     Ok(())
 }
 
+fn validate_pet_settings(value: &PetSettings) -> Result<(), AppError> {
+    if !value.scale.is_finite() || !(0.6..=1.5).contains(&value.scale) {
+        return Err(AppError::new(
+            "invalid_request",
+            "桌宠缩放比例必须在 60% 到 150% 之间。",
+            false,
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,5 +831,20 @@ mod tests {
             ..valid
         };
         assert!(validate_provider_settings(&empty_model).is_err());
+    }
+
+    #[test]
+    fn validates_pet_scale() {
+        assert!(validate_pet_settings(&PetSettings::default()).is_ok());
+        assert!(validate_pet_settings(&PetSettings {
+            scale: 0.5,
+            ..PetSettings::default()
+        })
+        .is_err());
+        assert!(validate_pet_settings(&PetSettings {
+            scale: f64::NAN,
+            ..PetSettings::default()
+        })
+        .is_err());
     }
 }

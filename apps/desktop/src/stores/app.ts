@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AppSnapshot, TextDeltaPayload, TurnEndedPayload } from "../contracts";
+import type { AppSnapshot, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload } from "../contracts";
 
 const emptySnapshot: AppSnapshot = {
   revision: 0,
@@ -20,6 +20,12 @@ const emptySnapshot: AppSnapshot = {
     has_api_key: false,
     revision: 0,
   },
+  pet: {
+    visible: true,
+    click_through: false,
+    scale: 1,
+    revision: 0,
+  },
   last_error: null,
 };
 
@@ -28,6 +34,8 @@ interface AppStore {
   streamingText: string;
   booting: boolean;
   setSnapshot: (snapshot: AppSnapshot) => void;
+  setProvider: (provider: ProviderSettings) => void;
+  setPet: (pet: PetSettings) => void;
   appendDelta: (payload: TextDeltaPayload, turnId?: string) => void;
   finishTurn: (payload: TurnEndedPayload) => void;
 }
@@ -45,6 +53,10 @@ export const useAppStore = create<AppStore>((set) => ({
           : "",
       booting: false,
     })),
+  setProvider: (provider) =>
+    set((state) => ({ snapshot: { ...state.snapshot, provider } })),
+  setPet: (pet) =>
+    set((state) => ({ snapshot: { ...state.snapshot, pet } })),
   appendDelta: ({ text }, turnId) =>
     set((state) => {
       if (turnId && turnId !== state.snapshot.active_turn_id) return state;
