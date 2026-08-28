@@ -20,6 +20,7 @@
 - [AudioHost](audio-host.md)：原生宿主生命周期、权限、持续监听与故障恢复。
 - [关键时序](sequences.md)：文本、唤醒词、按键说话、打断和记忆确认的端到端流程。
 - [VRM 运行时](vrm-runtime.md)：角色资源包、表现层、口型、点击和性能边界。
+- [Live2D 运行时候选](live2d-runtime.md)：从公开 Live2D 桌宠项目提炼的加载、模型目录、适配器和授权边界；尚未决定替换 VRM。
 - [代码级参考](../references.md)：固定到 commit 的参考项目、可借鉴点和禁止照搬的边界。
 
 ## 建议目录结构

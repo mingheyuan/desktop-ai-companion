@@ -11,6 +11,9 @@
 | [three-vrm](https://github.com/pixiv/three-vrm) | `/Users/mingyuan.wang/my/参考/three-vrm` | [`76e0109`](https://github.com/pixiv/three-vrm/commit/76e0109ef36f30f620e7c7883c2f893b22ca72d4) | VRM 加载、表情、look-at、动画与资源优化 |
 | [Tauri plugins workspace](https://github.com/tauri-apps/plugins-workspace) | `/Users/mingyuan.wang/my/参考/tauri-plugins` | [`9d6d032`](https://github.com/tauri-apps/plugins-workspace/commit/9d6d03269a3dea3e9dbf4635fe0fd68f23f750fa) | 全局快捷键、窗口状态、通知和平台线程约束 |
 | [create-tauri-app](https://github.com/tauri-apps/create-tauri-app) | `/Users/mingyuan.wang/my/参考/create-tauri-app` | [`2b8ce19`](https://github.com/tauri-apps/create-tauri-app/commit/2b8ce19844f37aaae8fd483e5a60ac0add9c2924) | 当前 Tauri 2 + React/TypeScript 工程模板与配置字段 |
+| [DesktopPetLive2D](https://github.com/Yanchen-J/DesktopPetLive2D) | `/Users/mingyuan.wang/my/参考/desktop-pet-live2d` | [`dc4f701`](https://github.com/Yanchen-J/DesktopPetLive2D/commit/dc4f70111177f760ddf6027b7aaba6ca7417cd3a) | Live2D 桌宠窗口、角色目录、角色配置、双层记忆 |
+| [Live2DPet-modern](https://github.com/MARS-HX/Live2DPet-modern) | `/Users/mingyuan.wang/my/参考/live2dpet-modern` | [`2592a65`](https://github.com/MARS-HX/Live2DPet-modern/commit/2592a658478433a0c892399d277462334146b9b6) | Live2D 适配器、参数映射、情绪/表情/动作、视觉记忆和语音入口 |
+| [Komorebi](https://github.com/kiskaserver/interactive_assistent) | `/Users/mingyuan.wang/my/参考/komorebi` | [`a2df4dc`](https://github.com/kiskaserver/interactive_assistent/commit/a2df4dcc68ff4a03d7701aa02f49354fde66e7b6) | Tauri 2 + Live2D、屏幕视觉、语音、工具权限和失败降级 |
 
 ## 1. realtime-ai-translation
 
@@ -76,6 +79,56 @@
 采用：以官方当前模板为工程骨架来源，并保持 `src-tauri` capability 与 config schema 可由 Tauri CLI 校验。
 
 改进：本项目使用 workspace 目录、主面板/桌宠双窗口、透明 macOS private API、Rust 状态核心和更严格 CSP，不保留示例 greet/opener 逻辑。
+
+## 6. Live2D 桌宠参考
+
+### DesktopPetLive2D
+
+重点文件：
+
+- `main/models.js`：扫描 `models/<id>/`，读取 `pet.config.json`，把模型路径和角色设定组合成运行时配置。
+- `main/memory.js`：将跨角色共享记忆与当前角色专属记忆分开保存，并在注入 prompt 前合并。
+- `renderer/`：透明置顶 Electron 窗口、拖动、点击和 Live2D canvas 的组织方式。
+
+采用：角色资源目录契约、角色配置与模型文件分离、共享/专属记忆的概念，以及“第三方模型不进 Git”的资源边界。
+
+改进：本项目不复制其 Electron 主进程或 JSON 文件存储；业务事实仍由 Rust + SQLite 保存，Live2D 只实现 `AvatarRenderer`，不直接拥有记忆和工具权限。
+
+### Live2DPet-modern
+
+重点文件：
+
+- `src/renderer/model-adapter.js`：用 adapter 统一 Live2D、静态图片和空渲染器，调用方不依赖具体模型 SDK。
+- `src/core/emotion-system.js`：把情绪积累、AI 选择和表情/动作播放解耦，并支持按语音时长对齐。
+- `src/core/enhance/`：视觉信息、知识池和记忆增强的拆分方式。
+
+采用：模型适配器、模型参数 introspection、表达层与业务状态解耦、表情/动作时长和 TTS 对齐。
+
+改进：本项目将情绪和表现状态收敛到已有 `BehaviorScheduler`；不会让每个模块直接抢占 Live2D 参数，也不会把屏幕截图自动写进长期记忆。
+
+### Komorebi
+
+重点文件：
+
+- `src/components/Live2DCanvas/`：PIXI 场景挂载、模型加载、Cubism 2/3/4/5 兼容、表达式/动作探测和加载失败降级。
+- `src/hooks/useListenController.ts`、`src/vad.ts`：持续监听、VAD 和语音状态与 UI 的连接方式。
+- `src-tauri/src/commands/vision.rs`、`src-tauri/src/tools.rs`：屏幕观察、工具调用和权限边界。
+- `public/live2d/README.md`：模型目录契约和 Cubism Core 不随主项目默认分发的说明。
+
+采用：`Live2DCanvas` 独立渲染边界、模型加载失败不拖垮主界面、模型 URL 与布局参数分离、视觉/语音/工具各自经过 Rust 能力边界。
+
+改进：当前项目保留 Swift AudioHost 和 Rust `ToolRuntime` 的既有设计；只借鉴组件边界，不复制其 provider、配置或自动化实现。
+
+### 许可证与资源边界
+
+以上三个仓库的代码许可证和其中的角色资源许可证不是同一件事。Live2D Cubism Core 是 Live2D 的专有运行时，角色模型还可能有单独的作者条款。当前方案因此规定：
+
+1. 参考仓库只放在本机独立目录，不作为主项目依赖或子模块。
+2. 公开仓库中的代码如需改写，先保留 commit、文件路径、许可证和 attribution 记录。
+3. 爱丽丝 Live2D 模型只允许用户自行取得并放入本地未跟踪目录；未经许可不修改、不上传、不随安装包分发。
+4. 在 Live2D Spike 通过前，主项目默认渲染后端仍是 VRM；不同时把两个 SDK 和两套角色资产塞进 MVP。
+
+详细的候选运行时契约、Spike 验收项和当前未决选择见 [`implementation/live2d-runtime.md`](implementation/live2d-runtime.md)。
 
 ## 使用规则
 

@@ -34,7 +34,7 @@
 ```mermaid
 flowchart LR
     subgraph UI["Tauri WebView / React"]
-        Pet["桌宠悬浮层\nThree.js + VRM"]
+        Pet["桌宠悬浮层\nAvatarRenderer：当前 VRM；Live2D Spike"]
         Panel["聊天 / 设置 / 记忆面板"]
         ViewStore["Zustand 展示状态"]
     end
@@ -84,7 +84,8 @@ flowchart LR
 
 负责：
 
-- VRM 渲染、动画混合、表情、视线和口型展示。
+- AvatarRenderer 的角色展示；当前实现为 VRM，Live2D 仅作为候选渲染后端进行 Spike。
+- 角色动画混合、表情、视线和口型展示；业务模块不直接调用具体 VRM/Live2D SDK。
 - 桌宠气泡、聊天、设置、记忆管理和活动列表界面。
 - 用户点击、拖动、快捷操作等 UI 意图上报。
 - 缓存后端状态的只读投影；重载后可从 Rust 快照恢复。
