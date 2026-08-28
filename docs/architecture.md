@@ -1,8 +1,8 @@
 # Desktop AI Companion 内部技术架构
 
-> 版本：v0.3 架构基线
+> 版本：v0.4 实现基线
 >
-> 状态：已确认方向，实施前仍需冻结协议字段、数据库迁移和关键状态转移
+> 状态：实现规格初稿已补齐，进入编码前需完成评审与高风险技术 Spike
 >
 > 更新日期：2026-08-28
 
@@ -10,7 +10,7 @@
 
 本文定义 MVP 内部各组件的职责、进程边界、通信方式、状态管理、语音链路、记忆流程和桌宠交互组织方式，并为后续工具调用与按需屏幕感知保留受控扩展点。
 
-这份文档解决的是“各技术如何协作”，不是立即开始编码的信号。在第 13 节列出的实施前门槛完成前，不初始化业务代码骨架。
+这份文档解决的是“各技术如何协作”，不是立即开始编码的信号。可执行细节见 [`implementation/README.md`](implementation/README.md)；在第 13 节列出的评审与 Spike 完成前，不初始化业务代码骨架。
 
 ### MVP 架构目标
 
@@ -117,7 +117,7 @@ MVP 同一时间只允许一个前台 `TurnActor`。记忆整理可以在该轮�
 AudioHost 是随主应用启动和退出的持久辅助进程，而不是每次识别临时启动的脚本。它负责：
 
 - 麦克风权限、音频设备变化和 `AVAudioEngine` 生命周期。
-- 麦克风 PCM 采集、短环形缓冲和音频播放。
+- 麦克风 PCM 采集、约 800ms pre-roll 环形缓冲和音频播放。
 - Apple Speech 会话及 `partial / final` 结果。
 - `AVSpeechSynthesizer.write(_:toBufferCallback:)` 生成音频缓冲。
 - 向 Rust 报告播放进度、振幅包络、设备与权限状态。
@@ -143,23 +143,27 @@ UI 启动或重载时先请求完整 `AppSnapshot`，之后消费增量事件。
 
 ## 5. 状态模型
 
-避免使用一个巨大枚举表达所有组合。MVP 采用四组相互正交的状态：
+避免使用一个巨大枚举表达所有组合。MVP 采用四组相互正交的全局状态，并为活动 turn 保留生成子状态：
 
 ```text
 ListeningMode: Disabled | Armed | QuietHours
-InputState:    Stopped | WakeListening | Capturing | Recognizing | Finalizing | Recovering
-TurnState:     Idle | Preparing | Generating | Delivering | Completed | Cancelled | Failed
-PlaybackState: Idle | Buffering | Playing | Stopping
+InputState:    Stopped | WakeListening | Capturing | Recognizing | Recovering
+TurnState:     Idle | Preparing | Active | Finalizing | Completed | Cancelled | Failed
+PlaybackState: Idle | Buffering | Playing | Stopping | Failed
+GenerationState: NotStarted | Streaming | Finished | Failed
 ```
 
 - `ListeningMode` 表示用户授权与产品模式。
 - `InputState` 表示麦克风到识别文本的实时阶段。
 - `TurnState` 表示一次文字或语音对话的业务生命周期。
 - `PlaybackState` 表示 TTS 队列与扬声器状态。
+- `GenerationState` 属于当前 turn，用于表达 LLM 仍在生成、TTS 已经播放的并行情况，不是第五个全局单例状态。
 
-桌宠的 `idle / listening / thinking / speaking / needs-input / blocked / ready / sleeping` 是以上状态与活动信息的**派生结果**，不是另一套可被任意模块写入的业务事实。
+桌宠的 `idle / listening / thinking / speaking / sleeping / needs-input / ready / recovering / error` 是以上状态与活动信息的**派生结果**，不是另一套可被任意模块写入的业务事实；缺少专用动画时由 VRM runtime 回退到 idle + 表情。
 
 后续每个工具调用另有独立状态：`Proposed | AwaitingApproval | Running | Succeeded | Cancelled | Failed | Denied`。它属于当前 `TurnActor`，不扩展为第五个全局单例状态机。
+
+完整转移、守卫、终态与表现状态派生见 [`implementation/state-machines.md`](implementation/state-machines.md)。
 
 ### 代次与迟到事件
 
@@ -209,6 +213,8 @@ PlaybackState: Idle | Buffering | Playing | Stopping
 
 控制协议与媒体协议必须独立版本化。不得把 PCM 编码进 JSON 或 Base64 长消息。
 
+完整 command/event、握手、帧头、背压和错误码见 [`implementation/ipc-protocol.md`](implementation/ipc-protocol.md)。
+
 ## 7. 语音交互流程
 
 ### 7.1 唤醒与识别
@@ -222,7 +228,7 @@ sequenceDiagram
     participant L as LLM Provider
     participant T as TTS / 播放
 
-    M->>M: 保存约 1 秒 PCM 环形缓冲
+    M->>M: 保存约 800ms PCM pre-roll
     M->>A: 本地 PCM（仅供 KWS / VAD）
     A->>A: Sherpa KWS 检测唤醒词
     A->>S: wake.detected
@@ -239,7 +245,7 @@ sequenceDiagram
 具体规则：
 
 1. `Armed` 模式下 AudioHost 持续采集，但唤醒前只把音频送到本机 Rust KWS/VAD，绝不发送给 LLM 或云端 ASR。
-2. AudioHost 保存约 1 秒环形缓冲。检测到唤醒后，Apple Speech 从 pre-roll 开始，避免吞掉唤醒词后的首字。
+2. AudioHost 保存约 800ms pre-roll。Rust 检测到唤醒后发送 `asr.start(pre_roll_ms)`，Apple Speech 先消费宿主本地缓冲再接实时音频，避免把 PCM 往返传输并吞掉首字。
 3. `partial` 只用于字幕和端点辅助，不能写入聊天记录或长期记忆。
 4. `final`、VAD 端点、超时和用户手动结束共同决定本轮输入封口；只有封口文本进入 LLM。
 5. Apple Speech 是否完全本地取决于系统、语言和设备能力，产品界面必须区分“本地唤醒”和“识别可能使用系统在线服务”。
@@ -249,7 +255,7 @@ sequenceDiagram
 - `TurnActor` 对 LLM 输出做安全的句子切分，完整句子才进入 TTS 队列。
 - TTS Provider 接口允许有界预生成多个分片，但播放严格按 `chunk_sequence` 排序；Apple Provider 初始并发设为 1，验证稳定后再提高。
 - AudioHost 从语音缓冲计算振幅包络，Rust 将其降采样后发送给 React 驱动基础口型。
-- 每轮分别记录 `generated_text`、`displayed_text` 和 `spoken_text`，避免打断后把未说出的内容标记为已朗读。
+- 每轮分别记录 `canonical_text`、`display_text` 和 `spoken_text`，避免字幕/发音处理污染记忆来源，也避免把未说出的内容标记为已朗读。
 - 停止时立即失效当前 `generation`，清空未播放分片，并把当前消息标记为 `interrupted`。
 
 ### 7.3 打断策略
@@ -263,6 +269,8 @@ MVP 必须保证快捷键、点击和托盘命令可以立即停止 TTS 并开�
 3. 确认后递增代次、停止播放并切入输入状态。
 
 如果 AEC 在目标设备上不稳定，MVP 关闭“播放中语音打断”，保留快捷键和点击打断，不伪装成已经解决。
+
+AudioHost 的进程、线程、权限、Apple Speech 滚动、TTS 与崩溃恢复规格见 [`implementation/audio-host.md`](implementation/audio-host.md)，端到端时序见 [`implementation/sequences.md`](implementation/sequences.md)。
 
 ## 8. 对话与 Provider 编排
 
@@ -285,6 +293,8 @@ MVP 必须保证快捷键、点击和托盘命令可以立即停止 TTS 并开�
 - LLM、ASR、TTS 和 Vision 请求均接收取消令牌、超时和 `generation`。
 - Provider 错误转换为统一错误类型，再由 `InteractionSupervisor` 决定重试、降级或提示用户。
 - 本地与云端 Provider 使用相同上层事件，不让 UI 感知供应商差异。
+
+Provider 的接口、流事件、超时、重试与合同测试见 [`implementation/providers.md`](implementation/providers.md)。
 
 ## 9. 记忆生命周期
 
@@ -313,14 +323,14 @@ MVP 记忆范围：
 - `preference`：可单独修改的偏好项。
 - `event`：有时间上下文的重要事件。
 
-生命周期状态：`pending | confirmed | rejected | superseded`。
+候选生命周期状态：`pending | confirmed | rejected | expired`。长期记忆本身使用 `supersedes_id` 表达替代关系，不把候选状态和记忆状态混为一谈。
 
-- 用户明确触发“记住”可以直接进入 `confirmed`，界面仍需可撤销。
+- 用户明确触发“记住”时，界面展示将保存的确切内容；同一次确认操作可以在事务中创建 confirmed candidate 和长期记忆。
 - 模型自动提取只能进入 `pending`；只有 `confirmed` 记忆参与后续提示词检索。
 - 冲突信息不覆盖旧记录，而是通过 `supersedes_id` 建立替代关系。
 - 角色核心设定是独立只读数据源，不通过记忆写入接口修改。
 
-每条记忆至少保存来源消息、作用域、创建与修改时间、置信度、敏感标记、版本和状态。删除需要同步移除检索索引，并保留最少量的本地审计信息或执行物理删除，由用户设置决定。
+每条记忆至少保存来源消息、作用域、创建与修改时间、置信度、敏感标记和版本。删除会物理删除正文并同步移除 FTS 索引；本地 audit 只保留 ID、动作和时间，不保留已删除正文。
 
 ### 9.2 检索策略
 
@@ -328,6 +338,8 @@ MVP 记忆范围：
 - 中文和日文优先验证 FTS5 `trigram` tokenizer；极短查询使用规范化字段或受限 `LIKE` 回退。
 - 检索综合文本相关性、时间、新鲜度、重要度和作用域，结果数量设置硬上限。
 - 记忆作为引用数据放入清晰分隔的提示词区域，不能被解释成系统指令，降低历史内容中的提示注入风险。
+
+完整表结构、FTS 同事务同步、确认事务、检索预算、迁移与崩溃恢复见 [`implementation/database.md`](implementation/database.md)。
 
 ## 10. 桌宠交互组织
 
@@ -365,6 +377,8 @@ NeedsInput > Blocked > Ready > Running > Idle
 
 MVP 仍只实现单角色，但数据结构不把“天童爱丽丝”写死在业务代码中。仓库不复制 Codex Pets 或《蔚蓝档案》的内部代码、角色资源和受版权保护素材。
 
+VRM adapter、角色包 manifest、动画优先级、口型、点击穿透、资源许可和性能边界见 [`implementation/vrm-runtime.md`](implementation/vrm-runtime.md)。
+
 ## 11. 错误恢复与退出
 
 - AudioHost 心跳中断：停止接受新语音请求，使当前音频代次失效，限次重启；失败后进入 `Blocked`，文字聊天保持可用。
@@ -389,21 +403,32 @@ MVP 仍只实现单角色，但数据结构不把“天童爱丽丝”写死在�
 
 ## 13. 开始实现前的冻结门槛
 
-以下内容完成评审后，才初始化 Tauri / Rust / React 业务骨架：
+实现规格初稿已经补齐：
 
-1. 四组状态的转移表，以及取消、超时、重连和应用退出路径。
-2. Tauri 与 AudioHost 的命令、事件、错误码和版本协商字段。
-3. SQLite 表结构、FTS5 tokenizer 验证、迁移策略和删除语义。
-4. AudioHost 启动、签名、权限、心跳、崩溃重启和安全退出约定。
-5. AEC 与播放中语音打断的可行性实验和验收标准。
-6. 唤醒对话、文字对话、手动打断、记忆确认四条关键时序测试。
-7. 角色包最小 manifest，以及没有授权角色资产时的开发占位方案。
+| 项目 | 规格 | 当前状态 |
+|---|---|---|
+| 状态转移、取消和表现派生 | [`implementation/state-machines.md`](implementation/state-machines.md) | 已起草，待评审 |
+| Tauri IPC、AudioHost 协议和错误码 | [`implementation/ipc-protocol.md`](implementation/ipc-protocol.md) | 已起草，待 fixture 验证 |
+| SQLite、FTS5、迁移和删除语义 | [`implementation/database.md`](implementation/database.md) | 已起草，待 tokenizer Spike |
+| LLM/ASR/TTS Provider | [`implementation/providers.md`](implementation/providers.md) | 已起草，待合同测试骨架 |
+| AudioHost 生命周期、权限与恢复 | [`implementation/audio-host.md`](implementation/audio-host.md) | 已起草，待原生 Spike |
+| 关键端到端流程 | [`implementation/sequences.md`](implementation/sequences.md) | 已起草，待测试映射 |
+| VRM manifest、表现和资源边界 | [`implementation/vrm-runtime.md`](implementation/vrm-runtime.md) | 已起草，待渲染 Spike |
 
-其中第 5 项若验证失败，不阻塞整个 MVP，但必须明确降级为快捷键和点击打断。
+初始化业务骨架前仍须：
+
+1. 对上述规格做一次整体评审，解决字段或语义冲突后标记 v0.4 frozen。
+2. 通过透明窗口、VRM、AudioHost、唤醒链路和取消一致性五项 Spike；验收条件见 [`implementation/README.md`](implementation/README.md)。
+3. 为 JSON/二进制协议建立 Rust/Swift 双向 fixture，证明版本和边界可实现。
+4. 验证 bundled SQLite FTS5 trigram 的中文/日文检索和短查询 fallback。
+
+AEC 若验证失败不阻塞 MVP，但播放期间暂停 wake-word 判定，并明确降级为全局 PTT、点击和托盘打断。
 
 工具与屏幕感知有独立的冻结门槛，不阻塞当前核心 MVP；开始 Tool MVP 前必须完成 [`tools-and-vision.md`](tools-and-vision.md) 第 12 节的评审。
 
 ## 14. 参考项目与资料
+
+固定到 commit 的代码文件、独立本地路径、采用点和禁止照搬的边界集中记录在 [`references.md`](references.md)。
 
 - [realtime-ai-translation](https://github.com/mingheyuan/realtime-ai-translation)：Provider / Session、macOS Speech Bridge、partial/final 和资源生命周期。
 - [realtime-ai-translation `src/asr.rs`](https://github.com/mingheyuan/realtime-ai-translation/blob/main/src/asr.rs)

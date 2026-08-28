@@ -4,7 +4,7 @@
 
 项目希望结合“钢琴女友”类产品的陪伴感、记忆管理和低频互动，以及桌宠应用的便捷性、可移动性和可动表现，再加入自然的语音交互能力。
 
-当前阶段已确定 MVP 的产品范围、技术选型和 v0.3 内部架构基线；工具调用与屏幕感知已经形成后续 Tool MVP 方案。项目仍处于设计期，尚未开始业务实现。
+当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线；状态机、IPC、SQLite、Provider、AudioHost、关键时序与 VRM 运行时均已形成实现规格。工具调用与屏幕感知作为后续 Tool MVP 单独规划。项目仍处于设计与验证期，尚未开始业务实现。
 
 ## 初始角色设定
 
@@ -98,9 +98,9 @@
 - 独立的原生悬浮窗口和系统权限处理。
 - 模型、进程和麦克风资源按需加载与释放。
 
-MVP 还需要补充语音合成、说话时的口型同步、TTS 打断和连续对话能力。
+本项目在参考结构上补充语音合成、说话时的口型同步、TTS 打断和连续对话能力。
 
-MVP 可以包含唤醒词和持续监听，但需要满足以下边界：
+MVP 包含唤醒词和持续监听，并满足以下边界：
 
 - 持续监听默认只用于本地唤醒词检测。
 - 唤醒前的音频不发送给 LLM 或云端服务。
@@ -120,8 +120,10 @@ MVP 可以包含唤醒词和持续监听，但需要满足以下边界：
 ## 项目文档
 
 - [`docs/architecture.md`](docs/architecture.md)：MVP 内部架构、数据所有权、状态模型、语音与记忆流程。
+- [`docs/implementation/README.md`](docs/implementation/README.md)：可直接指导编码的状态机、协议、数据库、Provider、AudioHost、时序和 VRM 规格索引。
 - [`docs/tools-and-vision.md`](docs/tools-and-vision.md)：工具调用、闹钟/提醒、屏幕观察、独立多模态 Provider 与真实参考项目。
 - [`docs/character/aris.md`](docs/character/aris.md)：初始角色原型资料与实现边界。
+- [`docs/references.md`](docs/references.md)：固定到 commit 的代码级参考仓库、具体文件和采用边界。
 
 ## MVP 范围（当前确认）
 
@@ -182,7 +184,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 - SQLite + FTS5，Rust 侧使用 `rusqlite`。
 - MVP 不引入向量数据库和 Embedding 服务。
-- 会话、用户记忆、关系记忆和情绪状态使用独立数据表。
+- 会话和关系状态使用独立数据表；用户/关系长期记忆在统一 `memories` 表中按 scope 与 character_id 隔离。
 - 记忆写入先生成候选，由用户明确确认后保存。
 
 ### 语音链路
@@ -206,13 +208,13 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - 前端单元测试：Vitest。
 - 关键交互测试：后续使用 Playwright 或 Tauri 对应的端到端方案。
 
-## 内部架构基线（v0.3）
+## 内部实现基线（v0.4）
 
 完整方案见 [`docs/architecture.md`](docs/architecture.md)。当前确认的关键决策：
 
 - Rust 核心是业务状态唯一事实来源；React 保存可重建的展示投影，Swift AudioHost 保存瞬时音频状态，SQLite 保存持久数据。
 - `InteractionSupervisor` 统一编排对话；每轮使用独立 `TurnActor`，通过 `generation` 和取消令牌屏蔽迟到事件。
-- 监听模式、输入、对话和播放使用四组正交状态；动作、表情和口型是统一状态派生结果。
+- 监听模式、输入、对话和播放使用四组正交状态；活动 turn 另有 GenerationState 表达 LLM 与 TTS 并行，动作、表情和口型是统一状态派生结果。
 - WebView 与 Rust 使用类型化 Tauri IPC；Rust 与持久 AudioHost 使用 UDS JSONL 控制通道和二进制 PCM 通道。
 - 记忆通过单一 `MemoryWorker` 串行写入；自动提取只生成待确认候选，只有已确认记忆参与检索。
 - 桌宠悬浮层与主面板分离，并使用 `ActivityStore + AttentionResolver` 处理多个活动的呈现优先级。
@@ -220,7 +222,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - 后续工具由 Rust `ToolRuntime` 统一注册、授权、执行和审计；模型不能直接操作系统。
 - 屏幕理解采用按需单帧和独立 Vision Provider，聊天 Key 与视觉 Key 默认隔离。
 
-实施前仍需冻结状态转移表、IPC 字段、SQLite schema、AudioHost 生命周期和关键时序测试。完成这些门槛后再创建代码骨架。
+上述细节已经写入 [`docs/implementation/`](docs/implementation/README.md)。进入编码前还需完成一次规格评审，并通过透明窗口、VRM、AudioHost、唤醒链路和取消一致性五项技术 Spike。
 
 ## 后续可替换点
 
@@ -236,9 +238,9 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 ### 阶段 0：产品与技术决策
 
-- 评审并冻结内部架构基线。
-- 完成角色状态转移、IPC 事件、记忆数据模型和 SQLite 迁移设计。
-- 定义 ASR、LLM、TTS、AudioHost 和角色渲染器接口。
+- 评审并冻结 v0.4 内部实现基线。
+- 复核已完成的角色状态转移、IPC 事件、记忆数据模型和 SQLite 迁移设计。
+- 复核已定义的 ASR、LLM、TTS、AudioHost 和角色渲染器接口。
 - 验证 AEC、Apple Speech pre-roll、FTS5 中文检索等高风险点。
 - 最后初始化 Tauri、Rust 和前端项目骨架。
 
@@ -280,15 +282,17 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 ## 当前状态
 
-项目已完成 GitHub 仓库初始化，MVP 范围、技术选型和 v0.3 内部架构基线已经写入文档；工具调用与屏幕感知作为后续 Tool MVP 独立规划。目前只保留项目说明、架构方案、角色资料和基础配置，尚未开始实现功能。
+项目已完成 GitHub 仓库初始化，MVP 范围、技术选型和 v0.4 实现规格已经写入文档；四个真实项目已固定到具体 commit 作为代码级参考，工具调用与屏幕感知作为后续 Tool MVP 独立规划。目前尚未初始化业务代码。
 
-下一步先冻结状态转移、IPC 协议、数据库 schema 和 AudioHost 生命周期，并完成语音打断可行性验证；确认后再初始化可运行的项目骨架。
+下一步评审 [`docs/implementation/`](docs/implementation/README.md)，完成五项技术 Spike；确认规格和降级策略后，再初始化可运行的项目骨架。
 
 ## 目录约定
 
-- `docs/`：产品想法、技术方案和调研记录
-- `src/`：应用源代码
-- `assets/`：角色与声音素材
+- `docs/`：产品、架构、实现规格和调研记录。
+- `apps/desktop/`：React/Tauri 桌面应用。
+- `native/AudioHost/`：Swift 原生音频宿主。
+- `contracts/`：Rust/Swift 协议 schema 与兼容 fixtures。
+- `resources/characters/`：仅存放自制、用户拥有或明确授权的角色资源。
 
 ## License
 
