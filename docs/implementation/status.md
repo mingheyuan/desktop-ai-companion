@@ -14,6 +14,7 @@
 | 桌宠控制 | 显示、缩放、点击穿透、托盘、窗口恢复、全局快捷键 | Rust 编译和手工 UI 检查 |
 | 语音基础 | 独立 AudioHost、权限、PTT、partial/final、系统 TTS、停止/新输入打断 | Swift 编译、UDS 真实握手测试 |
 | 持续监听 | Apple Speech 设备端识别检测“爱丽丝”；1.1 秒 endpoint | 代码保护已验证；仍需首次授权和长时间实机测试 |
+| 语音数据路径 | `capture.started.on_device` 投影为“本机识别/系统语音服务”；wake 只允许本机 | Rust/React 类型检查；仍需两类设备能力实机检查 |
 | macOS 打包 | Tauri resources 内嵌 `AudioHost.app`；稳定 identity 优先、ad-hoc fallback | debug app bundle 构建、`codesign --verify --deep --strict` |
 | 数据清理 | 本地范围摘要；聊天/记忆独立清理；二次确认；保留 Provider/角色/桌宠设置 | SQLite 范围隔离、candidate cascade、FTS rebuild 测试和 UI 检查 |
 
@@ -22,7 +23,7 @@
 - Rust 创建 `/tmp/dac-<uuid>.sock` 和权限 `0600` 的 token 文件，再用 `/usr/bin/open -n -W -a` 启动 `AudioHost.app`。
 - Host 首帧为 `host.hello`，包含 protocol major/minor、256-bit token、launch nonce、PID 和 capability；Rust 校验后回复 `host.ack`。
 - Core → Host：`permissions.request`、`permissions.status`、`listening.set`、`asr.start`、`asr.finalize`、`asr.stop`、`tts.speak`、`tts.stop`、`shutdown`。
-- Host → Core：`permissions.status`、`host.ready`、`capture.started`、`wake.detected`、`asr.partial`、`asr.final`、`tts.started`、`tts.finished`、`voice.error`、`host.error`。
+- Host → Core：`permissions.status`、`host.ready`、`capture.started`、`wake.detected`、`asr.partial`、`asr.final`、`tts.started`、`tts.level`、`tts.finished`、`voice.error`、`host.error`。
 - ASR 使用 `capture_id + generation + recognition_epoch + revision` 拒绝过期回调；TTS 使用 `turn_id + generation` 拒绝过期播放回调。
 - 当前只有 JSONL control socket，不传输 PCM；二进制 media socket、heartbeat、request/response ACK 和 supervisor 自动重启属于下一协议小版本。
 
@@ -34,10 +35,9 @@
 |---|---|---|
 | 稳定 TCC 身份 | 已提供本地签名脚本，但尚未在本机执行 | 用户确认执行脚本后完成首次授权/重建复测 |
 | 本地 KWS/VAD | 当前为 Apple Speech 设备端短语检测 fallback | 接入可分发 Sherpa 模型、PCM media socket、VAD 和误唤醒测试 |
-| 语音数据路径提示 | 持续监听严格设备端；PTT 可能由系统使用在线识别 | UI 显示本地/系统在线 capability 与当前路径 |
-| TTS 口型 | 当前直接 `AVSpeechSynthesizer.speak`，无 PCM 包络 | buffer 合成或可靠音量回调驱动 VRM `aa` |
+| TTS 口型 | 发音区间 pulse 已经由轻量事件驱动 VRM `aa`，但不是音频振幅 | buffer 合成或可靠 PCM/RMS 回调替换近似 level |
 | 音频恢复 | 无 heartbeat、设备切换、睡眠恢复和限次重启 | 完成 supervisor 与 30 分钟/睡眠/外设验收 |
-| 角色表现 | 有状态派生和渲染器，但无正式动作/表情包 | 授权 VRM + idle/listen/think/speak 动作验收 |
+| 角色表现 | 已有 idle/listen/think/speak 程序化骨骼姿态、眨眼、呼吸和 fallback 口型 | 授权 VRM + 正式 VRMA 动作验收 |
 | 记忆候选 | 用户可显式 CRUD；无模型自动候选确认流 | 候选表、确认/拒绝 UI 和冲突策略 |
 
 ## 当前验证命令

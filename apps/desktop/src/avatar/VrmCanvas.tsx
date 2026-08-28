@@ -1,11 +1,12 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { VRMLoaderPlugin, VRMUtils, type VRM } from "@pixiv/three-vrm";
+import { VRMHumanBoneName, VRMLoaderPlugin, VRMUtils, type VRM } from "@pixiv/three-vrm";
 import type { AvatarSemanticState } from "../contracts";
 
 interface VrmCanvasProps {
   state: AvatarSemanticState;
+  mouthLevel: number;
   modelUrl?: string;
 }
 
@@ -21,10 +22,12 @@ const stateColors: Record<AvatarSemanticState, number> = {
   error: 0xff6f91,
 };
 
-export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
+export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef(state);
+  const mouthLevelRef = useRef(mouthLevel);
   stateRef.current = state;
+  mouthLevelRef.current = mouthLevel;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -32,12 +35,15 @@ export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
-    camera.position.set(0, 1.25, 2.4);
-    camera.lookAt(0, 1.15, 0);
+    camera.position.set(0, 0.95, 3.45);
+    camera.lookAt(0, 0.9, 0);
 
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.domElement.style.width = "100%";
+    renderer.domElement.style.height = "100%";
+    renderer.domElement.style.display = "block";
     host.appendChild(renderer.domElement);
 
     scene.add(new THREE.HemisphereLight(0xdcecff, 0x18213c, 2.4));
@@ -46,15 +52,27 @@ export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
     scene.add(key);
 
     const fallbackMaterial = new THREE.MeshStandardMaterial({ color: stateColors[state], roughness: 0.32, metalness: 0.08 });
+    const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xbfe8ff });
+    const mouthMaterial = new THREE.MeshBasicMaterial({ color: 0x19345f });
     const fallback = new THREE.Group();
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 32, 32), fallbackMaterial);
     head.position.y = 1.45;
     const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 0.65, 8, 24), fallbackMaterial);
     body.position.y = 0.72;
-    fallback.add(head, body);
+    const leftEye = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.045, 0.025), eyeMaterial);
+    leftEye.position.set(-0.115, 1.52, 0.315);
+    const rightEye = leftEye.clone();
+    rightEye.position.x = 0.115;
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.025, 0.025), mouthMaterial);
+    mouth.position.set(0, 1.38, 0.32);
+    fallback.add(head, body, leftEye, rightEye, mouth);
     scene.add(fallback);
 
     let vrm: VRM | null = null;
+    let vrmHead: THREE.Object3D | null = null;
+    let vrmSpine: THREE.Object3D | null = null;
+    let vrmHeadBase: THREE.Euler | null = null;
+    let vrmSpineBase: THREE.Euler | null = null;
     let disposed = false;
     if (modelUrl) {
       const loader = new GLTFLoader();
@@ -80,6 +98,10 @@ export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
         loaded.scene.position.x -= center.x;
         loaded.scene.position.y -= fitted.min.y;
         vrm = loaded;
+        vrmHead = loaded.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Head) ?? null;
+        vrmSpine = loaded.humanoid?.getNormalizedBoneNode(VRMHumanBoneName.Spine) ?? null;
+        vrmHeadBase = vrmHead?.rotation.clone() ?? null;
+        vrmSpineBase = vrmSpine?.rotation.clone() ?? null;
         fallback.visible = false;
         scene.add(loaded.scene);
       }, undefined, () => {
@@ -101,6 +123,7 @@ export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
     resize();
 
     let lastRenderAt = 0;
+    let smoothedMouth = 0;
     const render = (now = 0) => {
       frame = requestAnimationFrame(render);
       if (document.hidden) return;
@@ -110,13 +133,36 @@ export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
       lastRenderAt = now;
       const delta = Math.min(clock.getDelta(), 0.05);
       const elapsed = clock.elapsedTime;
+      const listeningWeight = semantic === "listening" ? 1 : 0;
+      const thinkingWeight = semantic === "thinking" ? 1 : 0;
+      const speakingWeight = semantic === "speaking" ? 1 : 0;
+      const sleepingWeight = semantic === "sleeping" ? 1 : 0;
+      const targetMouth = speakingWeight ? THREE.MathUtils.clamp(mouthLevelRef.current, 0, 1) : 0;
+      smoothedMouth = THREE.MathUtils.damp(smoothedMouth, targetMouth, targetMouth > smoothedMouth ? 22 : 14, delta);
+      const blinkPhase = elapsed % 4.6;
+      const blink = sleepingWeight ? 0.82 : blinkPhase > 4.34 ? Math.sin(((blinkPhase - 4.34) / 0.26) * Math.PI) : 0;
+      const headPitch = sleepingWeight * 0.16 + listeningWeight * -0.035 + speakingWeight * Math.sin(elapsed * 3.2) * 0.018;
+      const headYaw = listeningWeight * Math.sin(elapsed * 1.2) * 0.075 + thinkingWeight * 0.11 + speakingWeight * Math.sin(elapsed * 2.1) * 0.04;
+      const headRoll = listeningWeight * -0.065 + thinkingWeight * 0.085;
+      const breath = Math.sin(elapsed * (sleepingWeight ? 0.8 : 1.55));
       fallbackMaterial.color.setHex(stateColors[semantic]);
       fallback.position.y = Math.sin(elapsed * (semantic === "speaking" ? 4 : 1.5)) * 0.025;
       fallback.rotation.y = Math.sin(elapsed * 0.55) * 0.08;
+      head.rotation.set(headPitch, headYaw, headRoll);
+      body.scale.y = 1 + breath * 0.012;
+      leftEye.scale.y = rightEye.scale.y = Math.max(0.08, 1 - blink);
+      mouth.scale.y = 1 + smoothedMouth * 5;
       if (vrm) {
         vrm.expressionManager?.setValue("happy", semantic === "ready" ? 0.55 : 0);
         vrm.expressionManager?.setValue("surprised", semantic === "needs_input" ? 0.35 : 0);
-        vrm.expressionManager?.setValue("aa", semantic === "speaking" ? 0.22 + Math.sin(elapsed * 12) * 0.12 : 0);
+        vrm.expressionManager?.setValue("blink", blink);
+        vrm.expressionManager?.setValue("aa", smoothedMouth);
+        if (vrmHead && vrmHeadBase) {
+          vrmHead.rotation.set(vrmHeadBase.x + headPitch, vrmHeadBase.y + headYaw, vrmHeadBase.z + headRoll, vrmHeadBase.order);
+        }
+        if (vrmSpine && vrmSpineBase) {
+          vrmSpine.rotation.set(vrmSpineBase.x + breath * 0.008, vrmSpineBase.y, vrmSpineBase.z + thinkingWeight * -0.025, vrmSpineBase.order);
+        }
         vrm.update(delta);
       }
       renderer.render(scene, camera);
@@ -135,6 +181,8 @@ export function VrmCanvas({ state, modelUrl }: VrmCanvasProps) {
         if (object instanceof THREE.Mesh) object.geometry.dispose();
       });
       fallbackMaterial.dispose();
+      eyeMaterial.dispose();
+      mouthMaterial.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };

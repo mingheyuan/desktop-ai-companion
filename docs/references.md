@@ -47,6 +47,7 @@
 - [`basic.html`](https://github.com/pixiv/three-vrm/blob/76e0109ef36f30f620e7c7883c2f893b22ca72d4/packages/three-vrm/examples/basic.html)：`GLTFLoader + VRMLoaderPlugin`、`vrm.update(delta)` 和加载后优化。
 - [`expressions.html`](https://github.com/pixiv/three-vrm/blob/76e0109ef36f30f620e7c7883c2f893b22ca72d4/packages/three-vrm/examples/expressions.html)：preset expression、blink 和口型权重。
 - [`animations.html`](https://github.com/pixiv/three-vrm/blob/76e0109ef36f30f620e7c7883c2f893b22ca72d4/packages/three-vrm/examples/animations.html)：动画加载与 mixer 管线。
+- [`VRMHumanoid.ts`](https://github.com/pixiv/three-vrm/blob/76e0109ef36f30f620e7c7883c2f893b22ca72d4/packages/three-vrm-core/src/humanoid/VRMHumanoid.ts)：通过 `getNormalizedBoneNode` 访问标准化 head/spine 等骨骼，作为无 VRMA 时的程序化姿态入口。
 
 采用：官方 loader/plugin、expression manager、look-at、animation mixer、加载后优化和每帧 update。
 

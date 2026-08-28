@@ -196,8 +196,9 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - Sherpa-ONNX 作为可选的本地 ASR Provider。
 - 当前切片先用 Apple Speech 的设备端识别检测“爱丽丝”，并用静音计时结束一轮；不支持设备端识别时拒绝开启持续监听，环境音不会降级发送到在线识别。
 - Sherpa-ONNX KeywordSpotter + VAD 仍是后续替换当前唤醒 fallback 的目标实现。
-- `AVSpeechSynthesizer` 作为第一版本地 TTS，现已支持开始、完成、停止和新输入打断；PCM 包络口型仍待接入。
+- `AVSpeechSynthesizer` 作为第一版本地 TTS，现已支持开始、完成、停止和新输入打断；发音区间事件可驱动基础口型，真实 PCM/RMS 包络仍待接入。
 - 持续监听只保留本地唤醒词检测；唤醒前音频不发送给 LLM 或云端。
+- 语音控制栏在捕获开始后显示“本机识别”或“系统语音服务”，持续监听只允许前者。
 
 语音 Provider 会沿用 [realtime-ai-translation](https://github.com/mingheyuan/realtime-ai-translation) 中的 Provider / Session、Bridge、partial/final 和资源按需加载思路，但不会把翻译状态机直接复制到对话系统。
 
@@ -286,7 +287,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。记忆面板还提供本地数据摘要与二次确认入口，可独立清空聊天记录或全部长期记忆，不影响 Provider、角色模型和桌宠设置。
 
-语音首个闭环已完成代码接入：Swift `AudioHost.app`、UDS 安全握手、权限状态、PTT、Apple Speech partial/final、设备端“爱丽丝”持续唤醒、`AVSpeechSynthesizer` 回复、停止朗读和新输入打断。Rust、前端、Swift 编译均已通过，并有一个不请求权限的真实 `.app` 握手测试。尚未完成的 MVP 风险项是稳定本地签名后的首次实机授权、长时间监听/睡眠恢复、Sherpa KWS/VAD 或当前 fallback 的误唤醒验收、角色真实动作/口型，以及完整打包回归。
+语音首个闭环已完成代码接入：Swift `AudioHost.app`、UDS 安全握手、权限状态、PTT、Apple Speech partial/final、设备端“爱丽丝”持续唤醒、`AVSpeechSynthesizer` 回复、停止朗读和新输入打断。发音区间事件会经过 `turn_id + generation` 过滤后驱动 VRM `aa` 表情；角色另有 idle/listening/thinking/speaking 基础程序化姿态、眨眼与呼吸。Rust、前端、Swift 编译均已通过，并有不请求权限的真实 `.app` 握手测试。尚未完成的 MVP 风险项是稳定本地签名后的首次实机授权、长时间监听/睡眠恢复、Sherpa KWS/VAD 或当前 fallback 的误唤醒验收、授权 VRM/正式 VRMA 动作，以及真实 PCM/RMS 口型。
 
 ## 本地开发
 

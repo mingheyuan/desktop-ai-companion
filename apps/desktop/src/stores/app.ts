@@ -45,6 +45,8 @@ const emptySnapshot: AppSnapshot = {
     revision: 0,
   },
   asr_partial: "",
+  voice_input_route: "unknown",
+  mouth_level: 0,
   last_error: null,
 };
 
@@ -57,6 +59,7 @@ interface AppStore {
   setPet: (pet: PetSettings) => void;
   setCharacter: (character: CharacterSettings) => void;
   setVoiceSettings: (settings: VoiceSettings) => void;
+  setMouthLevel: (level: number) => void;
   appendDelta: (payload: TextDeltaPayload, turnId?: string) => void;
   finishTurn: (payload: TurnEndedPayload) => void;
 }
@@ -82,6 +85,8 @@ export const useAppStore = create<AppStore>((set) => ({
     set((state) => ({ snapshot: { ...state.snapshot, character } })),
   setVoiceSettings: (voice_settings) =>
     set((state) => ({ snapshot: { ...state.snapshot, voice_settings } })),
+  setMouthLevel: (mouth_level) =>
+    set((state) => ({ snapshot: { ...state.snapshot, mouth_level } })),
   appendDelta: ({ text }, turnId) =>
     set((state) => {
       if (turnId && turnId !== state.snapshot.active_turn_id) return state;

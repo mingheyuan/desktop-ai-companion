@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppSnapshot, CharacterSettings, DataSummary, EventEnvelope, MemoryItem, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
+import type { AppSnapshot, CharacterSettings, DataSummary, EventEnvelope, MemoryItem, MouthLevelPayload, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
 
 export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
@@ -157,6 +157,7 @@ export interface CoreEventHandlers {
   snapshot: (event: EventEnvelope<AppSnapshot>) => void;
   delta: (event: EventEnvelope<TextDeltaPayload>) => void;
   ended: (event: EventEnvelope<TurnEndedPayload>) => void;
+  mouthLevel: (event: EventEnvelope<MouthLevelPayload>) => void;
 }
 
 export async function listenToCoreEvents(handlers: CoreEventHandlers): Promise<UnlistenFn> {
@@ -164,6 +165,7 @@ export async function listenToCoreEvents(handlers: CoreEventHandlers): Promise<U
     listen<EventEnvelope<AppSnapshot>>("state:changed", ({ payload }) => handlers.snapshot(payload)),
     listen<EventEnvelope<TextDeltaPayload>>("turn:text-delta", ({ payload }) => handlers.delta(payload)),
     listen<EventEnvelope<TurnEndedPayload>>("turn:ended", ({ payload }) => handlers.ended(payload)),
+    listen<EventEnvelope<MouthLevelPayload>>("avatar:mouth-level", ({ payload }) => handlers.mouthLevel(payload)),
   ]);
   return () => unlisteners.forEach((unlisten) => unlisten());
 }

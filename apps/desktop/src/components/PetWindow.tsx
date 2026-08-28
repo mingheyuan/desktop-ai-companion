@@ -13,7 +13,7 @@ export function PetWindow() {
       <button className="pet-drag-region" data-tauri-drag-region aria-label="拖动桌宠窗口" />
       <button className="speech-bubble" onClick={() => openPanel()}>{bubble}</button>
       <button className="avatar-button" onDoubleClick={() => openPanel()} aria-label="打开聊天面板">
-        <VrmCanvas state={snapshot.avatar_state} modelUrl={modelUrl} />
+        <VrmCanvas state={snapshot.avatar_state} mouthLevel={snapshot.mouth_level} modelUrl={modelUrl} />
       </button>
       <span className={`pet-indicator state-${snapshot.avatar_state}`} />
     </main>

@@ -95,6 +95,8 @@ AvatarSemanticState =
 
 ## 5. 口型与注视
 
+当前切片先使用 AudioHost `AVSpeechSynthesizerDelegate.willSpeakRange` 产生的受代次保护 pulse 驱动 `aa`，已经能够做到开始、字符区间变化、停止和打断归零，但它不是音频振幅。以下仍是接入 PCM media path 后的目标方案。
+
 - MVP 使用 AudioHost 回传的归一化振幅驱动 VRM preset expression `aa`。
 - 输入先做 attack 约 40ms、release 约 120ms 的包络平滑，低于噪声阈值归零。
 - UI 超过 250ms 未收到 level 时自动衰减到 0；`chunk_finished` 立即归零。

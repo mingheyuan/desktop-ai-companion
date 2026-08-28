@@ -244,6 +244,8 @@ pub struct AppSnapshot {
     pub voice_permissions: VoicePermissions,
     pub voice_settings: VoiceSettings,
     pub asr_partial: String,
+    pub voice_input_route: String,
+    pub mouth_level: f64,
     pub last_error: Option<AppError>,
 }
 
@@ -279,6 +281,11 @@ pub struct CancelTurnRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct TextDeltaPayload {
     pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MouthLevelPayload {
+    pub level: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -164,6 +164,11 @@ export function ChatPanel() {
       <nav className="voice-controls" aria-label="语音控制">
         <span className={`voice-dot state-${snapshot.input_state}`} />
         <span>{snapshot.audio_host_state === "ready" ? snapshot.input_state : `AudioHost: ${snapshot.audio_host_state}`}</span>
+        {snapshot.voice_input_route !== "unknown" && (
+          <span className={`voice-route ${snapshot.voice_input_route}`}>
+            {snapshot.voice_input_route === "on_device" ? "本机识别" : "系统语音服务"}
+          </span>
+        )}
         {(snapshot.voice_permissions.microphone !== "authorized" || snapshot.voice_permissions.speech_recognition !== "authorized") && (
           <button type="button" disabled={voiceBusy || !isTauri()} onClick={() => runVoiceAction(requestVoicePermissions)}>授权语音</button>
         )}

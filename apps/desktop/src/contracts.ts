@@ -95,6 +95,8 @@ export interface AppSnapshot {
   voice_permissions: VoicePermissions;
   voice_settings: VoiceSettings;
   asr_partial: string;
+  voice_input_route: "unknown" | "on_device" | "system_service";
+  mouth_level: number;
   last_error: AppError | null;
 }
 
@@ -119,6 +121,10 @@ export interface EventEnvelope<T> {
 
 export interface TextDeltaPayload {
   text: string;
+}
+
+export interface MouthLevelPayload {
+  level: number;
 }
 
 export interface TurnEndedPayload {

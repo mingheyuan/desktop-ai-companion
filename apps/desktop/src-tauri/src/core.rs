@@ -21,9 +21,9 @@ use crate::{
     audio::{self, AudioWriter},
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, DataSummary, EventEnvelope,
-        GenerationState, InputState, ListeningMode, MemoryItem, PetSettings, PlaybackState,
-        ProviderSettings, TextDeltaPayload, TurnEndedPayload, TurnState, VoicePermissions,
-        VoiceSettings,
+        GenerationState, InputState, ListeningMode, MemoryItem, MouthLevelPayload, PetSettings,
+        PlaybackState, ProviderSettings, TextDeltaPayload, TurnEndedPayload, TurnState,
+        VoicePermissions, VoiceSettings,
     },
     desktop::apply_pet_window_settings,
     provider::{create_provider, LlmEvent, LlmRequest},
@@ -44,6 +44,8 @@ struct RuntimeState {
     audio_host_state: String,
     voice_permissions: VoicePermissions,
     asr_partial: String,
+    voice_input_route: String,
+    mouth_level: f64,
     active_voice_source: Option<String>,
     active_voice_capture_id: Option<String>,
 }
@@ -63,6 +65,8 @@ impl Default for RuntimeState {
             audio_host_state: "stopped".into(),
             voice_permissions: VoicePermissions::default(),
             asr_partial: String::new(),
+            voice_input_route: "unknown".into(),
+            mouth_level: 0.0,
             active_voice_source: None,
             active_voice_capture_id: None,
         }
@@ -179,6 +183,8 @@ impl AppCore {
             voice_permissions: runtime.voice_permissions.clone(),
             voice_settings,
             asr_partial: runtime.asr_partial.clone(),
+            voice_input_route: runtime.voice_input_route.clone(),
+            mouth_level: runtime.mouth_level,
             last_error: runtime.last_error.clone(),
         })
     }
@@ -906,6 +912,7 @@ impl AppCore {
             runtime.active_voice_capture_id = None;
             runtime.active_voice_source = None;
             runtime.asr_partial.clear();
+            runtime.voice_input_route = "unknown".into();
             runtime.last_error = None;
         }
         self.emit_snapshot(app).await?;
@@ -942,6 +949,7 @@ impl AppCore {
                 runtime.active_voice_capture_id = None;
                 runtime.active_voice_source = None;
                 runtime.asr_partial.clear();
+                runtime.voice_input_route = "unknown".into();
             }
             return self.emit_snapshot(app).await;
         }
@@ -997,9 +1005,11 @@ impl AppCore {
             runtime.revision += 1;
             runtime.input_state = InputState::Capturing;
             runtime.playback_state = PlaybackState::Idle;
+            runtime.mouth_level = 0.0;
             runtime.active_voice_capture_id = Some(capture_id);
             runtime.active_voice_source = Some("push_to_talk".into());
             runtime.asr_partial.clear();
+            runtime.voice_input_route = "unknown".into();
             runtime.last_error = None;
         }
         self.emit_snapshot(app).await
@@ -1031,6 +1041,7 @@ impl AppCore {
             let mut runtime = self.runtime.write().await;
             runtime.revision += 1;
             runtime.playback_state = PlaybackState::Idle;
+            runtime.mouth_level = 0.0;
         }
         self.emit_snapshot(app).await
     }
@@ -1162,6 +1173,15 @@ impl AppCore {
                 let mut runtime = self.runtime.write().await;
                 runtime.revision += 1;
                 runtime.active_voice_capture_id = Some(capture_id);
+                runtime.voice_input_route = if event
+                    .get("on_device")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    "on_device".into()
+                } else {
+                    "system_service".into()
+                };
                 runtime.input_state = if mode == "wake" {
                     runtime.active_voice_source = None;
                     runtime.asr_partial.clear();
@@ -1221,6 +1241,7 @@ impl AppCore {
                     };
                     runtime.asr_partial.clear();
                     runtime.active_voice_capture_id = None;
+                    runtime.voice_input_route = "unknown".into();
                     runtime
                         .active_voice_source
                         .take()
@@ -1255,6 +1276,40 @@ impl AppCore {
                 drop(runtime);
                 let _ = self.emit_snapshot(app).await;
             }
+            "tts.level" => {
+                let turn_id = event
+                    .get("turn_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let generation = event.get("generation").and_then(Value::as_u64);
+                let level = event.get("level").and_then(Value::as_f64).unwrap_or(0.0);
+                if !level.is_finite() {
+                    return;
+                }
+                let active = self.active_playback.lock().await;
+                if active
+                    .as_ref()
+                    .is_none_or(|(active_turn, active_generation)| {
+                        Some(active_turn.as_str()) != turn_id.as_deref()
+                            || Some(*active_generation) != generation
+                    })
+                {
+                    return;
+                }
+                drop(active);
+                self.runtime.write().await.mouth_level = level.clamp(0.0, 1.0);
+                let _ = self
+                    .emit(
+                        app,
+                        "avatar:mouth-level",
+                        turn_id,
+                        generation,
+                        MouthLevelPayload {
+                            level: level.clamp(0.0, 1.0),
+                        },
+                    )
+                    .await;
+            }
             "tts.finished" => {
                 let turn_id = event.get("turn_id").and_then(Value::as_str);
                 let generation = event.get("generation").and_then(Value::as_u64);
@@ -1273,6 +1328,7 @@ impl AppCore {
                 let mut runtime = self.runtime.write().await;
                 runtime.revision += 1;
                 runtime.playback_state = PlaybackState::Idle;
+                runtime.mouth_level = 0.0;
                 drop(runtime);
                 let _ = self.emit_snapshot(app).await;
             }
@@ -1292,6 +1348,8 @@ impl AppCore {
                 runtime.active_voice_capture_id = None;
                 runtime.active_voice_source = None;
                 runtime.asr_partial.clear();
+                runtime.voice_input_route = "unknown".into();
+                runtime.mouth_level = 0.0;
                 if matches!(
                     code,
                     "on_device_wake_unavailable"
@@ -1312,10 +1370,12 @@ impl AppCore {
                 runtime.audio_host_state = "failed".into();
                 runtime.input_state = InputState::Stopped;
                 runtime.playback_state = PlaybackState::Idle;
+                runtime.mouth_level = 0.0;
                 runtime.listening_mode = ListeningMode::Disabled;
                 runtime.active_voice_capture_id = None;
                 runtime.active_voice_source = None;
                 runtime.asr_partial.clear();
+                runtime.voice_input_route = "unknown".into();
                 drop(runtime);
                 let _ = self.emit_snapshot(app).await;
             }
@@ -1342,6 +1402,7 @@ impl AppCore {
             let mut runtime = self.runtime.write().await;
             runtime.revision += 1;
             runtime.playback_state = PlaybackState::Buffering;
+            runtime.mouth_level = 0.0;
         }
         let _ = self.emit_snapshot(app).await;
         if audio::send(
@@ -1355,6 +1416,7 @@ impl AppCore {
             let mut runtime = self.runtime.write().await;
             runtime.revision += 1;
             runtime.playback_state = PlaybackState::Idle;
+            runtime.mouth_level = 0.0;
             drop(runtime);
             let _ = self.emit_snapshot(app).await;
         }
@@ -1370,6 +1432,7 @@ impl AppCore {
             runtime.revision += 1;
             runtime.playback_state = PlaybackState::Idle;
         }
+        runtime.mouth_level = 0.0;
     }
 
     async fn resolve_llm_api_key(&self) -> Result<Option<String>, AppError> {

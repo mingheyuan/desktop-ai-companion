@@ -64,6 +64,7 @@ Rust → React 事件 envelope：
 | `voice:asr-final` | 最终用户文本；随后会出现 turn:started |
 | `playback:chunk-started` | 口型和 speaking 状态起点 |
 | `playback:level` | 归一化振幅；最大 20Hz，允许丢帧 |
+| `avatar:mouth-level` | 当前 TTS 发音活动的轻量口型投影；带 turn/generation，允许丢帧 |
 | `playback:chunk-finished` | chunk 顺序推进 |
 | `memory:candidate-created` | 等待用户确认的候选 |
 | `memory:changed` | 确认、修改或删除后刷新 |

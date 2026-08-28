@@ -46,6 +46,8 @@ const snapshot: AppSnapshot = {
     revision: 0,
   },
   asr_partial: "",
+  voice_input_route: "unknown",
+  mouth_level: 0,
   last_error: null,
 };
 
@@ -69,6 +71,12 @@ describe("app store generation projection", () => {
     useAppStore.getState().appendDelta({ text: "回答" }, "turn-current");
     useAppStore.getState().finishTurn({ status: "completed" });
     expect(useAppStore.getState().streamingText).toBe("");
+  });
+
+  it("projects transient mouth level without replacing the snapshot", () => {
+    useAppStore.getState().setMouthLevel(0.72);
+    expect(useAppStore.getState().snapshot.mouth_level).toBe(0.72);
+    expect(useAppStore.getState().snapshot.active_turn_id).toBe("turn-current");
   });
 
   it("merges desktop settings without replacing a newer snapshot", () => {

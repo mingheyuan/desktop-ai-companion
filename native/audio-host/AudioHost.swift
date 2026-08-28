@@ -365,6 +365,7 @@ private final class SpeechController: NSObject, @unchecked Sendable, AVSpeechSyn
     private var turnID = ""
     private var generation = 0
     private var currentUtterance: AVSpeechUtterance?
+    private var lastLevelEmittedAt = 0.0
 
     init(voiceController: VoiceController) {
         self.voiceController = voiceController
@@ -376,6 +377,7 @@ private final class SpeechController: NSObject, @unchecked Sendable, AVSpeechSyn
         stop()
         self.turnID = turnID
         self.generation = generation
+        lastLevelEmittedAt = 0
         voiceController.pauseForPlayback()
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
@@ -391,10 +393,29 @@ private final class SpeechController: NSObject, @unchecked Sendable, AVSpeechSyn
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
         guard utterance === currentUtterance else { return }
         emit(["type": "tts.started", "turn_id": turnID, "generation": generation])
+        emitLevel(0.12, for: utterance)
+    }
+
+    func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        willSpeakRangeOfSpeechString characterRange: NSRange,
+        utterance: AVSpeechUtterance
+    ) {
+        guard utterance === currentUtterance else { return }
+        let pulse = 0.48 + Double(NSMaxRange(characterRange) % 4) * 0.11
+        emitLevel(pulse, for: utterance)
+        let identity = ObjectIdentifier(utterance)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [weak self] in
+            guard let self,
+                  let current = self.currentUtterance,
+                  ObjectIdentifier(current) == identity else { return }
+            self.emitLevel(0.08, for: current)
+        }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         guard utterance === currentUtterance else { return }
+        emitLevel(0, for: utterance, force: true)
         currentUtterance = nil
         emit(["type": "tts.finished", "turn_id": turnID, "generation": generation, "status": "completed"])
         voiceController.resumeAfterPlayback()
@@ -402,9 +423,18 @@ private final class SpeechController: NSObject, @unchecked Sendable, AVSpeechSyn
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         guard utterance === currentUtterance else { return }
+        emitLevel(0, for: utterance, force: true)
         currentUtterance = nil
         emit(["type": "tts.finished", "turn_id": turnID, "generation": generation, "status": "cancelled"])
         voiceController.resumeAfterPlayback()
+    }
+
+    private func emitLevel(_ level: Double, for utterance: AVSpeechUtterance, force: Bool = false) {
+        guard utterance === currentUtterance else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard force || now - lastLevelEmittedAt >= 0.05 else { return }
+        lastLevelEmittedAt = now
+        emit(["type": "tts.level", "turn_id": turnID, "generation": generation, "level": level])
     }
 }
 

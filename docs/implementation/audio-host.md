@@ -11,11 +11,11 @@
 - 麦克风与 Speech Recognition 权限状态查询和仅由用户点击触发的授权请求；
 - PTT、Apple Speech partial/final、45 秒 recognition task 滚动和 capture/epoch/generation guard；
 - 使用 Apple Speech 设备端识别检测“爱丽丝”的持续监听 fallback；不支持设备端识别时直接关闭持续监听，不把环境音降级到在线识别；
-- `AVSpeechSynthesizer` 本地朗读、停止、PTT/文字新输入打断，以及旧 utterance 回调过滤；
+- `AVSpeechSynthesizer` 本地朗读、停止、PTT/文字新输入打断、旧 utterance 回调过滤，以及基于 `willSpeakRange` 的近似口型 level；
 - Rust 侧 turn/input/playback 状态投影、Tauri 命令、UI 控件和 `Cmd/Ctrl + Shift + M` PTT 快捷键；
 - 不请求语音权限的真实 `.app` 启动、握手和退出测试。
 
-尚未落地的目标项包括：二进制 PCM media socket、Sherpa KWS、独立 VAD、pre-roll、RMS/口型、设备切换、心跳与自动重启、安静时段，以及 30 分钟/睡眠恢复实机验收。当前 fallback 的 endpoint 是 1.1 秒静音计时；PTT 在设备端识别不可用时可能使用 Apple Speech 系统在线服务，UI 后续需进一步标出该数据路径。
+尚未落地的目标项包括：二进制 PCM media socket、Sherpa KWS、独立 VAD、pre-roll、真实 RMS 口型、设备切换、心跳与自动重启、安静时段，以及 30 分钟/睡眠恢复实机验收。当前 fallback 的 endpoint 是 1.1 秒静音计时；口型 level 只表示发音区间活动而非真实响度；PTT 在设备端识别不可用时可能使用 Apple Speech 系统在线服务，UI 会根据 `capture.started.on_device` 显示“本机识别”或“系统语音服务”。
 
 ## 1. 职责
 
