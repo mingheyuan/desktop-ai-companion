@@ -43,6 +43,9 @@ Rust → React 事件 envelope：
 | `memory_search` | `query, scope?, limit?, cursor?` | 仅返回用户可见记录 |
 | `memory_update` | `request_id, memory_id, expected_version, content` | 乐观锁 |
 | `memory_delete` | `request_id, memory_id, expected_version` | 物理删除正文和 FTS |
+| `data_get_summary` | `request_id` | 返回当前聊天消息、长期记忆和候选数量 |
+| `data_clear_conversation` | `request_id` | 取消活动 turn，清空当前会话消息/turn，保留长期记忆和设置 |
+| `data_clear_memories` | `request_id` | 清空候选、长期记忆、关系摘要、审计正文并重建空 FTS，保留聊天和设置 |
 | `pet_set_click_through` | `request_id, enabled` | 保留可恢复快捷键/托盘入口 |
 | `pet_set_visible` | `request_id, visible` | 不销毁后台核心 |
 | `settings_get` | — | 返回非秘密设置；Keychain 只返回配置状态 |

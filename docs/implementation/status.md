@@ -15,6 +15,7 @@
 | 语音基础 | 独立 AudioHost、权限、PTT、partial/final、系统 TTS、停止/新输入打断 | Swift 编译、UDS 真实握手测试 |
 | 持续监听 | Apple Speech 设备端识别检测“爱丽丝”；1.1 秒 endpoint | 代码保护已验证；仍需首次授权和长时间实机测试 |
 | macOS 打包 | Tauri resources 内嵌 `AudioHost.app`；稳定 identity 优先、ad-hoc fallback | debug app bundle 构建、`codesign --verify --deep --strict` |
+| 数据清理 | 本地范围摘要；聊天/记忆独立清理；二次确认；保留 Provider/角色/桌宠设置 | SQLite 范围隔离、candidate cascade、FTS rebuild 测试和 UI 检查 |
 
 ## 当前 AudioHost 协议（v1.0 子集）
 
@@ -38,7 +39,6 @@
 | 音频恢复 | 无 heartbeat、设备切换、睡眠恢复和限次重启 | 完成 supervisor 与 30 分钟/睡眠/外设验收 |
 | 角色表现 | 有状态派生和渲染器，但无正式动作/表情包 | 授权 VRM + idle/listen/think/speak 动作验收 |
 | 记忆候选 | 用户可显式 CRUD；无模型自动候选确认流 | 候选表、确认/拒绝 UI 和冲突策略 |
-| 清理入口 | 记忆单条删除已实现；无会话/全部数据清理 | 设置页数据范围预览、二次确认和删除测试 |
 
 ## 当前验证命令
 

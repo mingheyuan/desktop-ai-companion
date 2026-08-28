@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppSnapshot, CharacterSettings, EventEnvelope, MemoryItem, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
+import type { AppSnapshot, CharacterSettings, DataSummary, EventEnvelope, MemoryItem, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
 
 export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
@@ -92,6 +92,24 @@ export async function deleteMemory(memory: MemoryItem): Promise<void> {
       id: memory.id,
       expected_version: memory.version,
     },
+  });
+}
+
+export async function getDataSummary(): Promise<DataSummary> {
+  return invoke<DataSummary>("data_get_summary", {
+    request: { request_id: crypto.randomUUID() },
+  });
+}
+
+export async function clearConversationData(): Promise<DataSummary> {
+  return invoke<DataSummary>("data_clear_conversation", {
+    request: { request_id: crypto.randomUUID() },
+  });
+}
+
+export async function clearMemoryData(): Promise<DataSummary> {
+  return invoke<DataSummary>("data_clear_memories", {
+    request: { request_id: crypto.randomUUID() },
   });
 }
 

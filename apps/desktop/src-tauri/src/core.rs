@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::{
     audio::{self, AudioWriter},
     contracts::{
-        AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, EventEnvelope,
+        AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, DataSummary, EventEnvelope,
         GenerationState, InputState, ListeningMode, MemoryItem, PetSettings, PlaybackState,
         ProviderSettings, TextDeltaPayload, TurnEndedPayload, TurnState, VoicePermissions,
         VoiceSettings,
@@ -91,6 +91,7 @@ pub struct AppCore {
     voice_settings: RwLock<VoiceSettings>,
     secrets: SecretStore,
     active_turn: Mutex<Option<ActiveTurn>>,
+    interaction_command: Mutex<()>,
     active_playback: Mutex<Option<(String, u64)>>,
     audio_writer: Mutex<Option<AudioWriter>>,
     audio_launch: Mutex<()>,
@@ -125,6 +126,7 @@ impl AppCore {
             voice_settings: RwLock::new(voice_settings),
             secrets,
             active_turn: Mutex::new(None),
+            interaction_command: Mutex::new(()),
             active_playback: Mutex::new(None),
             audio_writer: Mutex::new(None),
             audio_launch: Mutex::new(()),
@@ -330,6 +332,7 @@ impl AppCore {
             ));
         }
 
+        let _interaction_guard = self.interaction_command.lock().await;
         self.interrupt_playback().await;
         self.cancel_active(&app, "superseded").await?;
         let generation = self.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -864,6 +867,54 @@ impl AppCore {
             ));
         }
         Ok(())
+    }
+
+    pub fn data_summary(&self) -> Result<DataSummary, AppError> {
+        self.storage
+            .data_summary(&self.conversation_id)
+            .map_err(storage_error)
+    }
+
+    pub async fn clear_conversation_history(
+        self: &Arc<Self>,
+        app: &AppHandle,
+    ) -> Result<DataSummary, AppError> {
+        let _interaction_guard = self.interaction_command.lock().await;
+        self.interrupt_playback().await;
+        self.cancel_active(app, "data_cleared").await?;
+
+        let has_voice_capture = self.runtime.read().await.active_voice_source.is_some();
+        if has_voice_capture {
+            if let Some(writer) = self.audio_writer.lock().await.clone() {
+                let _ = audio::send(&writer, json!({"type": "asr.stop"})).await;
+            }
+        }
+        self.storage
+            .clear_conversation_history(&self.conversation_id, now_ms())
+            .map_err(storage_error)?;
+        {
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.turn_state = TurnState::Idle;
+            runtime.generation_state = GenerationState::NotStarted;
+            runtime.active_turn_id = None;
+            runtime.input_state = if runtime.listening_mode == ListeningMode::Armed {
+                InputState::WakeListening
+            } else {
+                InputState::Stopped
+            };
+            runtime.active_voice_capture_id = None;
+            runtime.active_voice_source = None;
+            runtime.asr_partial.clear();
+            runtime.last_error = None;
+        }
+        self.emit_snapshot(app).await?;
+        self.data_summary()
+    }
+
+    pub fn clear_all_memories(&self) -> Result<DataSummary, AppError> {
+        self.storage.clear_all_memories().map_err(storage_error)?;
+        self.data_summary()
     }
 
     pub async fn request_voice_permissions(

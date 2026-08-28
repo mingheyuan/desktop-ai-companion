@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import type { MemoryItem } from "../contracts";
-import { createMemory, deleteMemory, isTauri, searchMemories, updateMemory } from "../lib/tauri";
+import type { DataSummary, MemoryItem } from "../contracts";
+import { clearConversationData, clearMemoryData, createMemory, deleteMemory, getDataSummary, isTauri, searchMemories, updateMemory } from "../lib/tauri";
 
 function errorMessage(reason: unknown, fallback: string) {
   if (typeof reason === "string") return reason;
@@ -17,7 +17,18 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
   const [editing, setEditing] = useState<{ id: string; content: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [summary, setSummary] = useState<DataSummary | null>(null);
+  const [confirming, setConfirming] = useState<"conversation" | "memories" | null>(null);
   const requestSequence = useRef(0);
+
+  const loadSummary = async () => {
+    if (!isTauri()) return;
+    try {
+      setSummary(await getDataSummary());
+    } catch (reason) {
+      setError(errorMessage(reason, "读取本地数据摘要失败。"));
+    }
+  };
 
   const refresh = async (search = query) => {
     if (!isTauri()) return;
@@ -35,6 +46,10 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
     return () => window.clearTimeout(timer);
   }, [query]);
 
+  useEffect(() => {
+    void loadSummary();
+  }, []);
+
   const create = async (event: FormEvent) => {
     event.preventDefault();
     const content = draft.trim();
@@ -45,6 +60,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
       await createMemory(content);
       setDraft("");
       await refresh("");
+      await loadSummary();
       setQuery("");
     } catch (reason) {
       setError(errorMessage(reason, "保存记忆失败。"));
@@ -75,8 +91,29 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
     try {
       await deleteMemory(memory);
       await refresh();
+      await loadSummary();
     } catch (reason) {
       setError(errorMessage(reason, "删除记忆失败。"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearData = async (scope: "conversation" | "memories") => {
+    if (busy || !isTauri()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const nextSummary = scope === "conversation" ? await clearConversationData() : await clearMemoryData();
+      setSummary(nextSummary);
+      setConfirming(null);
+      if (scope === "memories") {
+        setEditing(null);
+        await refresh("");
+        setQuery("");
+      }
+    } catch (reason) {
+      setError(errorMessage(reason, scope === "conversation" ? "清空聊天记录失败。" : "清空长期记忆失败。"));
     } finally {
       setBusy(false);
     }
@@ -130,6 +167,32 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
             </article>
           ))}
         </div>
+
+        <section className="data-management" aria-label="本地数据清理">
+          <div>
+            <h3>本地数据</h3>
+            <p>聊天 {summary?.message_count ?? "—"} 条 · 长期记忆 {summary?.memory_count ?? "—"} 条 · 待确认候选 {summary?.memory_candidate_count ?? "—"} 条</p>
+          </div>
+          <div className="data-actions">
+            {confirming === "conversation" ? (
+              <span className="confirm-actions">
+                <button type="button" onClick={() => setConfirming(null)}>取消</button>
+                <button type="button" className="danger" disabled={busy} onClick={() => void clearData("conversation")}>确认清空聊天</button>
+              </span>
+            ) : (
+              <button type="button" disabled={busy || !isTauri() || !summary || summary.message_count === 0} onClick={() => setConfirming("conversation")}>清空聊天记录</button>
+            )}
+            {confirming === "memories" ? (
+              <span className="confirm-actions">
+                <button type="button" onClick={() => setConfirming(null)}>取消</button>
+                <button type="button" className="danger" disabled={busy} onClick={() => void clearData("memories")}>确认清空记忆</button>
+              </span>
+            ) : (
+              <button type="button" className="danger" disabled={busy || !isTauri() || !summary || (summary.memory_count === 0 && summary.memory_candidate_count === 0)} onClick={() => setConfirming("memories")}>清空全部记忆</button>
+            )}
+          </div>
+          <p className="data-warning">两项操作相互独立，均保留 Provider、角色模型和桌宠设置；确认后不可撤销。</p>
+        </section>
       </section>
     </div>
   );

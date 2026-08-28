@@ -44,6 +44,12 @@ export interface MemoryItem {
   updated_at_ms: number;
 }
 
+export interface DataSummary {
+  message_count: number;
+  memory_count: number;
+  memory_candidate_count: number;
+}
+
 export interface VoicePermissions {
   microphone: "not_determined" | "denied" | "restricted" | "authorized";
   speech_recognition: "not_determined" | "denied" | "restricted" | "authorized";

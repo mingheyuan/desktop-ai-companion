@@ -5,10 +5,11 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     contracts::{
-        AppError, AppSnapshot, CancelTurnRequest, CharacterSettings, CreateMemoryRequest,
-        DeleteMemoryRequest, MemoryItem, PetSettings, ProviderSettings, SearchMemoriesRequest,
-        SetListeningRequest, SubmitTextRequest, UpdateMemoryRequest, UpdatePetSettingsRequest,
-        UpdateProviderRequest, UpdateVoiceSettingsRequest, VoiceRequest, VoiceSettings,
+        ActionRequest, AppError, AppSnapshot, CancelTurnRequest, CharacterSettings,
+        CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryItem, PetSettings,
+        ProviderSettings, SearchMemoriesRequest, SetListeningRequest, SubmitTextRequest,
+        UpdateMemoryRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
+        UpdateVoiceSettingsRequest, VoiceSettings,
     },
     core::AppCore,
     desktop,
@@ -181,6 +182,34 @@ pub fn memory_delete(
     state.0.delete_memory(&request.id, request.expected_version)
 }
 
+#[tauri::command]
+pub fn data_get_summary(
+    state: State<'_, CoreState>,
+    request: ActionRequest,
+) -> Result<DataSummary, AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.data_summary()
+}
+
+#[tauri::command]
+pub async fn data_clear_conversation(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: ActionRequest,
+) -> Result<DataSummary, AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.clear_conversation_history(&app).await
+}
+
+#[tauri::command]
+pub fn data_clear_memories(
+    state: State<'_, CoreState>,
+    request: ActionRequest,
+) -> Result<DataSummary, AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.clear_all_memories()
+}
+
 fn validate_request_id(request_id: &str) -> Result<(), AppError> {
     if request_id.trim().is_empty() {
         return Err(AppError::new(
@@ -196,7 +225,7 @@ fn validate_request_id(request_id: &str) -> Result<(), AppError> {
 pub async fn voice_request_permissions(
     app: AppHandle,
     state: State<'_, CoreState>,
-    request: VoiceRequest,
+    request: ActionRequest,
 ) -> Result<(), AppError> {
     validate_request_id(&request.request_id)?;
     state.0.request_voice_permissions(&app).await
@@ -216,7 +245,7 @@ pub async fn voice_set_listening_mode(
 pub async fn voice_ptt_start(
     app: AppHandle,
     state: State<'_, CoreState>,
-    request: VoiceRequest,
+    request: ActionRequest,
 ) -> Result<(), AppError> {
     validate_request_id(&request.request_id)?;
     state.0.start_push_to_talk(&app).await
@@ -226,7 +255,7 @@ pub async fn voice_ptt_start(
 pub async fn voice_ptt_finish(
     app: AppHandle,
     state: State<'_, CoreState>,
-    request: VoiceRequest,
+    request: ActionRequest,
 ) -> Result<(), AppError> {
     validate_request_id(&request.request_id)?;
     state.0.finish_push_to_talk(&app).await
@@ -236,7 +265,7 @@ pub async fn voice_ptt_finish(
 pub async fn playback_stop(
     app: AppHandle,
     state: State<'_, CoreState>,
-    request: VoiceRequest,
+    request: ActionRequest,
 ) -> Result<(), AppError> {
     validate_request_id(&request.request_id)?;
     state.0.stop_playback(&app).await

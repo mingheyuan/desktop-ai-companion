@@ -5,8 +5,8 @@ use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::contracts::{
-    CharacterSettings, ChatMessage, MemoryItem, MessageRole, MessageStatus, PetSettings,
-    ProviderSettings, VoiceSettings,
+    CharacterSettings, ChatMessage, DataSummary, MemoryItem, MessageRole, MessageStatus,
+    PetSettings, ProviderSettings, VoiceSettings,
 };
 
 pub struct Storage {
@@ -721,6 +721,53 @@ impl Storage {
         }
         transaction.commit()
     }
+
+    pub fn data_summary(&self, conversation_id: &str) -> Result<DataSummary, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        Ok(DataSummary {
+            message_count: connection.query_row(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id=?1",
+                [conversation_id],
+                |row| row.get(0),
+            )?,
+            memory_count: connection
+                .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))?,
+            memory_candidate_count: connection.query_row(
+                "SELECT COUNT(*) FROM memory_candidates",
+                [],
+                |row| row.get(0),
+            )?,
+        })
+    }
+
+    pub fn clear_conversation_history(
+        &self,
+        conversation_id: &str,
+        now_ms: i64,
+    ) -> Result<(), rusqlite::Error> {
+        let mut connection = self.connection.lock().expect("storage mutex poisoned");
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM turns WHERE conversation_id=?1",
+            [conversation_id],
+        )?;
+        transaction.execute(
+            "UPDATE conversations SET updated_at_ms=?1 WHERE id=?2",
+            params![now_ms, conversation_id],
+        )?;
+        transaction.commit()
+    }
+
+    pub fn clear_all_memories(&self) -> Result<(), rusqlite::Error> {
+        let mut connection = self.connection.lock().expect("storage mutex poisoned");
+        let transaction = connection.transaction()?;
+        transaction.execute("DELETE FROM memories", [])?;
+        transaction.execute("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')", [])?;
+        transaction.execute("DELETE FROM memory_candidates", [])?;
+        transaction.execute("DELETE FROM relationship_state", [])?;
+        transaction.execute("DELETE FROM memory_audit", [])?;
+        transaction.commit()
+    }
 }
 
 fn map_memory_row(row: &rusqlite::Row<'_>) -> Result<MemoryItem, rusqlite::Error> {
@@ -874,5 +921,71 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM memory_audit", [], |row| row.get(0))
             .unwrap();
         assert_eq!(audit_count, 3);
+    }
+
+    #[test]
+    fn data_cleanup_keeps_scopes_independent_and_rebuilds_fts() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(1).unwrap();
+        storage
+            .begin_turn(&conversation, "turn-cleanup", 1, "text", "记住蓝色", 2)
+            .unwrap();
+        storage
+            .complete_turn(&conversation, "turn-cleanup", "已记录。", 3)
+            .unwrap();
+        storage.create_user_memory("老师喜欢蓝色", 4).unwrap();
+        {
+            let connection = storage.connection.lock().unwrap();
+            connection
+                .execute(
+                    "INSERT INTO memory_candidates(id, source_turn_id, scope, kind, content, normalized_key, confidence, sensitivity, status, created_at_ms)
+                     VALUES('candidate-cleanup', 'turn-cleanup', 'user', 'preference', '蓝色', '蓝色', 1, 'normal', 'pending', 4)",
+                    [],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            storage.data_summary(&conversation).unwrap(),
+            DataSummary {
+                message_count: 2,
+                memory_count: 1,
+                memory_candidate_count: 1,
+            }
+        );
+        storage
+            .clear_conversation_history(&conversation, 5)
+            .unwrap();
+        assert_eq!(
+            storage.data_summary(&conversation).unwrap().message_count,
+            0
+        );
+        assert_eq!(storage.data_summary(&conversation).unwrap().memory_count, 1);
+        assert_eq!(
+            storage
+                .data_summary(&conversation)
+                .unwrap()
+                .memory_candidate_count,
+            0
+        );
+        assert_eq!(
+            storage
+                .search_memories("喜欢蓝色", "aris", 8)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        storage.clear_all_memories().unwrap();
+        assert_eq!(storage.data_summary(&conversation).unwrap().memory_count, 0);
+        assert!(storage
+            .search_memories("喜欢蓝色", "aris", 8)
+            .unwrap()
+            .is_empty());
+        let connection = storage.connection.lock().unwrap();
+        let audit_count: u64 = connection
+            .query_row("SELECT COUNT(*) FROM memory_audit", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(audit_count, 0);
     }
 }

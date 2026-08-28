@@ -284,7 +284,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 ## 当前状态
 
-已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。
+已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。记忆面板还提供本地数据摘要与二次确认入口，可独立清空聊天记录或全部长期记忆，不影响 Provider、角色模型和桌宠设置。
 
 语音首个闭环已完成代码接入：Swift `AudioHost.app`、UDS 安全握手、权限状态、PTT、Apple Speech partial/final、设备端“爱丽丝”持续唤醒、`AVSpeechSynthesizer` 回复、停止朗读和新输入打断。Rust、前端、Swift 编译均已通过，并有一个不请求权限的真实 `.app` 握手测试。尚未完成的 MVP 风险项是稳定本地签名后的首次实机授权、长时间监听/睡眠恢复、Sherpa KWS/VAD 或当前 fallback 的误唤醒验收、角色真实动作/口型，以及完整打包回归。
 

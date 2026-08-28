@@ -152,7 +152,12 @@ private final class VoiceController {
     }
 
     func finalize() { queue.async { self.finishRecognition() } }
-    func cancel() { queue.async { self.stop(cancelled: true) } }
+    func cancel() {
+        queue.async {
+            self.stop(cancelled: true)
+            self.restartWakeIfNeeded()
+        }
+    }
 
     func pauseForPlayback() {
         queue.async {

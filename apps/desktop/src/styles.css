@@ -99,7 +99,7 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .settings-dialog footer button { border: 0; border-radius: 10px; padding: 9px 17px; background: #3979dd; cursor: pointer; }
 .settings-dialog footer button.secondary { background: #283858; }
 
-.memory-dialog { display: grid; grid-template-rows: auto auto auto auto auto minmax(0, 1fr); width: min(680px, 100%); max-height: min(760px, calc(100vh - 48px)); border: 1px solid rgba(127, 165, 239, .25); border-radius: 20px; padding: 22px; background: linear-gradient(155deg, #172342, #0e152c); box-shadow: 0 24px 90px rgba(0, 0, 0, .48); }
+.memory-dialog { display: grid; grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto; width: min(680px, 100%); max-height: min(760px, calc(100vh - 48px)); border: 1px solid rgba(127, 165, 239, .25); border-radius: 20px; padding: 22px; background: linear-gradient(155deg, #172342, #0e152c); box-shadow: 0 24px 90px rgba(0, 0, 0, .48); }
 .memory-dialog > header { display: flex; align-items: start; justify-content: space-between; }
 .memory-dialog h2 { margin: 0; }
 .memory-privacy { margin: 14px 0; color: #7f92bc; font-size: 11px; line-height: 1.5; }
@@ -116,6 +116,14 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .memory-card footer div { display: flex; gap: 7px; }
 .memory-card button { padding: 6px 10px; background: #283858; font-size: 11px; }
 .memory-card button.danger { color: #ff9db1; background: rgba(119, 28, 55, .35); }
+.data-management { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px 14px; margin-top: 12px; border-top: 1px solid rgba(127, 164, 238, .14); padding-top: 12px; }
+.data-management h3 { margin: 0 0 3px; color: #dce8ff; font-size: 13px; }
+.data-management p { margin: 0; color: #7185b2; font-size: 10px; line-height: 1.45; }
+.data-actions, .confirm-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.data-actions button { border: 0; border-radius: 8px; padding: 6px 9px; color: #dbe7ff; background: #283858; cursor: pointer; font-size: 10px; }
+.data-actions button.danger { color: #ff9db1; background: rgba(119, 28, 55, .35); }
+.data-actions button:disabled { cursor: default; opacity: .45; }
+.data-management .data-warning { grid-column: 1 / -1; color: #7f6684; }
 
 .pet-shell { position: relative; width: 100vw; height: 100vh; background: transparent; user-select: none; }
 .pet-drag-region { position: absolute; inset: 0; z-index: 0; border: 0; background: transparent; }

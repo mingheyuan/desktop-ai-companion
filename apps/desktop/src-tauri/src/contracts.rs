@@ -157,6 +157,13 @@ pub struct MemoryItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DataSummary {
+    pub message_count: u64,
+    pub memory_count: u64,
+    pub memory_candidate_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VoicePermissions {
     pub microphone: String,
     pub speech_recognition: String,
@@ -339,7 +346,7 @@ fn default_memory_limit() -> usize {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct VoiceRequest {
+pub struct ActionRequest {
     pub request_id: String,
 }
 
