@@ -300,7 +300,7 @@ cargo test --workspace
 pnpm tauri dev
 ```
 
-`setup-local-codesigning.sh` 会在当前用户钥匙串创建仅用于本机开发的自签名代码签名身份；执行前请自行确认。未执行时构建脚本会使用 ad-hoc 签名，功能可编译，但 macOS TCC 权限身份可能随重建变化。
+`setup-local-codesigning.sh` 会在当前用户默认钥匙串创建仅用于本机开发的自签名代码签名身份并加入代码签名信任；执行前请自行确认。未执行时构建脚本会使用 ad-hoc 签名，功能可编译，但 macOS TCC 权限身份可能随重建变化。如需撤销，可运行 `./scripts/remove-local-codesigning.sh`，它只按固定 common name 删除该 identity 及其用户信任设置。
 
 构建包含嵌套 AudioHost 的 macOS app bundle：
 
