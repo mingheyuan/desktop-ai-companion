@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppSnapshot, EventEnvelope, TextDeltaPayload, TurnEndedPayload } from "../contracts";
+import type { AppSnapshot, EventEnvelope, ProviderSettings, TextDeltaPayload, TurnEndedPayload } from "../contracts";
 
 export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
@@ -22,6 +22,21 @@ export async function cancelTurn(turnId: string): Promise<void> {
 
 export async function openPanel(): Promise<void> {
   await invoke("pet_open_panel");
+}
+
+export interface UpdateProviderInput {
+  provider: ProviderSettings["provider"];
+  endpoint: string;
+  model: string;
+  api_key?: string;
+  clear_api_key: boolean;
+  expected_revision: number;
+}
+
+export async function updateProvider(input: UpdateProviderInput): Promise<ProviderSettings> {
+  return invoke<ProviderSettings>("settings_update_provider", {
+    request: { request_id: crypto.randomUUID(), ...input },
+  });
 }
 
 export interface CoreEventHandlers {

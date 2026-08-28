@@ -71,10 +71,12 @@ pub async fn settings_update_provider(
                 provider: request.provider,
                 endpoint: request.endpoint,
                 model: request.model,
-                has_api_key: std::env::var("DESKTOP_AI_LLM_API_KEY").is_ok(),
+                has_api_key: false,
                 revision: request.expected_revision,
             },
             request.expected_revision,
+            request.api_key,
+            request.clear_api_key,
         )
         .await
 }

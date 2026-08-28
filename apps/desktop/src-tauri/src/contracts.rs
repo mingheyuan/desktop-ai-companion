@@ -202,5 +202,8 @@ pub struct UpdateProviderRequest {
     pub provider: String,
     pub endpoint: String,
     pub model: String,
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub clear_api_key: bool,
     pub expected_revision: u64,
 }

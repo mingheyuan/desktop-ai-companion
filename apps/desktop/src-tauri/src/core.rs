@@ -3,7 +3,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use futures_util::StreamExt;
@@ -21,6 +21,7 @@ use crate::{
         TurnState,
     },
     provider::{create_provider, LlmEvent, LlmRequest},
+    secret::SecretStore,
     storage::Storage,
 };
 
@@ -63,6 +64,7 @@ pub struct AppCore {
     conversation_id: String,
     runtime: RwLock<RuntimeState>,
     provider: RwLock<ProviderSettings>,
+    secrets: SecretStore,
     active_turn: Mutex<Option<ActiveTurn>>,
     next_generation: AtomicU64,
     event_sequence: AtomicU64,
@@ -75,12 +77,15 @@ impl AppCore {
             .recover_interrupted_turns(now)
             .map_err(storage_error)?;
         let conversation_id = storage.ensure_conversation(now).map_err(storage_error)?;
-        let provider = storage.load_provider_settings().map_err(storage_error)?;
+        let secrets = SecretStore;
+        let mut provider = storage.load_provider_settings().map_err(storage_error)?;
+        provider.has_api_key = secrets.resolve_llm_api_key()?.is_some();
         Ok(Arc::new(Self {
             storage,
             conversation_id,
             runtime: RwLock::new(RuntimeState::default()),
             provider: RwLock::new(provider),
+            secrets,
             active_turn: Mutex::new(None),
             next_generation: AtomicU64::new(0),
             event_sequence: AtomicU64::new(0),
@@ -187,7 +192,15 @@ impl AppCore {
             }
         };
         let settings = self.provider.read().await.clone();
-        let provider = match create_provider(&settings) {
+        let api_key = match self.resolve_llm_api_key().await {
+            Ok(value) => value,
+            Err(error) => {
+                self.fail_turn(&app, &turn_id, generation, "keychain_error", error, "")
+                    .await;
+                return;
+            }
+        };
+        let provider = match create_provider(&settings, api_key) {
             Ok(provider) => provider,
             Err(error) => {
                 self.fail_turn(
@@ -202,24 +215,38 @@ impl AppCore {
                 return;
             }
         };
-        let mut stream = match provider
-            .start(
+        let mut stream = match tokio::time::timeout(
+            Duration::from_secs(15),
+            provider.start(
                 LlmRequest {
                     user_text: text,
                     history,
                 },
                 cancel.clone(),
-            )
-            .await
+            ),
+        )
+        .await
         {
-            Ok(stream) => stream,
-            Err(error) => {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(error)) => {
                 self.fail_turn(
                     &app,
                     &turn_id,
                     generation,
                     "provider_unavailable",
                     error,
+                    "",
+                )
+                .await;
+                return;
+            }
+            Err(_) => {
+                self.fail_turn(
+                    &app,
+                    &turn_id,
+                    generation,
+                    "timeout",
+                    AppError::new("timeout", "LLM 在 15 秒内未建立连接。", true),
                     "",
                 )
                 .await;
@@ -250,24 +277,44 @@ impl AppCore {
         let _ = self.emit_snapshot(&app).await;
 
         let mut response = String::new();
-        while let Some(event) = stream.next().await {
-            if !self.is_current(&turn_id, generation).await {
-                return;
-            }
-            match event {
-                Ok(LlmEvent::TextDelta(delta)) => {
-                    response.push_str(&delta);
-                    let _ = self
-                        .emit(
-                            &app,
-                            "turn:text-delta",
-                            Some(turn_id.clone()),
-                            Some(generation),
-                            TextDeltaPayload { text: delta },
-                        )
-                        .await;
+        let mut pending_delta = String::new();
+        let mut ticker = tokio::time::interval(Duration::from_millis(30));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        ticker.tick().await;
+        let idle_timeout = tokio::time::sleep(Duration::from_secs(15));
+        tokio::pin!(idle_timeout);
+
+        loop {
+            tokio::select! {
+                _ = ticker.tick(), if !pending_delta.is_empty() => {
+                    self.emit_pending_delta(&app, &turn_id, generation, &mut pending_delta).await;
                 }
-                Ok(LlmEvent::Completed) => {
+                _ = &mut idle_timeout => {
+                    self.fail_turn(
+                        &app,
+                        &turn_id,
+                        generation,
+                        "timeout",
+                        AppError::new("timeout", "LLM 流长时间没有返回数据。", true),
+                        &response,
+                    ).await;
+                    return;
+                }
+                event = stream.next() => {
+                    if !self.is_current(&turn_id, generation).await {
+                        return;
+                    }
+                    idle_timeout.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(30));
+                    match event {
+                Some(Ok(LlmEvent::TextDelta(delta))) => {
+                    response.push_str(&delta);
+                    pending_delta.push_str(&delta);
+                    if pending_delta.chars().count() >= 24 {
+                        self.emit_pending_delta(&app, &turn_id, generation, &mut pending_delta).await;
+                    }
+                }
+                Some(Ok(LlmEvent::Completed)) => {
+                    self.emit_pending_delta(&app, &turn_id, generation, &mut pending_delta).await;
                     if response.trim().is_empty() {
                         self.fail_turn(
                             &app,
@@ -284,8 +331,8 @@ impl AppCore {
                         .await;
                     return;
                 }
-                Err(error) if error.code == "cancelled" => return,
-                Err(error) => {
+                Some(Err(error)) if error.code == "cancelled" => return,
+                Some(Err(error)) => {
                     self.fail_turn(
                         &app,
                         &turn_id,
@@ -297,17 +344,43 @@ impl AppCore {
                     .await;
                     return;
                 }
+                None => {
+                    self.fail_turn(
+                        &app,
+                        &turn_id,
+                        generation,
+                        "stream_ended",
+                        AppError::new("provider_unavailable", "LLM 流在完成事件前结束。", true),
+                        &response,
+                    ).await;
+                    return;
+                }
+                    }
+                }
             }
         }
-        self.fail_turn(
-            &app,
-            &turn_id,
-            generation,
-            "stream_ended",
-            AppError::new("provider_unavailable", "LLM 流在完成事件前结束。", true),
-            &response,
-        )
-        .await;
+    }
+
+    async fn emit_pending_delta(
+        &self,
+        app: &AppHandle,
+        turn_id: &str,
+        generation: u64,
+        pending: &mut String,
+    ) {
+        if pending.is_empty() {
+            return;
+        }
+        let text = std::mem::take(pending);
+        let _ = self
+            .emit(
+                app,
+                "turn:text-delta",
+                Some(turn_id.to_owned()),
+                Some(generation),
+                TextDeltaPayload { text },
+            )
+            .await;
     }
 
     async fn complete_turn(&self, app: &AppHandle, turn_id: &str, generation: u64, response: &str) {
@@ -461,6 +534,8 @@ impl AppCore {
         &self,
         value: ProviderSettings,
         expected_revision: u64,
+        api_key: Option<String>,
+        clear_api_key: bool,
     ) -> Result<ProviderSettings, AppError> {
         let mut provider = self.provider.write().await;
         if provider.revision != expected_revision {
@@ -470,22 +545,64 @@ impl AppCore {
                 true,
             ));
         }
-        if !matches!(value.provider.as_str(), "mock" | "openai_compatible") {
-            return Err(AppError::new(
-                "invalid_request",
-                "不支持的 Provider。",
-                false,
-            ));
+        validate_provider_settings(&value)?;
+
+        let previous_secret = self.get_stored_llm_api_key().await?;
+        if clear_api_key {
+            self.delete_llm_api_key().await?;
+        } else if let Some(secret) = api_key
+            .as_deref()
+            .filter(|secret| !secret.trim().is_empty())
+        {
+            self.set_llm_api_key(secret.to_owned()).await?;
         }
+        let has_api_key = self.resolve_llm_api_key().await?.is_some();
         let updated = ProviderSettings {
             revision: provider.revision + 1,
+            has_api_key,
             ..value
         };
-        self.storage
-            .save_provider_settings(&updated, now_ms())
-            .map_err(storage_error)?;
+        if let Err(error) = self.storage.save_provider_settings(&updated, now_ms()) {
+            match previous_secret {
+                Some(secret) => {
+                    let _ = self.set_llm_api_key(secret).await;
+                }
+                None => {
+                    let _ = self.delete_llm_api_key().await;
+                }
+            }
+            return Err(storage_error(error));
+        }
         *provider = updated.clone();
         Ok(updated)
+    }
+
+    async fn resolve_llm_api_key(&self) -> Result<Option<String>, AppError> {
+        let secrets = self.secrets.clone();
+        tokio::task::spawn_blocking(move || secrets.resolve_llm_api_key())
+            .await
+            .map_err(secret_task_error)?
+    }
+
+    async fn get_stored_llm_api_key(&self) -> Result<Option<String>, AppError> {
+        let secrets = self.secrets.clone();
+        tokio::task::spawn_blocking(move || secrets.get_stored_llm_api_key())
+            .await
+            .map_err(secret_task_error)?
+    }
+
+    async fn set_llm_api_key(&self, value: String) -> Result<(), AppError> {
+        let secrets = self.secrets.clone();
+        tokio::task::spawn_blocking(move || secrets.set_llm_api_key(&value))
+            .await
+            .map_err(secret_task_error)?
+    }
+
+    async fn delete_llm_api_key(&self) -> Result<(), AppError> {
+        let secrets = self.secrets.clone();
+        tokio::task::spawn_blocking(move || secrets.delete_llm_api_key())
+            .await
+            .map_err(secret_task_error)?
     }
 
     async fn is_current(&self, turn_id: &str, generation: u64) -> bool {
@@ -568,4 +685,71 @@ fn now_ms() -> i64 {
 
 fn storage_error(error: rusqlite::Error) -> AppError {
     AppError::new("storage_error", format!("本地数据库错误：{error}"), false)
+}
+
+fn secret_task_error(error: tokio::task::JoinError) -> AppError {
+    AppError::new(
+        "keychain_error",
+        format!("Keychain 后台任务失败：{error}"),
+        true,
+    )
+}
+
+fn validate_provider_settings(value: &ProviderSettings) -> Result<(), AppError> {
+    if !matches!(value.provider.as_str(), "mock" | "openai_compatible") {
+        return Err(AppError::new(
+            "invalid_request",
+            "不支持的 Provider。",
+            false,
+        ));
+    }
+    if value.provider == "openai_compatible" {
+        let endpoint = reqwest::Url::parse(&value.endpoint).map_err(|_| {
+            AppError::new("invalid_request", "Provider endpoint 不是有效 URL。", false)
+        })?;
+        if !matches!(endpoint.scheme(), "http" | "https") {
+            return Err(AppError::new(
+                "invalid_request",
+                "Provider endpoint 只允许 HTTP 或 HTTPS。",
+                false,
+            ));
+        }
+        if value.model.trim().is_empty() {
+            return Err(AppError::new(
+                "invalid_request",
+                "模型名称不能为空。",
+                false,
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_openai_compatible_settings() {
+        let valid = ProviderSettings {
+            provider: "openai_compatible".into(),
+            endpoint: "https://api.example.com/v1".into(),
+            model: "model".into(),
+            has_api_key: false,
+            revision: 0,
+        };
+        assert!(validate_provider_settings(&valid).is_ok());
+
+        let invalid_scheme = ProviderSettings {
+            endpoint: "file:///tmp/provider".into(),
+            ..valid.clone()
+        };
+        assert!(validate_provider_settings(&invalid_scheme).is_err());
+
+        let empty_model = ProviderSettings {
+            model: " ".into(),
+            ..valid
+        };
+        assert!(validate_provider_settings(&empty_model).is_err());
+    }
 }

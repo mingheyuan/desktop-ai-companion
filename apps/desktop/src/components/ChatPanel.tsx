@@ -1,11 +1,13 @@
 import { FormEvent, useState } from "react";
 import { cancelTurn, submitText } from "../lib/tauri";
 import { useAppStore } from "../stores/app";
+import { ProviderSettingsDialog } from "./ProviderSettingsDialog";
 
 export function ChatPanel() {
-  const { snapshot, streamingText, booting } = useAppStore();
+  const { snapshot, streamingText, booting, setSnapshot } = useAppStore();
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -27,7 +29,11 @@ export function ChatPanel() {
           <p className="eyebrow">DESKTOP AI COMPANION</p>
           <h1>爱丽丝</h1>
         </div>
-        <div className={`status-pill state-${snapshot.avatar_state}`}>{snapshot.avatar_state}</div>
+        <div className="header-actions">
+          <span className="provider-badge">{snapshot.provider.provider === "mock" ? "MOCK" : snapshot.provider.model}</span>
+          <div className={`status-pill state-${snapshot.avatar_state}`}>{snapshot.avatar_state}</div>
+          <button className="icon-button" type="button" onClick={() => setSettingsOpen(true)} aria-label="打开设置">⚙</button>
+        </div>
       </header>
 
       <section className="conversation" aria-live="polite">
@@ -74,6 +80,13 @@ export function ChatPanel() {
           <button type="submit" disabled={!draft.trim() || submitting}>发送</button>
         </div>
       </form>
+      {settingsOpen && (
+        <ProviderSettingsDialog
+          initial={snapshot.provider}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={(provider) => setSnapshot({ ...snapshot, provider, revision: snapshot.revision + 1 })}
+        />
+      )}
     </main>
   );
 }

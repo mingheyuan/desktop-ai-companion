@@ -2,6 +2,7 @@ mod commands;
 mod contracts;
 mod core;
 mod provider;
+mod secret;
 mod storage;
 
 use std::fs;

@@ -282,7 +282,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 ## 当前状态
 
-项目已完成首个可运行实现切片：React/Tauri 双窗口、three-vrm 运行时适配、Rust 状态核心、流式 LLM Provider、取消代次、SQLite v1 schema 与会话恢复均已通过编译或单元测试。默认使用不联网的 mock Provider；设置界面、Keychain、原生 AudioHost、语音和记忆闭环仍待继续实现。
+项目已完成首个可运行实现切片：React/Tauri 双窗口、three-vrm 运行时适配、Rust 状态核心、流式 LLM Provider、取消代次、SQLite v1 schema、会话恢复和 Provider 设置均已通过编译或单元测试。API key 通过应用设置写入 macOS Keychain，不进入 SQLite。原生 AudioHost、语音和记忆闭环仍待继续实现。
 
 下一步继续实现 Provider 设置与 Keychain、VRM 资源导入和桌宠控制，再接入 AudioHost、PTT/ASR/TTS、唤醒词和记忆闭环。
 
@@ -295,7 +295,7 @@ cargo test --workspace
 pnpm tauri dev
 ```
 
-应用默认使用 `mock` Provider，因此无需 API key 即可验证文字流式对话。切换 OpenAI-compatible Provider 的设置界面尚在实现；当前开发调试可临时使用环境变量 `DESKTOP_AI_LLM_API_KEY`。
+应用默认使用 `mock` Provider，因此无需 API key 即可验证文字流式对话。点击聊天面板右上角设置可切换 OpenAI-compatible endpoint/model，并将 API key 保存到 macOS Keychain；开发期也可使用环境变量 `DESKTOP_AI_LLM_API_KEY` 作为回退。
 
 ## 目录约定
 

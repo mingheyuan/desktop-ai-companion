@@ -30,19 +30,31 @@ pub trait LlmProvider: Send + Sync {
     ) -> Result<LlmStream, AppError>;
 }
 
-pub fn create_provider(settings: &ProviderSettings) -> Result<Box<dyn LlmProvider>, AppError> {
+pub fn create_provider(
+    settings: &ProviderSettings,
+    api_key: Option<String>,
+) -> Result<Box<dyn LlmProvider>, AppError> {
     match settings.provider.as_str() {
         "mock" => Ok(Box::new(MockProvider)),
         "openai_compatible" => {
-            let api_key = std::env::var("DESKTOP_AI_LLM_API_KEY").map_err(|_| {
+            let api_key = api_key.ok_or_else(|| {
                 AppError::new(
                     "authentication_failed",
-                    "尚未配置 DESKTOP_AI_LLM_API_KEY。",
+                    "尚未配置 LLM API key。请在设置中保存到 macOS Keychain。",
                     false,
                 )
             })?;
             Ok(Box::new(OpenAiCompatibleProvider {
-                client: reqwest::Client::new(),
+                client: reqwest::Client::builder()
+                    .connect_timeout(std::time::Duration::from_secs(15))
+                    .build()
+                    .map_err(|error| {
+                        AppError::new(
+                            "internal",
+                            format!("无法创建 LLM HTTP client：{error}"),
+                            false,
+                        )
+                    })?,
                 endpoint: settings.endpoint.clone(),
                 model: settings.model.clone(),
                 api_key,
