@@ -1,6 +1,6 @@
 # MVP 实现规格索引
 
-> 状态：v0.4 实现基线，进入编码前仍需完成本文末尾列出的技术 Spike。
+> 状态：v0.4 实现基线已进入编码。文本、桌宠、显式记忆和首个 AudioHost 语音切片已落地；本文末尾的长期运行与实机 Spike 仍是 MVP 完成门槛。
 
 这组文档把 `docs/architecture.md` 中的模块边界落实为状态、协议、数据结构和时序。实现发生冲突时，约束优先级为：
 
@@ -12,6 +12,7 @@
 
 ## 文档导航
 
+- [当前实现状态](status.md)：当前代码事实、已验证闭环、协议子集和目标差距；继续编码前优先查看。
 - [状态机](state-machines.md)：监听、输入、单轮对话、生成和播放状态，以及取消规则。
 - [IPC 与 AudioHost 协议](ipc-protocol.md)：Tauri command/event、UDS 控制帧、PCM 二进制帧和版本协商。
 - [SQLite 数据模型](database.md)：会话、消息、记忆候选、长期记忆和迁移规则。
@@ -40,7 +41,7 @@ desktop-ai-companion/
 │               ├── windowing/      # 桌宠窗口、托盘、快捷键
 │               └── protocol/       # IPC 类型与事件 envelope
 ├── native/
-│   └── AudioHost/                  # Swift app bundle，固定 TCC 身份
+│   └── audio-host/                 # Swift app bundle，固定 TCC 身份
 ├── contracts/
 │   ├── audio-host/v1/              # Rust/Swift 共用 JSON Schema 与 fixtures
 │   └── fixtures/                   # 协议兼容测试样本
@@ -67,6 +68,8 @@ Rust 是业务状态的唯一写入者。React 只渲染快照和发送意图；
 4. **持续监听**：KWS/VAD、后台 AudioHost、安静时段和监听可视反馈。
 5. **记忆闭环**：检索、候选、确认/拒绝、更新/删除和上下文注入。
 6. **桌宠体验**：VRM 动作、透明窗口、拖拽、点击穿透、托盘和快捷键。
+
+当前落地映射：1、2 已完成首个闭环；3 已完成权限、UDS、PTT、Apple Speech、系统 TTS 和显式打断；4 暂用 Apple Speech 设备端短语检测 fallback，Rust PCM KWS/VAD 尚未接入；5 已完成用户显式 CRUD、FTS 检索和 opt-in 上下文注入，自动候选仍未实现；6 已完成窗口/导入/控制基础，真实动作和口型仍未完成。详见 [AudioHost 当前可运行切片](audio-host.md#0-当前可运行切片)。
 
 后续工具调用、屏幕理解和闹钟能力继续通过独立 Tool Runtime 接入，不进入本轮核心 MVP 的完成条件。
 

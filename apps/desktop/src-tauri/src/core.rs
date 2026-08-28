@@ -1,4 +1,6 @@
 use std::{
+    future::Future,
+    pin::Pin,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -8,6 +10,7 @@ use std::{
 
 use futures_util::StreamExt;
 use serde::Serialize;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::{Mutex, RwLock};
@@ -15,10 +18,12 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
+    audio::{self, AudioWriter},
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, EventEnvelope,
         GenerationState, InputState, ListeningMode, MemoryItem, PetSettings, PlaybackState,
-        ProviderSettings, TextDeltaPayload, TurnEndedPayload, TurnState,
+        ProviderSettings, TextDeltaPayload, TurnEndedPayload, TurnState, VoicePermissions,
+        VoiceSettings,
     },
     desktop::apply_pet_window_settings,
     provider::{create_provider, LlmEvent, LlmRequest},
@@ -36,6 +41,11 @@ struct RuntimeState {
     active_turn_id: Option<String>,
     generation: u64,
     last_error: Option<AppError>,
+    audio_host_state: String,
+    voice_permissions: VoicePermissions,
+    asr_partial: String,
+    active_voice_source: Option<String>,
+    active_voice_capture_id: Option<String>,
 }
 
 impl Default for RuntimeState {
@@ -50,6 +60,11 @@ impl Default for RuntimeState {
             active_turn_id: None,
             generation: 0,
             last_error: None,
+            audio_host_state: "stopped".into(),
+            voice_permissions: VoicePermissions::default(),
+            asr_partial: String::new(),
+            active_voice_source: None,
+            active_voice_capture_id: None,
         }
     }
 }
@@ -60,6 +75,12 @@ struct ActiveTurn {
     cancel: CancellationToken,
 }
 
+struct VoiceFinal {
+    app: AppHandle,
+    text: String,
+    source: String,
+}
+
 pub struct AppCore {
     storage: Storage,
     conversation_id: String,
@@ -67,8 +88,15 @@ pub struct AppCore {
     provider: RwLock<ProviderSettings>,
     pet: RwLock<PetSettings>,
     character: RwLock<CharacterSettings>,
+    voice_settings: RwLock<VoiceSettings>,
     secrets: SecretStore,
     active_turn: Mutex<Option<ActiveTurn>>,
+    active_playback: Mutex<Option<(String, u64)>>,
+    audio_writer: Mutex<Option<AudioWriter>>,
+    audio_launch: Mutex<()>,
+    voice_command: Mutex<()>,
+    audio_generation: AtomicU64,
+    voice_final_tx: tokio::sync::mpsc::UnboundedSender<VoiceFinal>,
     next_generation: AtomicU64,
     event_sequence: AtomicU64,
 }
@@ -85,18 +113,39 @@ impl AppCore {
         provider.has_api_key = secrets.resolve_llm_api_key()?.is_some();
         let pet = storage.load_pet_settings().map_err(storage_error)?;
         let character = storage.load_character_settings().map_err(storage_error)?;
-        Ok(Arc::new(Self {
+        let voice_settings = storage.load_voice_settings().map_err(storage_error)?;
+        let (voice_final_tx, mut voice_final_rx) = tokio::sync::mpsc::unbounded_channel();
+        let core = Arc::new(Self {
             storage,
             conversation_id,
             runtime: RwLock::new(RuntimeState::default()),
             provider: RwLock::new(provider),
             pet: RwLock::new(pet),
             character: RwLock::new(character),
+            voice_settings: RwLock::new(voice_settings),
             secrets,
             active_turn: Mutex::new(None),
+            active_playback: Mutex::new(None),
+            audio_writer: Mutex::new(None),
+            audio_launch: Mutex::new(()),
+            voice_command: Mutex::new(()),
+            audio_generation: AtomicU64::new(0),
+            voice_final_tx,
             next_generation: AtomicU64::new(0),
             event_sequence: AtomicU64::new(0),
-        }))
+        });
+        let weak_core = Arc::downgrade(&core);
+        tauri::async_runtime::spawn(async move {
+            while let Some(final_input) = voice_final_rx.recv().await {
+                let Some(core) = weak_core.upgrade() else {
+                    break;
+                };
+                let _ = core
+                    .start_input_turn(final_input.app, final_input.text, &final_input.source)
+                    .await;
+            }
+        });
+        Ok(core)
     }
 
     pub async fn snapshot(&self) -> Result<AppSnapshot, AppError> {
@@ -104,6 +153,7 @@ impl AppCore {
         let provider = self.provider.read().await.clone();
         let pet = self.pet.read().await.clone();
         let character = self.character.read().await.clone();
+        let voice_settings = self.voice_settings.read().await.clone();
         let messages = self
             .storage
             .list_messages(&self.conversation_id, 200)
@@ -123,6 +173,10 @@ impl AppCore {
             provider,
             pet,
             character,
+            audio_host_state: runtime.audio_host_state.clone(),
+            voice_permissions: runtime.voice_permissions.clone(),
+            voice_settings,
+            asr_partial: runtime.asr_partial.clone(),
             last_error: runtime.last_error.clone(),
         })
     }
@@ -255,6 +309,15 @@ impl AppCore {
         app: AppHandle,
         text: String,
     ) -> Result<(), AppError> {
+        self.start_input_turn(app, text, "text").await
+    }
+
+    async fn start_input_turn(
+        self: &Arc<Self>,
+        app: AppHandle,
+        text: String,
+        input_source: &str,
+    ) -> Result<(), AppError> {
         let text = text.trim().to_owned();
         if text.is_empty() {
             return Err(AppError::new("invalid_request", "消息不能为空。", false));
@@ -267,11 +330,19 @@ impl AppCore {
             ));
         }
 
+        self.interrupt_playback().await;
         self.cancel_active(&app, "superseded").await?;
         let generation = self.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let turn_id = Uuid::now_v7().to_string();
         self.storage
-            .begin_text_turn(&self.conversation_id, &turn_id, generation, &text, now_ms())
+            .begin_turn(
+                &self.conversation_id,
+                &turn_id,
+                generation,
+                input_source,
+                &text,
+                now_ms(),
+            )
             .map_err(storage_error)?;
 
         let cancel = CancellationToken::new();
@@ -292,10 +363,11 @@ impl AppCore {
         self.emit_snapshot(&app).await?;
 
         let core = Arc::clone(self);
-        tauri::async_runtime::spawn(async move {
+        let task: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
             core.run_text_turn(app, turn_id, generation, text, cancel)
                 .await;
         });
+        tauri::async_runtime::spawn(task);
         Ok(())
     }
 
@@ -546,7 +618,13 @@ impl AppCore {
             .await;
     }
 
-    async fn complete_turn(&self, app: &AppHandle, turn_id: &str, generation: u64, response: &str) {
+    async fn complete_turn(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        turn_id: &str,
+        generation: u64,
+        response: &str,
+    ) {
         if !self.is_current(turn_id, generation).await {
             return;
         }
@@ -591,6 +669,8 @@ impl AppCore {
                     reason: None,
                 },
             )
+            .await;
+        self.speak_response(app, turn_id, generation, response)
             .await;
     }
 
@@ -784,6 +864,461 @@ impl AppCore {
             ));
         }
         Ok(())
+    }
+
+    pub async fn request_voice_permissions(
+        self: &Arc<Self>,
+        app: &AppHandle,
+    ) -> Result<(), AppError> {
+        let writer = self.ensure_audio_host(app).await?;
+        audio::send(&writer, json!({"type": "permissions.request"})).await
+    }
+
+    pub async fn set_listening(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        enabled: bool,
+    ) -> Result<(), AppError> {
+        if !enabled {
+            if let Some(writer) = self.audio_writer.lock().await.clone() {
+                audio::send(&writer, json!({"type": "listening.set", "enabled": false})).await?;
+            }
+            {
+                let mut runtime = self.runtime.write().await;
+                runtime.revision += 1;
+                runtime.listening_mode = ListeningMode::Disabled;
+                runtime.input_state = InputState::Stopped;
+                runtime.active_voice_capture_id = None;
+                runtime.active_voice_source = None;
+                runtime.asr_partial.clear();
+            }
+            return self.emit_snapshot(app).await;
+        }
+        let permissions = self.runtime.read().await.voice_permissions.clone();
+        if permissions.microphone != "authorized" || permissions.speech_recognition != "authorized"
+        {
+            return Err(AppError::new(
+                "permission_required",
+                "请先点击“授权语音”，完成麦克风和语音识别授权。",
+                true,
+            ));
+        }
+        let writer = self.ensure_audio_host(app).await?;
+        audio::send(&writer, json!({"type": "listening.set", "enabled": true})).await?;
+        {
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.listening_mode = ListeningMode::Armed;
+            runtime.input_state = InputState::WakeListening;
+            runtime.last_error = None;
+        }
+        self.emit_snapshot(app).await
+    }
+
+    pub async fn start_push_to_talk(self: &Arc<Self>, app: &AppHandle) -> Result<(), AppError> {
+        let _voice_guard = self.voice_command.lock().await;
+        let permissions = self.runtime.read().await.voice_permissions.clone();
+        if permissions.microphone != "authorized" || permissions.speech_recognition != "authorized"
+        {
+            return Err(AppError::new(
+                "permission_required",
+                "按键说话需要先完成麦克风和语音识别授权。",
+                true,
+            ));
+        }
+        self.cancel_active(app, "voice_input").await?;
+        let writer = self.ensure_audio_host(app).await?;
+        let capture_id = Uuid::now_v7().to_string();
+        let generation = self.audio_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = audio::send(&writer, json!({"type": "tts.stop"})).await;
+        *self.active_playback.lock().await = None;
+        audio::send(
+            &writer,
+            json!({
+                "type": "asr.start",
+                "capture_id": capture_id,
+                "generation": generation,
+            }),
+        )
+        .await?;
+        {
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.input_state = InputState::Capturing;
+            runtime.playback_state = PlaybackState::Idle;
+            runtime.active_voice_capture_id = Some(capture_id);
+            runtime.active_voice_source = Some("push_to_talk".into());
+            runtime.asr_partial.clear();
+            runtime.last_error = None;
+        }
+        self.emit_snapshot(app).await
+    }
+
+    pub async fn finish_push_to_talk(&self, app: &AppHandle) -> Result<(), AppError> {
+        let _voice_guard = self.voice_command.lock().await;
+        let writer = self
+            .audio_writer
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| AppError::new("audio_host_failed", "AudioHost 尚未启动。", true))?;
+        audio::send(&writer, json!({"type": "asr.finalize"})).await?;
+        {
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.input_state = InputState::Recognizing;
+        }
+        self.emit_snapshot(app).await
+    }
+
+    pub async fn stop_playback(&self, app: &AppHandle) -> Result<(), AppError> {
+        if let Some(writer) = self.audio_writer.lock().await.clone() {
+            audio::send(&writer, json!({"type": "tts.stop"})).await?;
+        }
+        *self.active_playback.lock().await = None;
+        {
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.playback_state = PlaybackState::Idle;
+        }
+        self.emit_snapshot(app).await
+    }
+
+    pub async fn update_voice_settings(
+        &self,
+        app: &AppHandle,
+        tts_enabled: bool,
+        expected_revision: u64,
+    ) -> Result<VoiceSettings, AppError> {
+        let mut settings = self.voice_settings.write().await;
+        if settings.revision != expected_revision {
+            return Err(AppError::new(
+                "conflict",
+                "语音设置已更新，请刷新后重试。",
+                true,
+            ));
+        }
+        let updated = VoiceSettings {
+            tts_enabled,
+            revision: settings.revision + 1,
+        };
+        self.storage
+            .save_voice_settings(&updated, now_ms())
+            .map_err(storage_error)?;
+        *settings = updated.clone();
+        drop(settings);
+        if !tts_enabled {
+            self.stop_playback(app).await?;
+        } else {
+            self.runtime.write().await.revision += 1;
+            self.emit_snapshot(app).await?;
+        }
+        Ok(updated)
+    }
+
+    async fn ensure_audio_host(self: &Arc<Self>, app: &AppHandle) -> Result<AudioWriter, AppError> {
+        if let Some(writer) = self.audio_writer.lock().await.clone() {
+            return Ok(writer);
+        }
+        let _launch_guard = self.audio_launch.lock().await;
+        if let Some(writer) = self.audio_writer.lock().await.clone() {
+            return Ok(writer);
+        }
+        {
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.audio_host_state = "launching".into();
+            runtime.last_error = None;
+        }
+        self.emit_snapshot(app).await?;
+        let bundled_audio_host = app
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|path| path.join("AudioHost.app"));
+        let mut connection = match audio::launch(bundled_audio_host).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                let mut runtime = self.runtime.write().await;
+                runtime.revision += 1;
+                runtime.audio_host_state = "failed".into();
+                runtime.last_error = Some(error.clone());
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+                return Err(error);
+            }
+        };
+        *self.audio_writer.lock().await = Some(connection.writer.clone());
+        {
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.audio_host_state = "handshaking".into();
+        }
+        self.emit_snapshot(app).await?;
+        let core = Arc::clone(self);
+        let app = app.clone();
+        let task: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
+            while let Some(event) = connection.events.recv().await {
+                core.handle_audio_event(&app, event).await;
+            }
+        });
+        tauri::async_runtime::spawn(task);
+        Ok(connection.writer)
+    }
+
+    async fn handle_audio_event(self: &Arc<Self>, app: &AppHandle, event: Value) {
+        let event_type = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match event_type {
+            "host.ready" => {
+                let mut runtime = self.runtime.write().await;
+                runtime.revision += 1;
+                runtime.audio_host_state = "ready".into();
+                runtime.last_error = None;
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+            }
+            "permissions.status" => {
+                let mut runtime = self.runtime.write().await;
+                runtime.revision += 1;
+                runtime.voice_permissions = VoicePermissions {
+                    microphone: event
+                        .get("microphone")
+                        .and_then(Value::as_str)
+                        .unwrap_or("restricted")
+                        .into(),
+                    speech_recognition: event
+                        .get("speech_recognition")
+                        .and_then(Value::as_str)
+                        .unwrap_or("restricted")
+                        .into(),
+                };
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+            }
+            "capture.started" => {
+                let capture_id = event
+                    .get("capture_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                let mode = event
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let mut runtime = self.runtime.write().await;
+                runtime.revision += 1;
+                runtime.active_voice_capture_id = Some(capture_id);
+                runtime.input_state = if mode == "wake" {
+                    runtime.active_voice_source = None;
+                    runtime.asr_partial.clear();
+                    InputState::WakeListening
+                } else {
+                    InputState::Recognizing
+                };
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+            }
+            "wake.detected" => {
+                let capture_id = event.get("capture_id").and_then(Value::as_str);
+                let mut runtime = self.runtime.write().await;
+                if runtime.active_voice_capture_id.as_deref() != capture_id {
+                    return;
+                }
+                runtime.revision += 1;
+                runtime.input_state = InputState::Recognizing;
+                runtime.active_voice_source = Some("wake_word".into());
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+            }
+            "asr.partial" => {
+                let capture_id = event.get("capture_id").and_then(Value::as_str);
+                let mut runtime = self.runtime.write().await;
+                if runtime.active_voice_capture_id.as_deref() != capture_id {
+                    return;
+                }
+                runtime.revision += 1;
+                runtime.input_state = InputState::Recognizing;
+                runtime.asr_partial = event
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+            }
+            "asr.final" => {
+                let capture_id = event.get("capture_id").and_then(Value::as_str);
+                let text = event
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned();
+                let source = {
+                    let mut runtime = self.runtime.write().await;
+                    if runtime.active_voice_capture_id.as_deref() != capture_id {
+                        return;
+                    }
+                    runtime.revision += 1;
+                    runtime.input_state = if runtime.listening_mode == ListeningMode::Armed {
+                        InputState::WakeListening
+                    } else {
+                        InputState::Stopped
+                    };
+                    runtime.asr_partial.clear();
+                    runtime.active_voice_capture_id = None;
+                    runtime
+                        .active_voice_source
+                        .take()
+                        .unwrap_or_else(|| "push_to_talk".into())
+                };
+                let _ = self.emit_snapshot(app).await;
+                if !text.is_empty() {
+                    let _ = self.voice_final_tx.send(VoiceFinal {
+                        app: app.clone(),
+                        text,
+                        source,
+                    });
+                }
+            }
+            "tts.started" => {
+                let turn_id = event.get("turn_id").and_then(Value::as_str);
+                let generation = event.get("generation").and_then(Value::as_u64);
+                let active = self.active_playback.lock().await;
+                if active
+                    .as_ref()
+                    .is_none_or(|(active_turn, active_generation)| {
+                        Some(active_turn.as_str()) != turn_id
+                            || Some(*active_generation) != generation
+                    })
+                {
+                    return;
+                }
+                drop(active);
+                let mut runtime = self.runtime.write().await;
+                runtime.revision += 1;
+                runtime.playback_state = PlaybackState::Playing;
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+            }
+            "tts.finished" => {
+                let turn_id = event.get("turn_id").and_then(Value::as_str);
+                let generation = event.get("generation").and_then(Value::as_u64);
+                let mut active = self.active_playback.lock().await;
+                if active
+                    .as_ref()
+                    .is_none_or(|(active_turn, active_generation)| {
+                        Some(active_turn.as_str()) != turn_id
+                            || Some(*active_generation) != generation
+                    })
+                {
+                    return;
+                }
+                *active = None;
+                drop(active);
+                let mut runtime = self.runtime.write().await;
+                runtime.revision += 1;
+                runtime.playback_state = PlaybackState::Idle;
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+            }
+            "voice.error" | "host.error" => {
+                let code = event
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or("audio_host_failed");
+                let message = event
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("AudioHost 发生错误。")
+                    .to_owned();
+                let mut runtime = self.runtime.write().await;
+                runtime.revision += 1;
+                runtime.input_state = InputState::Stopped;
+                runtime.active_voice_capture_id = None;
+                runtime.active_voice_source = None;
+                runtime.asr_partial.clear();
+                if matches!(
+                    code,
+                    "on_device_wake_unavailable"
+                        | "wake_recognition_unavailable"
+                        | "permission_denied"
+                ) {
+                    runtime.listening_mode = ListeningMode::Disabled;
+                }
+                runtime.last_error = Some(AppError::new(code, message, true));
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+            }
+            "host.disconnected" => {
+                *self.audio_writer.lock().await = None;
+                *self.active_playback.lock().await = None;
+                let mut runtime = self.runtime.write().await;
+                runtime.revision += 1;
+                runtime.audio_host_state = "failed".into();
+                runtime.input_state = InputState::Stopped;
+                runtime.playback_state = PlaybackState::Idle;
+                runtime.listening_mode = ListeningMode::Disabled;
+                runtime.active_voice_capture_id = None;
+                runtime.active_voice_source = None;
+                runtime.asr_partial.clear();
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+            }
+            _ => {}
+        }
+    }
+
+    async fn speak_response(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        turn_id: &str,
+        generation: u64,
+        text: &str,
+    ) {
+        if !self.voice_settings.read().await.tts_enabled || text.trim().is_empty() {
+            return;
+        }
+        let writer = match self.ensure_audio_host(app).await {
+            Ok(writer) => writer,
+            Err(_) => return,
+        };
+        *self.active_playback.lock().await = Some((turn_id.to_owned(), generation));
+        {
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.playback_state = PlaybackState::Buffering;
+        }
+        let _ = self.emit_snapshot(app).await;
+        if audio::send(
+            &writer,
+            json!({"type": "tts.speak", "turn_id": turn_id, "generation": generation, "text": text}),
+        )
+        .await
+        .is_err()
+        {
+            *self.active_playback.lock().await = None;
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.playback_state = PlaybackState::Idle;
+            drop(runtime);
+            let _ = self.emit_snapshot(app).await;
+        }
+    }
+
+    async fn interrupt_playback(&self) {
+        *self.active_playback.lock().await = None;
+        if let Some(writer) = self.audio_writer.lock().await.clone() {
+            let _ = audio::send(&writer, json!({"type": "tts.stop"})).await;
+        }
+        let mut runtime = self.runtime.write().await;
+        if runtime.playback_state != PlaybackState::Idle {
+            runtime.revision += 1;
+            runtime.playback_state = PlaybackState::Idle;
+        }
     }
 
     async fn resolve_llm_api_key(&self) -> Result<Option<String>, AppError> {

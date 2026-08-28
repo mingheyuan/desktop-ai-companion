@@ -36,6 +36,16 @@ const snapshot: AppSnapshot = {
     model_size_bytes: null,
     revision: 0,
   },
+  audio_host_state: "stopped",
+  voice_permissions: {
+    microphone: "not_determined",
+    speech_recognition: "not_determined",
+  },
+  voice_settings: {
+    tts_enabled: false,
+    revision: 0,
+  },
+  asr_partial: "",
   last_error: null,
 };
 

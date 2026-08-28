@@ -19,8 +19,10 @@
 - [`src/asr.rs`](https://github.com/mingheyuan/realtime-ai-translation/blob/7361fe343d20efc68168e891ce3a18ca112aea2e/src/asr.rs)：`AsrProvider`/`AsrSession` 分层、Ready/Partial/Final/Error 事件、短 UDS 路径、启动和停止超时。
 - [`bridges/macos-speech/MacOSSpeechBridge.swift`](https://github.com/mingheyuan/realtime-ai-translation/blob/7361fe343d20efc68168e891ce3a18ca112aea2e/bridges/macos-speech/MacOSSpeechBridge.swift)：app bundle TCC 身份、串行控制队列、generation guard、Apple Speech task 滚动。
 - [`src/streaming.rs`](https://github.com/mingheyuan/realtime-ai-translation/blob/7361fe343d20efc68168e891ce3a18ca112aea2e/src/streaming.rs)：revision 驱动的 partial 替换与过期结果拒绝。
+- [`scripts/build-macos-speech.sh`](https://github.com/mingheyuan/realtime-ai-translation/blob/7361fe343d20efc68168e891ce3a18ca112aea2e/scripts/build-macos-speech.sh)：使用 `swiftc` 构建 app bundle 并优先采用稳定本地签名身份。
+- [`scripts/setup-macos-codesigning.sh`](https://github.com/mingheyuan/realtime-ai-translation/blob/7361fe343d20efc68168e891ce3a18ca112aea2e/scripts/setup-macos-codesigning.sh)：在用户钥匙串创建自签名本地开发 identity，避免 AudioHost 重建后 TCC 身份漂移。
 
-采用：Provider/Session 生命周期、先 bind 后 launch、bounded stop、回调 generation guard。
+采用：Provider/Session 生命周期、先 bind 后 launch、短 UDS 路径、app bundle TCC 身份、本地签名脚本、bounded stop、回调 generation guard。
 
 改进：本项目增加版本握手、随机 token、心跳、独立 control/media socket、持久 AudioHost 和 app-private 短运行目录；不会直接复用无版本 JSONL 或把滚动 task 的 final 当用户最终输入。
 

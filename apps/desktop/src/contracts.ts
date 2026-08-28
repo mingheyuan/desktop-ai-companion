@@ -44,6 +44,16 @@ export interface MemoryItem {
   updated_at_ms: number;
 }
 
+export interface VoicePermissions {
+  microphone: "not_determined" | "denied" | "restricted" | "authorized";
+  speech_recognition: "not_determined" | "denied" | "restricted" | "authorized";
+}
+
+export interface VoiceSettings {
+  tts_enabled: boolean;
+  revision: number;
+}
+
 export interface PetSettings {
   visible: boolean;
   click_through: boolean;
@@ -75,6 +85,10 @@ export interface AppSnapshot {
   provider: ProviderSettings;
   pet: PetSettings;
   character: CharacterSettings;
+  audio_host_state: "stopped" | "launching" | "handshaking" | "ready" | "failed";
+  voice_permissions: VoicePermissions;
+  voice_settings: VoiceSettings;
+  asr_partial: string;
   last_error: AppError | null;
 }
 

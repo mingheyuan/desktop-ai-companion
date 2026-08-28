@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppSnapshot, CharacterSettings, EventEnvelope, MemoryItem, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload } from "../contracts";
+import type { AppSnapshot, CharacterSettings, EventEnvelope, MemoryItem, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
 
 export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
@@ -91,6 +91,46 @@ export async function deleteMemory(memory: MemoryItem): Promise<void> {
       request_id: crypto.randomUUID(),
       id: memory.id,
       expected_version: memory.version,
+    },
+  });
+}
+
+export async function requestVoicePermissions(): Promise<void> {
+  await invoke("voice_request_permissions", {
+    request: { request_id: crypto.randomUUID() },
+  });
+}
+
+export async function setListening(enabled: boolean): Promise<void> {
+  await invoke("voice_set_listening_mode", {
+    request: { request_id: crypto.randomUUID(), enabled },
+  });
+}
+
+export async function startPushToTalk(): Promise<void> {
+  await invoke("voice_ptt_start", {
+    request: { request_id: crypto.randomUUID() },
+  });
+}
+
+export async function finishPushToTalk(): Promise<void> {
+  await invoke("voice_ptt_finish", {
+    request: { request_id: crypto.randomUUID() },
+  });
+}
+
+export async function stopPlayback(): Promise<void> {
+  await invoke("playback_stop", {
+    request: { request_id: crypto.randomUUID() },
+  });
+}
+
+export async function updateVoiceSettings(current: VoiceSettings, ttsEnabled: boolean): Promise<VoiceSettings> {
+  return invoke<VoiceSettings>("voice_update_settings", {
+    request: {
+      request_id: crypto.randomUUID(),
+      tts_enabled: ttsEnabled,
+      expected_revision: current.revision,
     },
   });
 }

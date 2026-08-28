@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AppSnapshot, CharacterSettings, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload } from "../contracts";
+import type { AppSnapshot, CharacterSettings, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
 
 const emptySnapshot: AppSnapshot = {
   revision: 0,
@@ -35,6 +35,16 @@ const emptySnapshot: AppSnapshot = {
     model_size_bytes: null,
     revision: 0,
   },
+  audio_host_state: "stopped",
+  voice_permissions: {
+    microphone: "not_determined",
+    speech_recognition: "not_determined",
+  },
+  voice_settings: {
+    tts_enabled: false,
+    revision: 0,
+  },
+  asr_partial: "",
   last_error: null,
 };
 
@@ -46,6 +56,7 @@ interface AppStore {
   setProvider: (provider: ProviderSettings) => void;
   setPet: (pet: PetSettings) => void;
   setCharacter: (character: CharacterSettings) => void;
+  setVoiceSettings: (settings: VoiceSettings) => void;
   appendDelta: (payload: TextDeltaPayload, turnId?: string) => void;
   finishTurn: (payload: TurnEndedPayload) => void;
 }
@@ -69,6 +80,8 @@ export const useAppStore = create<AppStore>((set) => ({
     set((state) => ({ snapshot: { ...state.snapshot, pet } })),
   setCharacter: (character) =>
     set((state) => ({ snapshot: { ...state.snapshot, character } })),
+  setVoiceSettings: (voice_settings) =>
+    set((state) => ({ snapshot: { ...state.snapshot, voice_settings } })),
   appendDelta: ({ text }, turnId) =>
     set((state) => {
       if (turnId && turnId !== state.snapshot.active_turn_id) return state;

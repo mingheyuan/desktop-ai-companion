@@ -67,6 +67,8 @@ TTS 失败只使语音降级；已有 LLM 文本仍可完成。LLM 失败则 tur
 
 ## 3. 唤醒词语音对话
 
+以下是目标 KWS/VAD 时序。当前切片由 AudioHost 内 Apple Speech 设备端识别同时完成唤醒短语检测与 partial/final，未经过 PCM media socket；当前协议见 [实现状态矩阵](status.md#当前-audiohost-协议v10-子集)。
+
 ```mermaid
 sequenceDiagram
     participant Host as AudioHost

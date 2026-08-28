@@ -156,6 +156,27 @@ pub struct MemoryItem {
     pub updated_at_ms: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VoicePermissions {
+    pub microphone: String,
+    pub speech_recognition: String,
+}
+
+impl Default for VoicePermissions {
+    fn default() -> Self {
+        Self {
+            microphone: "not_determined".into(),
+            speech_recognition: "not_determined".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VoiceSettings {
+    pub tts_enabled: bool,
+    pub revision: u64,
+}
+
 impl Default for CharacterSettings {
     fn default() -> Self {
         Self {
@@ -212,6 +233,10 @@ pub struct AppSnapshot {
     pub provider: ProviderSettings,
     pub pet: PetSettings,
     pub character: CharacterSettings,
+    pub audio_host_state: String,
+    pub voice_permissions: VoicePermissions,
+    pub voice_settings: VoiceSettings,
+    pub asr_partial: String,
     pub last_error: Option<AppError>,
 }
 
@@ -311,4 +336,22 @@ pub struct DeleteMemoryRequest {
 
 fn default_memory_limit() -> usize {
     20
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceRequest {
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetListeningRequest {
+    pub request_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateVoiceSettingsRequest {
+    pub request_id: String,
+    pub tts_enabled: bool,
+    pub expected_revision: u64,
 }

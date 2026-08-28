@@ -1,3 +1,4 @@
+mod audio;
 mod commands;
 mod contracts;
 mod core;
@@ -12,16 +13,33 @@ use commands::CoreState;
 use core::AppCore;
 use storage::Storage;
 use tauri::Manager;
-use tauri_plugin_global_shortcut::ShortcutState;
+use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
-        .with_shortcuts(["CommandOrControl+Shift+Space"])
+        .with_shortcuts(["CommandOrControl+Shift+Space", "CommandOrControl+Shift+M"])
         .expect("valid companion global shortcuts")
-        .with_handler(|app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
+        .with_handler(|app, shortcut, event| {
+            let primary = if cfg!(target_os = "macos") {
+                Modifiers::SUPER
+            } else {
+                Modifiers::CONTROL
+            };
+            if shortcut.matches(primary | Modifiers::SHIFT, Code::Space)
+                && event.state == ShortcutState::Pressed
+            {
                 let _ = desktop::toggle_main_window(app);
+            } else if shortcut.matches(primary | Modifiers::SHIFT, Code::KeyM) {
+                let core = std::sync::Arc::clone(&app.state::<CoreState>().0);
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if event.state == ShortcutState::Pressed {
+                        let _ = core.start_push_to_talk(&app).await;
+                    } else {
+                        let _ = core.finish_push_to_talk(&app).await;
+                    }
+                });
             }
         })
         .build();
@@ -50,6 +68,12 @@ pub fn run() {
             commands::memory_create,
             commands::memory_update,
             commands::memory_delete,
+            commands::voice_request_permissions,
+            commands::voice_set_listening_mode,
+            commands::voice_ptt_start,
+            commands::voice_ptt_finish,
+            commands::playback_stop,
+            commands::voice_update_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running desktop AI companion");

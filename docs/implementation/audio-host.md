@@ -1,5 +1,22 @@
 # macOS AudioHost 实现规格
 
+> 本文同时记录目标规格和当前落地状态。标为“目标”的 PCM/KWS/VAD/口型能力不能被 README 或 UI 宣称为已完成。
+
+## 0. 当前可运行切片
+
+截至当前实现，`native/audio-host/AudioHost.swift` 已具备：
+
+- 固定 bundle identifier 的 `.app`、Info.plist 权限用途说明和本地签名构建脚本；
+- Rust 先 bind、AudioHost 后连接的 UDS JSONL 通道，以及 protocol major、256-bit token、launch nonce 握手；
+- 麦克风与 Speech Recognition 权限状态查询和仅由用户点击触发的授权请求；
+- PTT、Apple Speech partial/final、45 秒 recognition task 滚动和 capture/epoch/generation guard；
+- 使用 Apple Speech 设备端识别检测“爱丽丝”的持续监听 fallback；不支持设备端识别时直接关闭持续监听，不把环境音降级到在线识别；
+- `AVSpeechSynthesizer` 本地朗读、停止、PTT/文字新输入打断，以及旧 utterance 回调过滤；
+- Rust 侧 turn/input/playback 状态投影、Tauri 命令、UI 控件和 `Cmd/Ctrl + Shift + M` PTT 快捷键；
+- 不请求语音权限的真实 `.app` 启动、握手和退出测试。
+
+尚未落地的目标项包括：二进制 PCM media socket、Sherpa KWS、独立 VAD、pre-roll、RMS/口型、设备切换、心跳与自动重启、安静时段，以及 30 分钟/睡眠恢复实机验收。当前 fallback 的 endpoint 是 1.1 秒静音计时；PTT 在设备端识别不可用时可能使用 Apple Speech 系统在线服务，UI 后续需进一步标出该数据路径。
+
 ## 1. 职责
 
 AudioHost 是随桌面应用分发的签名 macOS `.app`，提供稳定 TCC 身份和原生音频能力：
@@ -10,7 +27,7 @@ AudioHost 是随桌面应用分发的签名 macOS `.app`，提供稳定 TCC 身�
 - `AVSpeechSynthesizer.write` 缓冲合成、AVAudioEngine 播放与振幅回传；
 - 与 Rust Core 的 UDS 控制/媒体连接。
 
-它不负责唤醒词判定、VAD 策略、LLM、记忆、角色设定或 UI。KWS/VAD 在 Rust 中运行，AudioHost 只供应 PCM。
+目标架构中它不负责唤醒词判定、VAD 策略、LLM、记忆、角色设定或 UI，KWS/VAD 在 Rust 中运行，AudioHost 只供应 PCM。当前可运行 fallback 暂由 AudioHost 内 Apple Speech 完成设备端唤醒短语检测和 endpoint 计时，后续接入 media socket 后再迁回 Rust KWS/VAD。
 
 ## 2. 进程生命周期
 

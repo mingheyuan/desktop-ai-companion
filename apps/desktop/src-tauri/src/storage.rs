@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::contracts::{
     CharacterSettings, ChatMessage, MemoryItem, MessageRole, MessageStatus, PetSettings,
-    ProviderSettings,
+    ProviderSettings, VoiceSettings,
 };
 
 pub struct Storage {
@@ -216,20 +216,24 @@ impl Storage {
         Ok(())
     }
 
-    pub fn begin_text_turn(
+    pub fn begin_turn(
         &self,
         conversation_id: &str,
         turn_id: &str,
         generation: u64,
+        input_source: &str,
         text: &str,
         now_ms: i64,
     ) -> Result<ChatMessage, rusqlite::Error> {
+        if !matches!(input_source, "text" | "wake_word" | "push_to_talk") {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let mut connection = self.connection.lock().expect("storage mutex poisoned");
         let transaction = connection.transaction()?;
         transaction.execute(
             "INSERT INTO turns(id, conversation_id, generation, input_source, status, started_at_ms)
-             VALUES(?1, ?2, ?3, 'text', 'preparing', ?4)",
-            params![turn_id, conversation_id, generation as i64, now_ms],
+             VALUES(?1, ?2, ?3, ?4, 'preparing', ?5)",
+            params![turn_id, conversation_id, generation as i64, input_source, now_ms],
         )?;
         let message_id = Uuid::now_v7().to_string();
         transaction.execute(
@@ -453,6 +457,40 @@ impl Storage {
         let json = serde_json::to_string(value).expect("character settings serialize");
         connection.execute(
             "INSERT INTO app_settings(key, value_json, revision, updated_at_ms) VALUES('character.active', ?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, revision=excluded.revision, updated_at_ms=excluded.updated_at_ms",
+            params![json, value.revision, now_ms],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_voice_settings(&self) -> Result<VoiceSettings, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let stored = connection
+            .query_row(
+                "SELECT value_json, revision FROM app_settings WHERE key='voice.settings'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .optional()?;
+        match stored {
+            Some((json, revision)) => {
+                let mut value: VoiceSettings = serde_json::from_str(&json).unwrap_or_default();
+                value.revision = revision;
+                Ok(value)
+            }
+            None => Ok(VoiceSettings::default()),
+        }
+    }
+
+    pub fn save_voice_settings(
+        &self,
+        value: &VoiceSettings,
+        now_ms: i64,
+    ) -> Result<(), rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let json = serde_json::to_string(value).expect("voice settings serialize");
+        connection.execute(
+            "INSERT INTO app_settings(key, value_json, revision, updated_at_ms) VALUES('voice.settings', ?1, ?2, ?3)
              ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, revision=excluded.revision, updated_at_ms=excluded.updated_at_ms",
             params![json, value.revision, now_ms],
         )?;
@@ -750,7 +788,7 @@ mod tests {
         let storage = Storage::open_in_memory().unwrap();
         let conversation = storage.ensure_conversation(1).unwrap();
         storage
-            .begin_text_turn(&conversation, "turn-1", 1, "你好", 2)
+            .begin_turn(&conversation, "turn-1", 1, "text", "你好", 2)
             .unwrap();
         storage.mark_turn_active("turn-1").unwrap();
         storage

@@ -1,11 +1,11 @@
-import { FormEvent, useState } from "react";
-import { cancelTurn, importCharacterVrm, isTauri, submitText, updatePetSettings } from "../lib/tauri";
+import { FormEvent, useRef, useState } from "react";
+import { cancelTurn, finishPushToTalk, importCharacterVrm, isTauri, requestVoicePermissions, setListening, startPushToTalk, stopPlayback, submitText, updatePetSettings, updateVoiceSettings } from "../lib/tauri";
 import { useAppStore } from "../stores/app";
 import { ProviderSettingsDialog } from "./ProviderSettingsDialog";
 import { MemoryPanel } from "./MemoryPanel";
 
 export function ChatPanel() {
-  const { snapshot, streamingText, booting, setProvider, setPet, setCharacter } = useAppStore();
+  const { snapshot, streamingText, booting, setProvider, setPet, setCharacter, setVoiceSettings } = useAppStore();
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -13,6 +13,48 @@ export function ChatPanel() {
   const [petUpdating, setPetUpdating] = useState(false);
   const [petError, setPetError] = useState("");
   const [importingVrm, setImportingVrm] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceError, setVoiceError] = useState("");
+  const pttStart = useRef<Promise<void> | null>(null);
+
+  const beginPtt = () => {
+    if (pttStart.current || !isTauri()) return;
+    setVoiceError("");
+    const request = startPushToTalk().catch((reason) => {
+      if (typeof reason === "string") setVoiceError(reason);
+      else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setVoiceError(reason.message);
+      else setVoiceError("按键说话启动失败。");
+      throw reason;
+    });
+    pttStart.current = request;
+  };
+
+  const endPtt = async () => {
+    const started = pttStart.current;
+    if (!started) return;
+    pttStart.current = null;
+    try {
+      await started;
+      await finishPushToTalk();
+    } catch {
+      // beginPtt 已显示启动错误；没有成功 capture 时无需再 finalize。
+    }
+  };
+
+  const runVoiceAction = async (action: () => Promise<void>) => {
+    if (voiceBusy || !isTauri()) return;
+    setVoiceBusy(true);
+    setVoiceError("");
+    try {
+      await action();
+    } catch (reason) {
+      if (typeof reason === "string") setVoiceError(reason);
+      else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setVoiceError(reason.message);
+      else setVoiceError("语音操作失败。");
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
 
   const importVrm = async () => {
     if (importingVrm || !isTauri()) return;
@@ -118,6 +160,49 @@ export function ChatPanel() {
         {petError && <span className="pet-control-error">{petError}</span>}
         <span className="pet-shortcut-hint">快捷键：⌘/Ctrl + Shift + Space</span>
       </nav>
+
+      <nav className="voice-controls" aria-label="语音控制">
+        <span className={`voice-dot state-${snapshot.input_state}`} />
+        <span>{snapshot.audio_host_state === "ready" ? snapshot.input_state : `AudioHost: ${snapshot.audio_host_state}`}</span>
+        {(snapshot.voice_permissions.microphone !== "authorized" || snapshot.voice_permissions.speech_recognition !== "authorized") && (
+          <button type="button" disabled={voiceBusy || !isTauri()} onClick={() => runVoiceAction(requestVoicePermissions)}>授权语音</button>
+        )}
+        <button
+          type="button"
+          disabled={voiceBusy || !isTauri() || snapshot.voice_permissions.microphone !== "authorized" || snapshot.voice_permissions.speech_recognition !== "authorized"}
+          onClick={() => runVoiceAction(() => setListening(snapshot.listening_mode !== "armed"))}
+        >
+          {snapshot.listening_mode === "armed" ? "关闭持续监听" : "开启持续监听"}
+        </button>
+        <button
+          type="button"
+          className={snapshot.input_state === "capturing" || snapshot.input_state === "recognizing" ? "active" : ""}
+          disabled={voiceBusy || !isTauri() || snapshot.voice_permissions.microphone !== "authorized" || snapshot.voice_permissions.speech_recognition !== "authorized"}
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            beginPtt();
+          }}
+          onPointerUp={() => void endPtt()}
+          onPointerCancel={() => void endPtt()}
+        >按住说话</button>
+        <label>
+          <input
+            type="checkbox"
+            checked={snapshot.voice_settings.tts_enabled}
+            disabled={voiceBusy || !isTauri()}
+            onChange={(event) => {
+              const enabled = event.target.checked;
+              void runVoiceAction(async () => setVoiceSettings(await updateVoiceSettings(snapshot.voice_settings, enabled)));
+            }}
+          />
+          朗读回复
+        </label>
+        {snapshot.playback_state !== "idle" && <button type="button" onClick={() => runVoiceAction(stopPlayback)}>停止朗读</button>}
+        <span className="voice-shortcut">PTT：⌘/Ctrl + Shift + M</span>
+        {voiceError && <span className="voice-error">{voiceError}</span>}
+      </nav>
+
+      <div className={`asr-caption ${snapshot.asr_partial ? "" : "empty"}`}>{snapshot.asr_partial}</div>
 
       <section className="conversation" aria-live="polite">
         {booting && <p className="empty-state">正在连接 Rust Core…</p>}

@@ -1,5 +1,7 @@
 # IPC 与 AudioHost 协议
 
+> 本文主体是目标协议。当前代码已经实现的 v1.0 子集、实际消息名和缺口以 [MVP 实现状态矩阵](status.md#当前-audiohost-协议v10-子集) 为准；media socket、heartbeat、统一 request/response ACK 尚未接入。
+
 ## 1. 版本与公共 envelope
 
 Tauri IPC 与 AudioHost 控制协议都使用明确版本。新增可选字段可以保持小版本兼容；删除/改名字段、改变语义或二进制布局必须升主版本。

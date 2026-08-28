@@ -7,7 +7,8 @@ use crate::{
     contracts::{
         AppError, AppSnapshot, CancelTurnRequest, CharacterSettings, CreateMemoryRequest,
         DeleteMemoryRequest, MemoryItem, PetSettings, ProviderSettings, SearchMemoriesRequest,
-        SubmitTextRequest, UpdateMemoryRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
+        SetListeningRequest, SubmitTextRequest, UpdateMemoryRequest, UpdatePetSettingsRequest,
+        UpdateProviderRequest, UpdateVoiceSettingsRequest, VoiceRequest, VoiceSettings,
     },
     core::AppCore,
     desktop,
@@ -189,4 +190,67 @@ fn validate_request_id(request_id: &str) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn voice_request_permissions(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: VoiceRequest,
+) -> Result<(), AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.request_voice_permissions(&app).await
+}
+
+#[tauri::command]
+pub async fn voice_set_listening_mode(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: SetListeningRequest,
+) -> Result<(), AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.set_listening(&app, request.enabled).await
+}
+
+#[tauri::command]
+pub async fn voice_ptt_start(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: VoiceRequest,
+) -> Result<(), AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.start_push_to_talk(&app).await
+}
+
+#[tauri::command]
+pub async fn voice_ptt_finish(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: VoiceRequest,
+) -> Result<(), AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.finish_push_to_talk(&app).await
+}
+
+#[tauri::command]
+pub async fn playback_stop(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: VoiceRequest,
+) -> Result<(), AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.stop_playback(&app).await
+}
+
+#[tauri::command]
+pub async fn voice_update_settings(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: UpdateVoiceSettingsRequest,
+) -> Result<VoiceSettings, AppError> {
+    validate_request_id(&request.request_id)?;
+    state
+        .0
+        .update_voice_settings(&app, request.tts_enabled, request.expected_revision)
+        .await
 }

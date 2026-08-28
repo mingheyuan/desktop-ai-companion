@@ -219,6 +219,8 @@ GenerationState: NotStarted | Streaming | Finished | Failed
 
 ### 7.1 唤醒与识别
 
+下图是接入 PCM media socket 与 Rust KWS/VAD 后的目标链路。当前可运行切片使用 AudioHost 内 Apple Speech 设备端识别检测“爱丽丝”，差异见 [`implementation/status.md`](implementation/status.md)；设备端能力不可用时持续监听会被拒绝，不会把唤醒前环境音发送到在线 ASR。
+
 ```mermaid
 sequenceDiagram
     participant M as 麦克风 / AudioHost

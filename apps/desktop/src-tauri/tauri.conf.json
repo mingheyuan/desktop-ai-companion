@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.mingheyuan.desktop-ai-companion",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "../../scripts/build-audio-host.sh && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "../../scripts/build-audio-host.sh && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -45,7 +45,14 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": "all",
+    "resources": {
+      "../../../target/AudioHost.app/": "AudioHost.app/"
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "-"
+    }
   }
 }

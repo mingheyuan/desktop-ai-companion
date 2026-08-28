@@ -4,7 +4,7 @@
 
 项目希望结合“钢琴女友”类产品的陪伴感、记忆管理和低频互动，以及桌宠应用的便捷性、可移动性和可动表现，再加入自然的语音交互能力。
 
-当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线，并已进入业务实现。现有代码可以启动 Tauri 双窗口应用，运行透明桌宠、受控 VRM 导入、文字流式对话、可取消 turn、mock/OpenAI-compatible LLM Provider、SQLite 会话恢复，以及由 Rust 管理的桌宠显示、缩放、点击穿透、托盘和全局快捷键；显式记忆管理已接入，语音链路仍在实现中。工具调用与屏幕感知作为后续 Tool MVP 单独规划。
+当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线，并已进入业务实现。现有代码可以启动 Tauri 双窗口应用，运行透明桌宠、受控 VRM 导入、文字流式对话、可取消 turn、mock/OpenAI-compatible LLM Provider、SQLite 会话与显式记忆管理，以及由 Rust 管理的桌宠显示、缩放、点击穿透、托盘和全局快捷键。首个 macOS 语音切片也已接入：独立签名 `AudioHost.app`、显式权限申请、PTT、Apple Speech partial/final、设备端持续唤醒和系统 TTS；工具调用与屏幕感知仍作为后续 Tool MVP 单独规划。
 
 ## 初始角色设定
 
@@ -121,6 +121,7 @@ MVP 包含唤醒词和持续监听，并满足以下边界：
 
 - [`docs/architecture.md`](docs/architecture.md)：MVP 内部架构、数据所有权、状态模型、语音与记忆流程。
 - [`docs/implementation/README.md`](docs/implementation/README.md)：可直接指导编码的状态机、协议、数据库、Provider、AudioHost、时序和 VRM 规格索引。
+- [`docs/implementation/status.md`](docs/implementation/status.md)：当前已实现代码事实、验证结果与目标规格差距。
 - [`docs/tools-and-vision.md`](docs/tools-and-vision.md)：工具调用、闹钟/提醒、屏幕观察、独立多模态 Provider 与真实参考项目。
 - [`docs/character/aris.md`](docs/character/aris.md)：初始角色原型资料与实现边界。
 - [`docs/references.md`](docs/references.md)：固定到 commit 的代码级参考仓库、具体文件和采用边界。
@@ -189,12 +190,13 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 ### 语音链路
 
-- 持久 Swift `AudioHost.app` 负责麦克风、`AVAudioEngine`、系统权限、PCM 音频采集和播放。
-- Rust 与 AudioHost 之间使用 Unix Domain Socket：JSONL 控制通道与二进制 PCM 媒体通道分离。
+- 持久 Swift `AudioHost.app` 负责麦克风、`AVAudioEngine`、系统权限、Apple Speech 和系统 TTS。
+- Rust 与 AudioHost 之间使用带协议版本、随机 token 和 launch nonce 的 Unix Domain Socket JSONL 控制通道；规划中的二进制 PCM 媒体通道尚未接入。
 - Apple Speech 作为第一版默认 ASR Provider，提供 `partial / final` 结果。
 - Sherpa-ONNX 作为可选的本地 ASR Provider。
-- Sherpa-ONNX KeywordSpotter 负责本地唤醒词检测，VAD 负责判断一轮语音结束。
-- `AVSpeechSynthesizer` Buffer API 作为第一版本地 TTS，支持停止、打断、播放进度和基础口型数据。
+- 当前切片先用 Apple Speech 的设备端识别检测“爱丽丝”，并用静音计时结束一轮；不支持设备端识别时拒绝开启持续监听，环境音不会降级发送到在线识别。
+- Sherpa-ONNX KeywordSpotter + VAD 仍是后续替换当前唤醒 fallback 的目标实现。
+- `AVSpeechSynthesizer` 作为第一版本地 TTS，现已支持开始、完成、停止和新输入打断；PCM 包络口型仍待接入。
 - 持续监听只保留本地唤醒词检测；唤醒前音频不发送给 LLM 或云端。
 
 语音 Provider 会沿用 [realtime-ai-translation](https://github.com/mingheyuan/realtime-ai-translation) 中的 Provider / Session、Bridge、partial/final 和资源按需加载思路，但不会把翻译状态机直接复制到对话系统。
@@ -222,7 +224,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - 后续工具由 Rust `ToolRuntime` 统一注册、授权、执行和审计；模型不能直接操作系统。
 - 屏幕理解采用按需单帧和独立 Vision Provider，聊天 Key 与视觉 Key 默认隔离。
 
-上述细节已经写入 [`docs/implementation/`](docs/implementation/README.md)。进入编码前还需完成一次规格评审，并通过透明窗口、VRM、AudioHost、唤醒链路和取消一致性五项技术 Spike。
+上述细节已经写入 [`docs/implementation/`](docs/implementation/README.md)。其中目标规格与当前实现差异会明确记录；AudioHost 进程握手 Spike 已通过，持续监听稳定性、睡眠恢复、唤醒误触率和取消一致性仍需实机验收。
 
 ## 后续可替换点
 
@@ -230,7 +232,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - VRM 可以在确有需求时增加 Live2D 渲染器。
 - Apple Speech、Sherpa-ONNX、TTS 和 LLM 都通过 Provider 接口隔离。
 - SQLite FTS5 可以在记忆规模扩大后增加向量检索。
-- Sherpa-ONNX 是 MVP 的默认本地唤醒词方案；Porcupine 可作为需要更成熟自定义唤醒词模型时的可选方案。
+- Apple Speech 设备端识别是当前可运行的唤醒 fallback；Sherpa-ONNX 是计划中的可分发本地唤醒实现，Porcupine 可作为需要成熟自定义唤醒词模型时的可选方案。
 - 内置工具可以在后续通过官方 Rust MCP SDK 扩展外部 MCP Server，但不改变本项目的权限策略。
 - 屏幕采集优先验证 Rust `scap`；需要更细 macOS 控制时再评估 `screencapturekit-rs`。
 
@@ -282,17 +284,36 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 ## 当前状态
 
-项目已完成首个可运行实现切片：React/Tauri 双窗口、three-vrm 运行时适配、Rust 状态核心、流式 LLM Provider、取消代次、SQLite v1 schema、会话恢复和 Provider 设置均已通过编译或单元测试。API key 通过应用设置写入 macOS Keychain，不进入 SQLite。原生 AudioHost、语音和记忆闭环仍待继续实现。
+已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。
 
-下一步继续实现 Provider 设置与 Keychain、VRM 资源导入和桌宠控制，再接入 AudioHost、PTT/ASR/TTS、唤醒词和记忆闭环。
+语音首个闭环已完成代码接入：Swift `AudioHost.app`、UDS 安全握手、权限状态、PTT、Apple Speech partial/final、设备端“爱丽丝”持续唤醒、`AVSpeechSynthesizer` 回复、停止朗读和新输入打断。Rust、前端、Swift 编译均已通过，并有一个不请求权限的真实 `.app` 握手测试。尚未完成的 MVP 风险项是稳定本地签名后的首次实机授权、长时间监听/睡眠恢复、Sherpa KWS/VAD 或当前 fallback 的误唤醒验收、角色真实动作/口型，以及完整打包回归。
 
 ## 本地开发
 
 ```bash
 pnpm install
+./scripts/setup-local-codesigning.sh   # 每台开发机首次执行；避免重编译后重复申请语音权限
+./scripts/build-audio-host.sh
 pnpm build
 cargo test --workspace
 pnpm tauri dev
+```
+
+`setup-local-codesigning.sh` 会在当前用户钥匙串创建仅用于本机开发的自签名代码签名身份；执行前请自行确认。未执行时构建脚本会使用 ad-hoc 签名，功能可编译，但 macOS TCC 权限身份可能随重建变化。
+
+构建包含嵌套 AudioHost 的 macOS app bundle：
+
+```bash
+pnpm package:macos --debug
+```
+
+打包脚本会优先使用上述稳定本地 identity，否则按 [Tauri 官方说明](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing)回退到 `-` ad-hoc identity，并对外层应用及其资源重新封装签名。正式分发仍需要 Apple Developer 证书与 notarization。
+
+真实 AudioHost 握手测试不会申请麦克风或语音识别权限：
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml \
+  audio::tests::launches_audio_host_and_completes_handshake -- --ignored
 ```
 
 应用默认使用 `mock` Provider，因此无需 API key 即可验证文字流式对话。点击聊天面板右上角设置可切换 OpenAI-compatible endpoint/model，并将 API key 保存到 macOS Keychain；开发期也可使用环境变量 `DESKTOP_AI_LLM_API_KEY` 作为回退。
@@ -301,7 +322,7 @@ pnpm tauri dev
 
 - `docs/`：产品、架构、实现规格和调研记录。
 - `apps/desktop/`：React/Tauri 桌面应用。
-- `native/AudioHost/`：Swift 原生音频宿主。
+- `native/audio-host/`：Swift 原生音频宿主。
 - `contracts/`：Rust/Swift 协议 schema 与兼容 fixtures。
 - `resources/characters/`：仅存放自制、用户拥有或明确授权的角色资源。
 
