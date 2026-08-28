@@ -7,7 +7,7 @@
 | 能力 | 当前实现 | 验证 |
 |---|---|---|
 | 桌面容器 | Tauri 2 主面板 + 透明桌宠双窗口 | Rust 编译、前端构建、手工窗口检查 |
-| VRM | `three-vrm` 加载、合法性/大小校验、应用数据目录托管、fallback 模型 | 前端构建和浏览器渲染检查 |
+| VRM | `three-vrm` 加载、合法性/大小校验、应用数据目录托管、授权模型导入和 fallback 降级 | 前端构建和浏览器渲染检查；正式角色仍待授权 VRM 验收 |
 | 默认角色 | 天童爱丽丝的人格摘要进入 LLM system prompt；角色规则与不可信用户记忆分区 | Provider 单元测试、角色资料人工复核 |
 | 文字对话 | mock/OpenAI-compatible SSE、单活动 turn、generation + cancellation；API key 可选以支持 Ollama/LM Studio | Rust 单元测试、前端状态测试 |
 | 本地数据 | SQLite migration、会话恢复、消息提交 | Rust repository 测试和真实数据库迁移 |

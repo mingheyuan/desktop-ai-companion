@@ -124,6 +124,7 @@ MVP 包含唤醒词和持续监听，并满足以下边界：
 - [`docs/implementation/status.md`](docs/implementation/status.md)：当前已实现代码事实、验证结果与目标规格差距。
 - [`docs/tools-and-vision.md`](docs/tools-and-vision.md)：工具调用、闹钟/提醒、屏幕观察、独立多模态 Provider 与真实参考项目。
 - [`docs/character/aris.md`](docs/character/aris.md)：初始角色原型资料与实现边界。
+- [`docs/character/aris-model-research.md`](docs/character/aris-model-research.md)：高质量爱丽丝模型调研、授权边界和 VRM 接入决策。
 - [`docs/references.md`](docs/references.md)：固定到 commit 的代码级参考仓库、具体文件和采用边界。
 
 ## MVP 范围（当前确认）

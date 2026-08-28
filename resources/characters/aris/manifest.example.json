@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "aris-authorized-local",
+  "display_name": "爱丽丝",
+  "model": "model/avatar.vrm",
+  "license": {
+    "name": "待填写",
+    "source": "待填写",
+    "redistribution_allowed": false,
+    "attribution": "待填写",
+    "notes": "必须确认本地桌面应用使用、VRM 转换和分发范围"
+  },
+  "camera": {
+    "target_height": 1.25,
+    "distance": 2.2
+  },
+  "scale": 1.0,
+  "expressions": {
+    "neutral": "neutral",
+    "happy": "happy",
+    "sad": "sad",
+    "surprised": "surprised",
+    "blink": "blink",
+    "mouth_open": "aa"
+  },
+  "animations": {
+    "idle": "animations/idle.vrma",
+    "listening": "animations/listening.vrma",
+    "thinking": "animations/thinking.vrma",
+    "speaking": "animations/speaking.vrma",
+    "sleeping": "animations/sleeping.vrma"
+  },
+  "hit_areas": ["head", "body"]
+}
