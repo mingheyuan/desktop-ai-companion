@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppSnapshot, CharacterSettings, EventEnvelope, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload } from "../contracts";
+import type { AppSnapshot, CharacterSettings, EventEnvelope, MemoryItem, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload } from "../contracts";
 
 export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
@@ -30,6 +30,7 @@ export interface UpdateProviderInput {
   model: string;
   api_key?: string;
   clear_api_key: boolean;
+  allow_memory_context: boolean;
   expected_revision: number;
 }
 
@@ -59,6 +60,39 @@ export async function importCharacterVrm(): Promise<CharacterSettings | null> {
 export function characterModelUrl(settings: CharacterSettings): string | undefined {
   if (!settings.model_path || !isTauri()) return undefined;
   return convertFileSrc(settings.model_path);
+}
+
+export async function searchMemories(query = "", limit = 20): Promise<MemoryItem[]> {
+  return invoke<MemoryItem[]>("memory_search", {
+    request: { request_id: crypto.randomUUID(), query, limit },
+  });
+}
+
+export async function createMemory(content: string): Promise<MemoryItem> {
+  return invoke<MemoryItem>("memory_create", {
+    request: { request_id: crypto.randomUUID(), content },
+  });
+}
+
+export async function updateMemory(memory: MemoryItem, content: string): Promise<MemoryItem> {
+  return invoke<MemoryItem>("memory_update", {
+    request: {
+      request_id: crypto.randomUUID(),
+      id: memory.id,
+      content,
+      expected_version: memory.version,
+    },
+  });
+}
+
+export async function deleteMemory(memory: MemoryItem): Promise<void> {
+  await invoke("memory_delete", {
+    request: {
+      request_id: crypto.randomUUID(),
+      id: memory.id,
+      expected_version: memory.version,
+    },
+  });
 }
 
 export interface CoreEventHandlers {

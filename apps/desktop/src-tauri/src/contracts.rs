@@ -96,6 +96,8 @@ pub struct ProviderSettings {
     pub endpoint: String,
     pub model: String,
     pub has_api_key: bool,
+    #[serde(default)]
+    pub allow_memory_context: bool,
     pub revision: u64,
 }
 
@@ -106,6 +108,7 @@ impl Default for ProviderSettings {
             endpoint: "https://api.openai.com/v1".into(),
             model: "gpt-4.1-mini".into(),
             has_api_key: std::env::var("DESKTOP_AI_LLM_API_KEY").is_ok(),
+            allow_memory_context: false,
             revision: 0,
         }
     }
@@ -138,6 +141,19 @@ pub struct CharacterSettings {
     pub model_file_name: Option<String>,
     pub model_size_bytes: Option<u64>,
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryItem {
+    pub id: String,
+    pub scope: String,
+    pub character_id: Option<String>,
+    pub kind: String,
+    pub content: String,
+    pub importance: f64,
+    pub version: u64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
 }
 
 impl Default for CharacterSettings {
@@ -249,6 +265,8 @@ pub struct UpdateProviderRequest {
     pub api_key: Option<String>,
     #[serde(default)]
     pub clear_api_key: bool,
+    #[serde(default)]
+    pub allow_memory_context: bool,
     pub expected_revision: u64,
 }
 
@@ -259,4 +277,38 @@ pub struct UpdatePetSettingsRequest {
     pub click_through: bool,
     pub scale: f64,
     pub expected_revision: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchMemoriesRequest {
+    pub request_id: String,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default = "default_memory_limit")]
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateMemoryRequest {
+    pub request_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateMemoryRequest {
+    pub request_id: String,
+    pub id: String,
+    pub content: String,
+    pub expected_version: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeleteMemoryRequest {
+    pub request_id: String,
+    pub id: String,
+    pub expected_version: u64,
+}
+
+fn default_memory_limit() -> usize {
+    20
 }

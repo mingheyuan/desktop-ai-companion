@@ -5,8 +5,9 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     contracts::{
-        AppError, AppSnapshot, CancelTurnRequest, CharacterSettings, PetSettings, ProviderSettings,
-        SubmitTextRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
+        AppError, AppSnapshot, CancelTurnRequest, CharacterSettings, CreateMemoryRequest,
+        DeleteMemoryRequest, MemoryItem, PetSettings, ProviderSettings, SearchMemoriesRequest,
+        SubmitTextRequest, UpdateMemoryRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
     },
     core::AppCore,
     desktop,
@@ -74,6 +75,7 @@ pub async fn settings_update_provider(
                 endpoint: request.endpoint,
                 model: request.model,
                 has_api_key: false,
+                allow_memory_context: request.allow_memory_context,
                 revision: request.expected_revision,
             },
             request.expected_revision,
@@ -138,4 +140,53 @@ pub async fn character_import_vrm(
         )
     })?;
     state.0.import_character_vrm(&app, path).await.map(Some)
+}
+
+#[tauri::command]
+pub async fn memory_search(
+    state: State<'_, CoreState>,
+    request: SearchMemoriesRequest,
+) -> Result<Vec<MemoryItem>, AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.search_memories(&request.query, request.limit).await
+}
+
+#[tauri::command]
+pub fn memory_create(
+    state: State<'_, CoreState>,
+    request: CreateMemoryRequest,
+) -> Result<MemoryItem, AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.create_memory(&request.content)
+}
+
+#[tauri::command]
+pub fn memory_update(
+    state: State<'_, CoreState>,
+    request: UpdateMemoryRequest,
+) -> Result<MemoryItem, AppError> {
+    validate_request_id(&request.request_id)?;
+    state
+        .0
+        .update_memory(&request.id, &request.content, request.expected_version)
+}
+
+#[tauri::command]
+pub fn memory_delete(
+    state: State<'_, CoreState>,
+    request: DeleteMemoryRequest,
+) -> Result<(), AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.delete_memory(&request.id, request.expected_version)
+}
+
+fn validate_request_id(request_id: &str) -> Result<(), AppError> {
+    if request_id.trim().is_empty() {
+        return Err(AppError::new(
+            "invalid_request",
+            "request_id 不能为空。",
+            false,
+        ));
+    }
+    Ok(())
 }

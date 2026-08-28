@@ -2,12 +2,14 @@ import { FormEvent, useState } from "react";
 import { cancelTurn, importCharacterVrm, isTauri, submitText, updatePetSettings } from "../lib/tauri";
 import { useAppStore } from "../stores/app";
 import { ProviderSettingsDialog } from "./ProviderSettingsDialog";
+import { MemoryPanel } from "./MemoryPanel";
 
 export function ChatPanel() {
   const { snapshot, streamingText, booting, setProvider, setPet, setCharacter } = useAppStore();
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [petUpdating, setPetUpdating] = useState(false);
   const [petError, setPetError] = useState("");
   const [importingVrm, setImportingVrm] = useState(false);
@@ -80,6 +82,7 @@ export function ChatPanel() {
         <div className="header-actions">
           <span className="provider-badge">{snapshot.provider.provider === "mock" ? "MOCK" : snapshot.provider.model}</span>
           <div className={`status-pill state-${snapshot.avatar_state}`}>{snapshot.avatar_state}</div>
+          <button className="header-text-button" type="button" onClick={() => setMemoryOpen(true)}>记忆</button>
           <button className="icon-button" type="button" onClick={() => setSettingsOpen(true)} aria-label="打开设置">⚙</button>
         </div>
       </header>
@@ -167,6 +170,7 @@ export function ChatPanel() {
           onSaved={setProvider}
         />
       )}
+      {memoryOpen && <MemoryPanel onClose={() => setMemoryOpen(false)} />}
     </main>
   );
 }

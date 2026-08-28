@@ -28,7 +28,20 @@ export interface ProviderSettings {
   endpoint: string;
   model: string;
   has_api_key: boolean;
+  allow_memory_context: boolean;
   revision: number;
+}
+
+export interface MemoryItem {
+  id: string;
+  scope: "user" | "relationship";
+  character_id: string | null;
+  kind: string;
+  content: string;
+  importance: number;
+  version: number;
+  created_at_ms: number;
+  updated_at_ms: number;
 }
 
 export interface PetSettings {

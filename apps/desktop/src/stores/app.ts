@@ -18,6 +18,7 @@ const emptySnapshot: AppSnapshot = {
     endpoint: "",
     model: "mock-aris",
     has_api_key: false,
+    allow_memory_context: false,
     revision: 0,
   },
   pet: {

@@ -208,6 +208,7 @@ score = 0.45 * lexical_relevance
 - restricted 记录只在用户当前问题明确涉及且设置允许时注入。
 - 每次使用只异步更新 `last_used_at_ms`，不能因为一次检索改变记忆正文。
 - 记忆以结构化、带来源标签的上下文块注入，不能伪装为 system 指令。
+- OpenAI-compatible Provider 默认不接收长期记忆。只有用户在 Provider 设置中明确开启“发送匹配记忆”后，Context Builder 才检索并注入最多 6 条、总计最多 2400 字符的记忆；Mock Provider 仅在本机用于检索验收。
 
 ## 7. 消息提交与崩溃恢复
 

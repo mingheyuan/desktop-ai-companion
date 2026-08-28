@@ -46,6 +46,10 @@ pub fn run() {
             commands::pet_open_panel,
             commands::pet_update_settings,
             commands::character_import_vrm,
+            commands::memory_search,
+            commands::memory_create,
+            commands::memory_update,
+            commands::memory_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running desktop AI companion");

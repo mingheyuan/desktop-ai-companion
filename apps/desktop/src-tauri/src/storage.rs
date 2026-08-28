@@ -1,10 +1,12 @@
 use std::{path::Path, sync::Mutex};
 
 use rusqlite::{params, Connection, OptionalExtension};
+use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::contracts::{
-    CharacterSettings, ChatMessage, MessageRole, MessageStatus, PetSettings, ProviderSettings,
+    CharacterSettings, ChatMessage, MemoryItem, MessageRole, MessageStatus, PetSettings,
+    ProviderSettings,
 };
 
 pub struct Storage {
@@ -50,15 +52,12 @@ impl Storage {
             [],
             |row| row.get(0),
         )?;
-        if current_version > 1 {
+        if current_version > 2 {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        if current_version == 1 {
-            return Ok(());
-        }
-
-        let transaction = connection.transaction()?;
-        transaction.execute_batch(
+        if current_version == 0 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_migrations (
                version INTEGER PRIMARY KEY,
                name TEXT NOT NULL,
@@ -155,11 +154,31 @@ impl Storage {
                updated_at_ms INTEGER NOT NULL
              );",
         )?;
-        transaction.execute(
-            "INSERT INTO schema_migrations(version, name, applied_at_ms) VALUES(1, 'initial_schema', CAST(strftime('%s','now') AS INTEGER) * 1000)",
-            [],
-        )?;
-        transaction.commit()?;
+            transaction.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at_ms) VALUES(1, 'initial_schema', CAST(strftime('%s','now') AS INTEGER) * 1000)",
+                [],
+            )?;
+            transaction.commit()?;
+        }
+        if current_version < 2 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_memory_candidates_status
+                   ON memory_candidates(status, created_at_ms);
+                 CREATE TABLE IF NOT EXISTS memory_audit (
+                   id TEXT PRIMARY KEY,
+                   memory_id TEXT NOT NULL,
+                   action TEXT NOT NULL CHECK(action IN ('confirmed','updated','deleted')),
+                   occurred_at_ms INTEGER NOT NULL
+                 );
+                 INSERT INTO memory_fts(memory_fts) VALUES('rebuild');",
+            )?;
+            transaction.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at_ms) VALUES(2, 'memory_repository', CAST(strftime('%s','now') AS INTEGER) * 1000)",
+                [],
+            )?;
+            transaction.commit()?;
+        }
         Ok(())
     }
 
@@ -439,6 +458,287 @@ impl Storage {
         )?;
         Ok(())
     }
+
+    pub fn create_user_memory(
+        &self,
+        content: &str,
+        now_ms: i64,
+    ) -> Result<MemoryItem, rusqlite::Error> {
+        let mut connection = self.connection.lock().expect("storage mutex poisoned");
+        let transaction = connection.transaction()?;
+        let item = MemoryItem {
+            id: Uuid::now_v7().to_string(),
+            scope: "user".into(),
+            character_id: None,
+            kind: "note".into(),
+            content: content.to_owned(),
+            importance: 0.7,
+            version: 1,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+        };
+        let normalized_key = normalize_memory_text(content);
+        transaction.execute(
+            "INSERT INTO memories(id, scope, character_id, kind, content, normalized_key, importance, confidence, sensitivity, version, created_at_ms, updated_at_ms)
+             VALUES(?1, 'user', NULL, 'note', ?2, ?3, ?4, 1, 'normal', 1, ?5, ?5)",
+            params![item.id, item.content, normalized_key, item.importance, now_ms],
+        )?;
+        let rowid = transaction.last_insert_rowid();
+        transaction.execute(
+            "INSERT INTO memory_fts(rowid, content, normalized_key) VALUES(?1, ?2, ?3)",
+            params![rowid, item.content, normalized_key],
+        )?;
+        transaction.execute(
+            "INSERT INTO memory_audit(id, memory_id, action, occurred_at_ms) VALUES(?1, ?2, 'confirmed', ?3)",
+            params![Uuid::now_v7().to_string(), item.id, now_ms],
+        )?;
+        transaction.commit()?;
+        Ok(item)
+    }
+
+    pub fn update_memory(
+        &self,
+        id: &str,
+        content: &str,
+        expected_version: u64,
+        now_ms: i64,
+    ) -> Result<Option<MemoryItem>, rusqlite::Error> {
+        let mut connection = self.connection.lock().expect("storage mutex poisoned");
+        let transaction = connection.transaction()?;
+        let previous = transaction
+            .query_row(
+                "SELECT rowid, scope, character_id, kind, content, normalized_key, importance, version, created_at_ms
+                 FROM memories WHERE id=?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, f64>(6)?,
+                        row.get::<_, u64>(7)?,
+                        row.get::<_, i64>(8)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            rowid,
+            scope,
+            character_id,
+            kind,
+            old_content,
+            old_key,
+            importance,
+            version,
+            created_at_ms,
+        )) = previous
+        else {
+            return Ok(None);
+        };
+        if version != expected_version {
+            return Ok(None);
+        }
+        let normalized_key = normalize_memory_text(content);
+        transaction.execute(
+            "INSERT INTO memory_fts(memory_fts, rowid, content, normalized_key) VALUES('delete', ?1, ?2, ?3)",
+            params![rowid, old_content, old_key],
+        )?;
+        transaction.execute(
+            "UPDATE memories SET content=?1, normalized_key=?2, version=version+1, updated_at_ms=?3 WHERE id=?4 AND version=?5",
+            params![content, normalized_key, now_ms, id, expected_version],
+        )?;
+        transaction.execute(
+            "INSERT INTO memory_fts(rowid, content, normalized_key) VALUES(?1, ?2, ?3)",
+            params![rowid, content, normalized_key],
+        )?;
+        transaction.execute(
+            "INSERT INTO memory_audit(id, memory_id, action, occurred_at_ms) VALUES(?1, ?2, 'updated', ?3)",
+            params![Uuid::now_v7().to_string(), id, now_ms],
+        )?;
+        transaction.commit()?;
+        Ok(Some(MemoryItem {
+            id: id.to_owned(),
+            scope,
+            character_id,
+            kind,
+            content: content.to_owned(),
+            importance,
+            version: version + 1,
+            created_at_ms,
+            updated_at_ms: now_ms,
+        }))
+    }
+
+    pub fn delete_memory(
+        &self,
+        id: &str,
+        expected_version: u64,
+        now_ms: i64,
+    ) -> Result<bool, rusqlite::Error> {
+        let mut connection = self.connection.lock().expect("storage mutex poisoned");
+        let transaction = connection.transaction()?;
+        let previous = transaction
+            .query_row(
+                "SELECT rowid, content, normalized_key, version FROM memories WHERE id=?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, u64>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((rowid, content, normalized_key, version)) = previous else {
+            return Ok(false);
+        };
+        if version != expected_version {
+            return Ok(false);
+        }
+        transaction.execute(
+            "INSERT INTO memory_fts(memory_fts, rowid, content, normalized_key) VALUES('delete', ?1, ?2, ?3)",
+            params![rowid, content, normalized_key],
+        )?;
+        transaction.execute(
+            "DELETE FROM memories WHERE id=?1 AND version=?2",
+            params![id, expected_version],
+        )?;
+        transaction.execute(
+            "INSERT INTO memory_audit(id, memory_id, action, occurred_at_ms) VALUES(?1, ?2, 'deleted', ?3)",
+            params![Uuid::now_v7().to_string(), id, now_ms],
+        )?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub fn search_memories(
+        &self,
+        query: &str,
+        character_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let limit = limit.clamp(1, 20) as i64;
+        let normalized = normalize_memory_text(query);
+        let fts = memory_fts_query(&normalized);
+        let mut items = if normalized.is_empty() {
+            let mut statement = connection.prepare(
+                "SELECT id, scope, character_id, kind, content, importance, version, created_at_ms, updated_at_ms
+                 FROM memories m
+                 WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
+                   AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+                 ORDER BY m.updated_at_ms DESC LIMIT ?2",
+            )?;
+            let rows = statement.query_map(params![character_id, limit], map_memory_row)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        } else if let Some(fts) = fts {
+            let mut statement = connection.prepare(
+                "SELECT m.id, m.scope, m.character_id, m.kind, m.content, m.importance, m.version, m.created_at_ms, m.updated_at_ms
+                 FROM memory_fts JOIN memories m ON m.rowid=memory_fts.rowid
+                 WHERE memory_fts MATCH ?1
+                   AND (m.scope='user' OR (m.scope='relationship' AND m.character_id=?2))
+                   AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+                 ORDER BY bm25(memory_fts), m.importance DESC, m.updated_at_ms DESC LIMIT ?3",
+            )?;
+            let rows = statement.query_map(params![fts, character_id, limit], map_memory_row)?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        } else {
+            let prefix = format!("{normalized}%");
+            let contains = format!("%{normalized}%");
+            let mut statement = connection.prepare(
+                "SELECT id, scope, character_id, kind, content, importance, version, created_at_ms, updated_at_ms
+                 FROM memories m
+                 WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
+                   AND (m.normalized_key LIKE ?2 ESCAPE '\\' OR lower(m.content) LIKE ?3 ESCAPE '\\')
+                   AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+                 ORDER BY m.importance DESC, m.updated_at_ms DESC LIMIT ?4",
+            )?;
+            let rows = statement.query_map(
+                params![character_id, prefix, contains, limit],
+                map_memory_row,
+            )?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        items.truncate(limit as usize);
+        Ok(items)
+    }
+
+    pub fn mark_memories_used(&self, ids: &[String], now_ms: i64) -> Result<(), rusqlite::Error> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.connection.lock().expect("storage mutex poisoned");
+        let transaction = connection.transaction()?;
+        for id in ids {
+            transaction.execute(
+                "UPDATE memories SET last_used_at_ms=?1 WHERE id=?2",
+                params![now_ms, id],
+            )?;
+        }
+        transaction.commit()
+    }
+}
+
+fn map_memory_row(row: &rusqlite::Row<'_>) -> Result<MemoryItem, rusqlite::Error> {
+    Ok(MemoryItem {
+        id: row.get(0)?,
+        scope: row.get(1)?,
+        character_id: row.get(2)?,
+        kind: row.get(3)?,
+        content: row.get(4)?,
+        importance: row.get(5)?,
+        version: row.get(6)?,
+        created_at_ms: row.get(7)?,
+        updated_at_ms: row.get(8)?,
+    })
+}
+
+fn normalize_memory_text(value: &str) -> String {
+    value
+        .nfc()
+        .flat_map(char::to_lowercase)
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn memory_fts_query(value: &str) -> Option<String> {
+    let mut terms = Vec::<String>::new();
+    for segment in value.split(|character: char| !character.is_alphanumeric()) {
+        let characters = segment.chars().collect::<Vec<_>>();
+        if characters.len() < 3 {
+            continue;
+        }
+        if characters.iter().all(char::is_ascii) {
+            terms.push(segment.to_owned());
+        } else {
+            for window in characters.windows(3) {
+                terms.push(window.iter().collect());
+                if terms.len() >= 12 {
+                    break;
+                }
+            }
+        }
+        if terms.len() >= 12 {
+            break;
+        }
+    }
+    terms.sort();
+    terms.dedup();
+    (!terms.is_empty()).then(|| {
+        terms
+            .into_iter()
+            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" OR ")
+    })
 }
 
 #[cfg(test)]
@@ -499,5 +799,42 @@ mod tests {
         };
         storage.save_character_settings(&settings, 10).unwrap();
         assert_eq!(storage.load_character_settings().unwrap(), settings);
+    }
+
+    #[test]
+    fn memory_fts_update_and_delete_are_transactional() {
+        let storage = Storage::open_in_memory().unwrap();
+        let created = storage.create_user_memory("我喜欢蓝色", 10).unwrap();
+        let found = storage
+            .search_memories("我喜欢什么颜色", "aris", 8)
+            .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, created.id);
+
+        let updated = storage
+            .update_memory(&created.id, "我喜欢绿色", created.version, 11)
+            .unwrap()
+            .unwrap();
+        assert!(storage
+            .search_memories("欢蓝色", "aris", 8)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            storage.search_memories("欢绿色", "aris", 8).unwrap()[0].version,
+            2
+        );
+        assert!(storage
+            .delete_memory(&updated.id, updated.version, 12)
+            .unwrap());
+        assert!(storage
+            .search_memories("欢绿色", "aris", 8)
+            .unwrap()
+            .is_empty());
+
+        let connection = storage.connection.lock().unwrap();
+        let audit_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM memory_audit", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(audit_count, 3);
     }
 }

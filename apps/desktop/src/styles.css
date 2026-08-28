@@ -38,6 +38,7 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .header-actions { display: flex; align-items: center; gap: 10px; }
 .provider-badge { max-width: 180px; overflow: hidden; text-overflow: ellipsis; padding: 6px 9px; border-radius: 8px; background: rgba(74, 102, 164, .18); color: #859ed3; font-size: 10px; letter-spacing: .08em; white-space: nowrap; }
 .icon-button { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid rgba(130, 164, 230, .22); border-radius: 10px; background: rgba(27, 40, 72, .82); cursor: pointer; }
+.header-text-button { border: 1px solid rgba(130, 164, 230, .22); border-radius: 10px; padding: 8px 11px; color: #a9bde9; background: rgba(27, 40, 72, .82); cursor: pointer; font-size: 11px; }
 
 .pet-controls { display: flex; align-items: center; gap: 8px; padding: 10px 32px; border-bottom: 1px solid rgba(153, 187, 255, .09); background: rgba(7, 12, 27, .38); }
 .pet-controls button, .pet-controls select { border: 1px solid rgba(130, 164, 230, .2); border-radius: 9px; padding: 7px 10px; color: #a9bde9; background: rgba(27, 40, 72, .68); cursor: pointer; }
@@ -84,6 +85,24 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .settings-dialog footer { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
 .settings-dialog footer button { border: 0; border-radius: 10px; padding: 9px 17px; background: #3979dd; cursor: pointer; }
 .settings-dialog footer button.secondary { background: #283858; }
+
+.memory-dialog { display: grid; grid-template-rows: auto auto auto auto auto minmax(0, 1fr); width: min(680px, 100%); max-height: min(760px, calc(100vh - 48px)); border: 1px solid rgba(127, 165, 239, .25); border-radius: 20px; padding: 22px; background: linear-gradient(155deg, #172342, #0e152c); box-shadow: 0 24px 90px rgba(0, 0, 0, .48); }
+.memory-dialog > header { display: flex; align-items: start; justify-content: space-between; }
+.memory-dialog h2 { margin: 0; }
+.memory-privacy { margin: 14px 0; color: #7f92bc; font-size: 11px; line-height: 1.5; }
+.memory-search, .memory-create textarea, .memory-card textarea { width: 100%; border: 1px solid rgba(129, 161, 224, .24); border-radius: 10px; outline: none; padding: 10px 12px; color: #eef4ff; background: #0d152c; resize: vertical; }
+.memory-create { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 9px; margin: 12px 0; }
+.memory-create button, .memory-card button { border: 0; border-radius: 9px; padding: 8px 12px; color: #eaf2ff; background: #3979dd; cursor: pointer; }
+.memory-create button:disabled, .memory-card button:disabled { cursor: default; opacity: .5; }
+.memory-list { min-height: 0; overflow-y: auto; margin-top: 8px; padding-right: 4px; }
+.memory-empty { color: #7386af; text-align: center; }
+.memory-card { margin-bottom: 10px; border: 1px solid rgba(127, 164, 238, .14); border-radius: 13px; padding: 12px; background: rgba(20, 31, 61, .7); }
+.memory-card > p { margin: 0; color: #dbe6ff; line-height: 1.6; white-space: pre-wrap; }
+.memory-card footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+.memory-card footer span { color: #657ba9; font-size: 10px; }
+.memory-card footer div { display: flex; gap: 7px; }
+.memory-card button { padding: 6px 10px; background: #283858; font-size: 11px; }
+.memory-card button.danger { color: #ff9db1; background: rgba(119, 28, 55, .35); }
 
 .pet-shell { position: relative; width: 100vw; height: 100vh; background: transparent; user-select: none; }
 .pet-drag-region { position: absolute; inset: 0; z-index: 0; border: 0; background: transparent; }

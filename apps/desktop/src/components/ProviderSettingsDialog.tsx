@@ -14,6 +14,7 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
   const [model, setModel] = useState(initial.model);
   const [apiKey, setApiKey] = useState("");
   const [clearApiKey, setClearApiKey] = useState(false);
+  const [allowMemoryContext, setAllowMemoryContext] = useState(initial.allow_memory_context);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -28,6 +29,7 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
         model: model.trim(),
         api_key: apiKey.trim() || undefined,
         clear_api_key: clearApiKey,
+        allow_memory_context: allowMemoryContext,
         expected_revision: initial.revision,
       });
       onSaved(updated);
@@ -90,6 +92,11 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
               删除当前 Keychain API key
             </label>
             <p className="settings-hint">API key 不进入 SQLite、前端持久存储或日志。环境变量只作为开发期回退。</p>
+            <label className="check-row">
+              <input type="checkbox" checked={allowMemoryContext} onChange={(event) => setAllowMemoryContext(event.target.checked)} />
+              允许把本轮匹配到的已保存记忆发送给当前 LLM Provider
+            </label>
+            <p className="settings-hint">默认关闭。开启后，相关记忆正文会随模型请求发送到上方配置的 endpoint；未匹配的记忆不会发送。</p>
           </>
         )}
 

@@ -17,8 +17,8 @@ use uuid::Uuid;
 use crate::{
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, EventEnvelope,
-        GenerationState, InputState, ListeningMode, PetSettings, PlaybackState, ProviderSettings,
-        TextDeltaPayload, TurnEndedPayload, TurnState,
+        GenerationState, InputState, ListeningMode, MemoryItem, PetSettings, PlaybackState,
+        ProviderSettings, TextDeltaPayload, TurnEndedPayload, TurnState,
     },
     desktop::apply_pet_window_settings,
     provider::{create_provider, LlmEvent, LlmRequest},
@@ -326,6 +326,34 @@ impl AppCore {
             }
         };
         let settings = self.provider.read().await.clone();
+        let memory_context = if settings.provider == "mock" || settings.allow_memory_context {
+            let character_id = self.character.read().await.character_id.clone();
+            let memories = match self.storage.search_memories(&text, &character_id, 6) {
+                Ok(memories) => memories,
+                Err(error) => {
+                    self.fail_turn(
+                        &app,
+                        &turn_id,
+                        generation,
+                        "storage_error",
+                        storage_error(error),
+                        "",
+                    )
+                    .await;
+                    return;
+                }
+            };
+            let _ = self.storage.mark_memories_used(
+                &memories
+                    .iter()
+                    .map(|memory| memory.id.clone())
+                    .collect::<Vec<_>>(),
+                now_ms(),
+            );
+            memory_context_with_budget(memories, 2_400)
+        } else {
+            Vec::new()
+        };
         let api_key = match self.resolve_llm_api_key().await {
             Ok(value) => value,
             Err(error) => {
@@ -355,6 +383,7 @@ impl AppCore {
                 LlmRequest {
                     user_text: text,
                     history,
+                    memory_context,
                 },
                 cancel.clone(),
             ),
@@ -711,6 +740,52 @@ impl AppCore {
         Ok(updated)
     }
 
+    pub async fn search_memories(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryItem>, AppError> {
+        let character_id = self.character.read().await.character_id.clone();
+        self.storage
+            .search_memories(query, &character_id, limit)
+            .map_err(storage_error)
+    }
+
+    pub fn create_memory(&self, content: &str) -> Result<MemoryItem, AppError> {
+        let content = validate_memory_content(content)?;
+        self.storage
+            .create_user_memory(&content, now_ms())
+            .map_err(storage_error)
+    }
+
+    pub fn update_memory(
+        &self,
+        id: &str,
+        content: &str,
+        expected_version: u64,
+    ) -> Result<MemoryItem, AppError> {
+        let content = validate_memory_content(content)?;
+        self.storage
+            .update_memory(id, &content, expected_version, now_ms())
+            .map_err(storage_error)?
+            .ok_or_else(|| AppError::new("conflict", "记忆已被修改或删除，请刷新后重试。", true))
+    }
+
+    pub fn delete_memory(&self, id: &str, expected_version: u64) -> Result<(), AppError> {
+        if !self
+            .storage
+            .delete_memory(id, expected_version, now_ms())
+            .map_err(storage_error)?
+        {
+            return Err(AppError::new(
+                "conflict",
+                "记忆已被修改或删除，请刷新后重试。",
+                true,
+            ));
+        }
+        Ok(())
+    }
+
     async fn resolve_llm_api_key(&self) -> Result<Option<String>, AppError> {
         let secrets = self.secrets.clone();
         tokio::task::spawn_blocking(move || secrets.resolve_llm_api_key())
@@ -868,6 +943,38 @@ fn validate_pet_settings(value: &PetSettings) -> Result<(), AppError> {
         ));
     }
     Ok(())
+}
+
+fn validate_memory_content(value: &str) -> Result<String, AppError> {
+    let value = value.trim();
+    let length = value.chars().count();
+    if length == 0 || length > 1_000 {
+        return Err(AppError::new(
+            "invalid_request",
+            "记忆正文必须是 1 到 1000 个字符。",
+            false,
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn memory_context_with_budget(memories: Vec<MemoryItem>, budget: usize) -> Vec<String> {
+    let mut remaining = budget;
+    memories
+        .into_iter()
+        .filter_map(|memory| {
+            if remaining == 0 {
+                return None;
+            }
+            let content = memory
+                .content
+                .chars()
+                .take(remaining.min(600))
+                .collect::<String>();
+            remaining = remaining.saturating_sub(content.chars().count());
+            (!content.is_empty()).then_some(content)
+        })
+        .collect()
 }
 
 const MAX_VRM_BYTES: u64 = 200 * 1024 * 1024;
@@ -1033,6 +1140,7 @@ mod tests {
             endpoint: "https://api.example.com/v1".into(),
             model: "model".into(),
             has_api_key: false,
+            allow_memory_context: false,
             revision: 0,
         };
         assert!(validate_provider_settings(&valid).is_ok());
