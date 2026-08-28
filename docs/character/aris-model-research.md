@@ -72,6 +72,14 @@
 
 因此目前只把它用于近景比例、发束体积、制服结构和材质质感的视觉 benchmark，不把页面中的模型文件或贴图复制到项目。CC BY 的署名和二创授权也不能替代《蔚蓝档案》角色权利确认。
 
+### F. CC0 VRoid 样例：高细节底座研究
+
+来源：[OpenGameArt - VRoid Studio CC0 models](https://opengameart.org/content/vroid-studio-cc0-models)
+
+页面明确写明指定样例由 VRoid 发布并以 CC0 提供，同时列出 `HairSample_Female.vrm`、`Base_Female.vrm` 等可下载文件。我们已在临时目录中完成本地导入和渲染验证：这类底座的脸部贴图、身体拓扑和原生表情形态明显比纯程序化几何更完整，但它们不是天童爱丽丝，不能直接作为最终角色。
+
+仓库提供 `scripts/character/build_aris_from_cc0_vroid.py` 作为可重复研究脚本：它不下载模型，接收使用者自行取得的 CC0 VRM，保留底座脸部/身体细节，重做深蓝双马尾、刘海、制服层、光环和掌机等原创部件，然后输出本地 VRM。候选资产仍默认被 Git 忽略，采用前必须完成近景、动作、表情和授权回归。
+
 ## 接入流程
 
 ```text
