@@ -4,6 +4,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VRMHumanBoneName, VRMLoaderPlugin, VRMUtils, type VRM } from "@pixiv/three-vrm";
 import type { AvatarSemanticState } from "../contracts";
 import { createArisPreview } from "./arisPreview";
+import { createArisBlockPreview } from "./arisBlockPreview";
 
 interface VrmCanvasProps {
   state: AvatarSemanticState;
@@ -34,10 +35,11 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
     const host = hostRef.current;
     if (!host) return;
 
+    const useBlockPreview = new URLSearchParams(window.location.search).get("avatar") === "block";
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
     camera.position.set(0, 0.95, 3.45);
-    camera.lookAt(0, 0.9, 0);
+    camera.lookAt(0, useBlockPreview ? 0.72 : 0.9, 0);
 
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -57,7 +59,7 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
     rim.position.set(-1.2, 1.8, 1.4);
     scene.add(rim);
 
-    const preview = createArisPreview();
+    const preview = useBlockPreview ? createArisBlockPreview() : createArisPreview();
     const fallback = preview.group;
     scene.add(fallback);
 
