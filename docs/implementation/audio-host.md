@@ -15,7 +15,7 @@
 - Rust 侧 turn/input/playback 状态投影、Tauri 命令、UI 控件和 `Cmd/Ctrl + Shift + M` PTT 快捷键；
 - 不请求语音权限的真实 `.app` 启动、握手和退出测试。
 
-尚未落地的目标项包括：二进制 PCM media socket、Sherpa KWS、独立 VAD、pre-roll、真实 RMS 口型、设备切换、心跳、安静时段，以及 30 分钟/睡眠恢复实机验收。当前已对 socket 断线实现仅在用户仍希望持续监听时触发的三次退避重启，但还不能用 heartbeat 识别“进程存活、内部音频线程失效”的半开故障。当前 fallback 的 endpoint 是 1.1 秒静音计时；口型 level 只表示发音区间活动而非真实响度；PTT 在设备端识别不可用时可能使用 Apple Speech 系统在线服务，UI 会根据 `capture.started.on_device` 显示“本机识别”或“系统语音服务”。
+尚未落地的目标项包括：二进制 PCM media socket、Sherpa KWS、独立 VAD、pre-roll、真实 RMS 口型、设备切换、心跳、安静时段，以及 30 分钟/睡眠恢复实机验收。当前已对 socket 断线实现仅在用户仍希望持续监听时触发的三次退避重启，但还不能用 heartbeat 识别“进程存活、内部音频线程失效”的半开故障。当前 fallback 在检测到命令文本后使用 1.1 秒静音计时，只说唤醒词而没有后续命令时 5 秒返回待机；口型 level 只表示发音区间活动而非真实响度；PTT 在设备端识别不可用时可能使用 Apple Speech 系统在线服务，UI 会根据 `capture.started.on_device` 显示“本机识别”或“系统语音服务”。
 
 ## 1. 职责
 

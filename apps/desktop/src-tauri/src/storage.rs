@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Mutex};
+use std::{collections::HashSet, path::Path, sync::Mutex};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use unicode_normalization::UnicodeNormalization;
@@ -703,6 +703,9 @@ impl Storage {
             )?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
+        if !normalized.is_empty() && items.is_empty() {
+            items = lexical_memory_fallback(&connection, &normalized, character_id, limit)?;
+        }
         items.truncate(limit as usize);
         Ok(items)
     }
@@ -824,6 +827,68 @@ fn memory_fts_query(value: &str) -> Option<String> {
             .collect::<Vec<_>>()
             .join(" OR ")
     })
+}
+
+fn lexical_memory_fallback(
+    connection: &Connection,
+    query: &str,
+    character_id: &str,
+    limit: i64,
+) -> Result<Vec<MemoryItem>, rusqlite::Error> {
+    let query_terms = memory_lexical_terms(query);
+    if query_terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let minimum_overlap = if query_terms.len() >= 4 { 2 } else { 1 };
+    let mut statement = connection.prepare(
+        "SELECT id, scope, character_id, kind, content, importance, version, created_at_ms, updated_at_ms
+         FROM memories m
+         WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
+           AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+         ORDER BY m.importance DESC, m.updated_at_ms DESC
+         LIMIT 200",
+    )?;
+    let rows = statement.query_map([character_id], map_memory_row)?;
+    let mut scored = rows
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter_map(|memory| {
+            let content_terms = memory_lexical_terms(&memory.content);
+            let overlap = query_terms.intersection(&content_terms).count();
+            (overlap >= minimum_overlap).then_some((overlap, memory))
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|(left_score, left), (right_score, right)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| right.importance.total_cmp(&left.importance))
+            .then_with(|| right.updated_at_ms.cmp(&left.updated_at_ms))
+    });
+    Ok(scored
+        .into_iter()
+        .take(limit as usize)
+        .map(|(_, memory)| memory)
+        .collect())
+}
+
+fn memory_lexical_terms(value: &str) -> HashSet<String> {
+    let normalized = normalize_memory_text(value);
+    let mut terms = HashSet::new();
+    for segment in normalized.split(|character: char| !character.is_alphanumeric()) {
+        let characters = segment.chars().collect::<Vec<_>>();
+        if characters.iter().all(char::is_ascii) {
+            if characters.len() >= 2 {
+                terms.insert(segment.to_owned());
+            }
+        } else {
+            terms.extend(
+                characters
+                    .windows(2)
+                    .map(|window| window.iter().collect::<String>()),
+            );
+        }
+    }
+    terms
 }
 
 #[cfg(test)]

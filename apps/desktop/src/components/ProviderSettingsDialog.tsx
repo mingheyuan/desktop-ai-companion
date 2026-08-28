@@ -82,7 +82,7 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
                 type="password"
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                placeholder={initial.has_api_key ? "已保存在 macOS Keychain；留空则不修改" : "保存到 macOS Keychain"}
+                placeholder={initial.has_api_key ? "已保存在 macOS Keychain；留空则不修改" : "可选；Ollama/LM Studio 通常留空"}
                 autoComplete="off"
                 disabled={clearApiKey}
               />
@@ -91,7 +91,7 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
               <input type="checkbox" checked={clearApiKey} onChange={(event) => setClearApiKey(event.target.checked)} />
               删除当前 Keychain API key
             </label>
-            <p className="settings-hint">API key 不进入 SQLite、前端持久存储或日志。环境变量只作为开发期回退。</p>
+            <p className="settings-hint">API key 可选；配置后保存到 macOS Keychain，并作为 Bearer token 发送。Ollama/LM Studio 等无鉴权服务可以留空。</p>
             <label className="check-row">
               <input type="checkbox" checked={allowMemoryContext} onChange={(event) => setAllowMemoryContext(event.target.checked)} />
               允许把本轮匹配到的已保存记忆发送给当前 LLM Provider

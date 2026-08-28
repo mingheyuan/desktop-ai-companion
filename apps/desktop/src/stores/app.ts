@@ -59,9 +59,9 @@ interface AppStore {
   setPet: (pet: PetSettings) => void;
   setCharacter: (character: CharacterSettings) => void;
   setVoiceSettings: (settings: VoiceSettings) => void;
-  setMouthLevel: (level: number) => void;
+  setMouthLevel: (level: number, generation?: number) => void;
   appendDelta: (payload: TextDeltaPayload, turnId?: string) => void;
-  finishTurn: (payload: TurnEndedPayload) => void;
+  finishTurn: (payload: TurnEndedPayload, turnId?: string) => void;
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -69,14 +69,17 @@ export const useAppStore = create<AppStore>((set) => ({
   streamingText: "",
   booting: true,
   setSnapshot: (snapshot) =>
-    set((state) => ({
-      snapshot,
-      streamingText:
-        snapshot.turn_state === "active" && snapshot.active_turn_id === state.snapshot.active_turn_id
-          ? state.streamingText
-          : "",
-      booting: false,
-    })),
+    set((state) => {
+      if (snapshot.revision < state.snapshot.revision) return { booting: false };
+      return {
+        snapshot,
+        streamingText:
+          snapshot.turn_state === "active" && snapshot.active_turn_id === state.snapshot.active_turn_id
+            ? state.streamingText
+            : "",
+        booting: false,
+      };
+    }),
   setProvider: (provider) =>
     set((state) => ({ snapshot: { ...state.snapshot, provider } })),
   setPet: (pet) =>
@@ -85,12 +88,21 @@ export const useAppStore = create<AppStore>((set) => ({
     set((state) => ({ snapshot: { ...state.snapshot, character } })),
   setVoiceSettings: (voice_settings) =>
     set((state) => ({ snapshot: { ...state.snapshot, voice_settings } })),
-  setMouthLevel: (mouth_level) =>
-    set((state) => ({ snapshot: { ...state.snapshot, mouth_level } })),
+  setMouthLevel: (mouth_level, generation) =>
+    set((state) => {
+      if (generation !== undefined && generation !== state.snapshot.generation) return state;
+      return { snapshot: { ...state.snapshot, mouth_level } };
+    }),
   appendDelta: ({ text }, turnId) =>
     set((state) => {
       if (turnId && turnId !== state.snapshot.active_turn_id) return state;
       return { streamingText: state.streamingText + text };
     }),
-  finishTurn: () => set({ streamingText: "" }),
+  finishTurn: (_payload, turnId) =>
+    set((state) => {
+      if (turnId && state.snapshot.active_turn_id && turnId !== state.snapshot.active_turn_id) {
+        return state;
+      }
+      return { streamingText: "" };
+    }),
 }));

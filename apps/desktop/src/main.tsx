@@ -30,15 +30,28 @@ function Runtime() {
     }
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void getSnapshot().then((snapshot) => !disposed && store.setSnapshot(snapshot));
-    void listenToCoreEvents({
-      snapshot: (event) => store.setSnapshot(event.payload),
-      delta: (event) => store.appendDelta(event.payload, event.turn_id),
-      ended: (event) => store.finishTurn(event.payload),
-      mouthLevel: (event) => store.setMouthLevel(event.payload.level),
-    }).then((fn) => {
-      if (disposed) fn(); else unlisten = fn;
-    });
+    void (async () => {
+      try {
+        const fn = await listenToCoreEvents({
+          snapshot: (event) => store.setSnapshot(event.payload),
+          delta: (event) => store.appendDelta(event.payload, event.turn_id),
+          ended: (event) => store.finishTurn(event.payload, event.turn_id),
+          mouthLevel: (event) => store.setMouthLevel(event.payload.level, event.generation),
+        });
+        if (disposed) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+        const snapshot = await getSnapshot();
+        if (!disposed) store.setSnapshot(snapshot);
+      } catch {
+        if (!disposed) {
+          const snapshot = await getSnapshot().catch(() => undefined);
+          if (snapshot && !disposed) store.setSnapshot(snapshot);
+        }
+      }
+    })();
     return () => {
       disposed = true;
       unlisten?.();

@@ -257,6 +257,7 @@ private final class VoiceController {
             if mode == .wake && !wakeDetected, latestText.localizedCaseInsensitiveContains(wakeWord) {
                 wakeDetected = true
                 emit(["type": "wake.detected", "capture_id": captureID, "generation": generation, "wake_word": wakeWord])
+                scheduleEndpoint(after: 5)
             }
             if wakeDetected {
                 let visibleText = textAfterWakeWord(latestText)
@@ -294,11 +295,11 @@ private final class VoiceController {
         return String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
     }
 
-    private func scheduleEndpoint() {
+    private func scheduleEndpoint(after delay: TimeInterval = 1.1) {
         endpointWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.finishRecognition() }
         endpointWork = work
-        queue.asyncAfter(deadline: .now() + 1.1, execute: work)
+        queue.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func scheduleRollover(epoch activeEpoch: Int) {

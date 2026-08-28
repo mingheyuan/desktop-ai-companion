@@ -178,7 +178,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - Rust 2021 + Tokio。
 - 类型化 Tauri Command 负责低频请求，Tauri Event 负责状态和批量流式事件；原始音频不经过 WebView JSON 通道。
 - `reqwest` 连接 OpenAI-compatible API，并使用 SSE 接收流式回复。
-- 支持云端模型，也支持 Ollama、LM Studio 等本地兼容服务。
+- 支持云端模型，也支持 Ollama、LM Studio 等本地兼容服务；API key 可选，只有配置后才发送 Bearer 认证头。
 - API Key 使用 macOS Keychain 保存，普通设置保存在本地配置中。
 
 ### 记忆与数据
@@ -186,7 +186,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - SQLite + FTS5，Rust 侧使用 `rusqlite`。
 - MVP 不引入向量数据库和 Embedding 服务。
 - 会话和关系状态使用独立数据表；用户/关系长期记忆在统一 `memories` 表中按 scope 与 character_id 隔离。
-- 记忆写入先生成候选，由用户明确确认后保存。
+- 用户在记忆面板主动“明确保存”的内容直接写入长期记忆；未来的自动提取只能先生成候选，并由用户确认后保存。
 
 ### 语音链路
 
@@ -219,7 +219,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - `InteractionSupervisor` 统一编排对话；每轮使用独立 `TurnActor`，通过 `generation` 和取消令牌屏蔽迟到事件。
 - 监听模式、输入、对话和播放使用四组正交状态；活动 turn 另有 GenerationState 表达 LLM 与 TTS 并行，动作、表情和口型是统一状态派生结果。
 - WebView 与 Rust 使用类型化 Tauri IPC；Rust 与持久 AudioHost 使用 UDS JSONL 控制通道和二进制 PCM 通道。
-- 记忆通过单一 `MemoryWorker` 串行写入；自动提取只生成待确认候选，只有已确认记忆参与检索。
+- 当前显式记忆写入由 Rust/SQLite 事务串行化；未来接入自动提取时只生成待确认候选，只有用户明确保存或确认的记忆参与检索。
 - 桌宠悬浮层与主面板分离，并使用 `ActivityStore + AttentionResolver` 处理多个活动的呈现优先级。
 - 播放中自然语音打断必须先验证 AEC；若不稳定，MVP 明确降级为快捷键和点击打断。
 - 后续工具由 Rust `ToolRuntime` 统一注册、授权、执行和审计；模型不能直接操作系统。
@@ -287,7 +287,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。记忆面板还提供本地数据摘要与二次确认入口，可独立清空聊天记录或全部长期记忆，不影响 Provider、角色模型和桌宠设置。
 
-语音首个闭环已完成代码接入：Swift `AudioHost.app`、UDS 安全握手、权限状态、PTT、Apple Speech partial/final、设备端“爱丽丝”持续唤醒、`AVSpeechSynthesizer` 回复、停止朗读和新输入打断。发音区间事件会经过 `turn_id + generation` 过滤后驱动 VRM `aa` 表情；角色另有 idle/listening/thinking/speaking 基础程序化姿态、眨眼与呼吸。Rust、前端、Swift 编译均已通过，并有不请求权限的真实 `.app` 握手测试。尚未完成的 MVP 风险项是稳定本地签名后的首次实机授权、长时间监听/睡眠恢复、Sherpa KWS/VAD 或当前 fallback 的误唤醒验收、授权 VRM/正式 VRMA 动作，以及真实 PCM/RMS 口型。
+语音首个闭环已完成代码接入：Swift `AudioHost.app`、UDS 安全握手、权限状态、PTT、Apple Speech partial/final、设备端“爱丽丝”持续唤醒、`AVSpeechSynthesizer` 回复、停止朗读和新输入打断。发音区间事件会经过 `turn_id + generation` 过滤后驱动 VRM `aa` 表情；角色另有 idle/listening/thinking/speaking 基础程序化姿态、眨眼与呼吸。Rust、前端、Swift 编译均已通过，并有不请求权限的真实 `.app` 握手测试。MVP 正式验收仍需要稳定本地签名后的首次实机授权，以及 PTT、TTS、唤醒词和持续监听的长时间实测。Sherpa KWS/VAD、正式 VRMA 动作和真实 PCM/RMS 口型属于后续质量增强，不替代当前可运行 fallback 的验收。
 
 ## 本地开发
 

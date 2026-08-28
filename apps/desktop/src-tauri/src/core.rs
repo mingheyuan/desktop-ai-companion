@@ -1269,8 +1269,9 @@ impl AppCore {
                     runtime.asr_partial.clear();
                     InputState::WakeListening
                 } else {
-                    InputState::Recognizing
+                    InputState::Capturing
                 };
+                runtime.last_error = None;
                 drop(runtime);
                 let _ = self.emit_snapshot(app).await;
             }
@@ -1293,7 +1294,6 @@ impl AppCore {
                     return;
                 }
                 runtime.revision += 1;
-                runtime.input_state = InputState::Recognizing;
                 runtime.asr_partial = event
                     .get("text")
                     .and_then(Value::as_str)
@@ -2014,6 +2014,50 @@ mod tests {
             ..PetSettings::default()
         })
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn explicit_memory_is_retrieved_used_and_deleted() {
+        let storage = Storage::open_in_memory().unwrap();
+        let memory = storage
+            .create_user_memory("老师最喜欢的颜色是蓝色", 10)
+            .unwrap();
+        storage
+            .create_user_memory("老师明天下午要开会", 10)
+            .unwrap();
+        let matched = storage
+            .search_memories("老师喜欢什么颜色", "aris", 6)
+            .unwrap();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].id, memory.id);
+
+        let provider = create_provider(&ProviderSettings::default(), None).unwrap();
+        let mut stream = provider
+            .start(
+                LlmRequest {
+                    user_text: "老师喜欢什么颜色？".into(),
+                    history: vec![],
+                    memory_context: memory_context_with_budget(matched, 2_400),
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let mut response = String::new();
+        while let Some(event) = stream.next().await {
+            if let LlmEvent::TextDelta(delta) = event.unwrap() {
+                response.push_str(&delta);
+            }
+        }
+        assert!(response.contains("老师最喜欢的颜色是蓝色"));
+
+        assert!(storage
+            .delete_memory(&memory.id, memory.version, 11)
+            .unwrap());
+        assert!(storage
+            .search_memories("老师喜欢什么颜色", "aris", 6)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

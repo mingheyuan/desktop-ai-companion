@@ -53,8 +53,7 @@ const snapshot: AppSnapshot = {
 
 describe("app store generation projection", () => {
   beforeEach(() => {
-    useAppStore.setState({ streamingText: "", booting: false });
-    useAppStore.getState().setSnapshot(snapshot);
+    useAppStore.setState({ snapshot, streamingText: "", booting: false });
   });
 
   it("appends deltas for the active turn", () => {
@@ -69,14 +68,32 @@ describe("app store generation projection", () => {
 
   it("clears transient text when a terminal event arrives", () => {
     useAppStore.getState().appendDelta({ text: "回答" }, "turn-current");
-    useAppStore.getState().finishTurn({ status: "completed" });
+    useAppStore.getState().finishTurn({ status: "completed" }, "turn-current");
     expect(useAppStore.getState().streamingText).toBe("");
   });
 
+  it("ignores a stale terminal event for an older turn", () => {
+    useAppStore.getState().appendDelta({ text: "新回答" }, "turn-current");
+    useAppStore.getState().finishTurn({ status: "cancelled" }, "turn-old");
+    expect(useAppStore.getState().streamingText).toBe("新回答");
+  });
+
   it("projects transient mouth level without replacing the snapshot", () => {
-    useAppStore.getState().setMouthLevel(0.72);
+    useAppStore.getState().setMouthLevel(0.72, 7);
     expect(useAppStore.getState().snapshot.mouth_level).toBe(0.72);
     expect(useAppStore.getState().snapshot.active_turn_id).toBe("turn-current");
+  });
+
+  it("ignores mouth animation from an older generation", () => {
+    useAppStore.getState().setMouthLevel(0.72, 6);
+    expect(useAppStore.getState().snapshot.mouth_level).toBe(0);
+  });
+
+  it("does not let a late bootstrap snapshot replace newer state", () => {
+    useAppStore.getState().setSnapshot({ ...snapshot, revision: 8, avatar_state: "speaking" });
+    useAppStore.getState().setSnapshot({ ...snapshot, revision: 7, avatar_state: "idle" });
+    expect(useAppStore.getState().snapshot.revision).toBe(8);
+    expect(useAppStore.getState().snapshot.avatar_state).toBe("speaking");
   });
 
   it("merges desktop settings without replacing a newer snapshot", () => {

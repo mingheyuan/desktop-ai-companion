@@ -8,12 +8,13 @@
 |---|---|---|
 | 桌面容器 | Tauri 2 主面板 + 透明桌宠双窗口 | Rust 编译、前端构建、手工窗口检查 |
 | VRM | `three-vrm` 加载、合法性/大小校验、应用数据目录托管、fallback 模型 | 前端构建和浏览器渲染检查 |
-| 文字对话 | mock/OpenAI-compatible SSE、单活动 turn、generation + cancellation | Rust 单元测试、前端状态测试 |
+| 默认角色 | 天童爱丽丝的人格摘要进入 LLM system prompt；角色规则与不可信用户记忆分区 | Provider 单元测试、角色资料人工复核 |
+| 文字对话 | mock/OpenAI-compatible SSE、单活动 turn、generation + cancellation；API key 可选以支持 Ollama/LM Studio | Rust 单元测试、前端状态测试 |
 | 本地数据 | SQLite migration、会话恢复、消息提交 | Rust repository 测试和真实数据库迁移 |
-| 显式记忆 | 创建、FTS 搜索、编辑、物理删除、审计、可选上下文注入 | SQLite 事务/FTS 测试、UI 检查 |
-| 桌宠控制 | 显示、缩放、点击穿透、托盘、窗口恢复、全局快捷键；托盘与 `⌘/Ctrl + Shift + L` 可控制持续监听 | Rust 编译和手工 UI 检查 |
+| 显式记忆 | 创建、FTS 搜索、中文二字片段回退、编辑、物理删除、审计、可选上下文注入 | SQLite 事务/FTS 测试、保存→自然改写检索→Provider 使用→删除闭环测试、UI 检查 |
+| 桌宠控制 | 角色本体可拖动、单击打开聊天；支持显示、缩放、点击穿透、托盘、窗口恢复和全局快捷键；托盘与 `⌘/Ctrl + Shift + L` 可控制持续监听 | Tauri capability 编译、Rust 编译和手工 UI 检查 |
 | 语音基础 | 独立 AudioHost、权限、PTT、partial/final、系统 TTS、停止/新输入打断；持续监听断线后限三次退避恢复 | Swift 编译、UDS 真实握手测试 |
-| 持续监听 | Apple Speech 设备端识别检测“爱丽丝”；1.1 秒 endpoint | 代码保护已验证；仍需首次授权和长时间实机测试 |
+| 持续监听 | Apple Speech 设备端识别检测“爱丽丝”；有命令时 1.1 秒 endpoint，只唤醒无命令时 5 秒返回待机 | 代码保护已验证；仍需首次授权和长时间实机测试 |
 | 语音数据路径 | `capture.started.on_device` 投影为“本机识别/系统语音服务”；wake 只允许本机 | Rust/React 类型检查；仍需两类设备能力实机检查 |
 | macOS 打包 | Tauri resources 内嵌 `AudioHost.app`；稳定 identity 优先、ad-hoc fallback | debug app bundle 构建、`codesign --verify --deep --strict` |
 | 数据清理 | 本地范围摘要；聊天/记忆独立清理；二次确认；保留 Provider/角色/桌宠设置 | SQLite 范围隔离、candidate cascade、FTS rebuild 测试和 UI 检查 |
@@ -25,7 +26,7 @@
 - Core → Host：`permissions.request`、`permissions.status`、`settings.open_privacy`、`listening.set`、`asr.start`、`asr.finalize`、`asr.stop`、`tts.speak`、`tts.stop`、`shutdown`。
 - Host → Core：`permissions.status`、`host.ready`、`capture.started`、`wake.detected`、`asr.partial`、`asr.final`、`tts.started`、`tts.level`、`tts.finished`、`voice.error`、`host.error`。
 - ASR 使用 `capture_id + generation + recognition_epoch + revision` 拒绝过期回调；TTS 使用 `turn_id + generation` 拒绝过期播放回调。
-- 当前只有 JSONL control socket，不传输 PCM；二进制 media socket、heartbeat、request/response ACK 和 supervisor 自动重启属于下一协议小版本。
+- 当前只有 JSONL control socket，不传输 PCM；socket 明确断线已有三次退避恢复，二进制 media socket、heartbeat、request/response ACK 和半开故障检测属于下一协议小版本。
 
 当前已注册的语音 Tauri commands：`voice_request_permissions`、`voice_open_privacy_settings`、`voice_set_listening_mode`、`voice_ptt_start`、`voice_ptt_finish`、`playback_stop`、`voice_update_settings`。React 不直接连接 AudioHost，所有状态以 Rust `AppSnapshot` 为准。权限被拒绝后，UI 可打开系统设置并显式刷新状态；`restricted` 只提示系统策略限制，不重复请求。
 
