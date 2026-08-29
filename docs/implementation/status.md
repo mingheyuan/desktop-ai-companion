@@ -12,7 +12,7 @@
 | 文字对话 | mock/OpenAI-compatible SSE、单活动 turn、generation + cancellation；API key 可选以支持 Ollama/LM Studio | Rust 单元测试、前端状态测试 |
 | 视觉 Provider 配置 | 独立启用开关、endpoint、model 和 Keychain API key 已保存；`screen.observe` 已可在用户确认后生成进程内存中的一次性本地预览，但尚未采集后上传 | Provider 设置 UI、Rust 配置校验、本地截图预览清除；视觉模型数据出站仍待单独明确授权和实现 |
 | 本地数据 | SQLite migration、会话恢复、消息提交 | Rust repository 测试和真实数据库迁移 |
-| 显式记忆 | 创建、FTS 搜索、中文二字片段回退、编辑、物理删除、审计、可选上下文注入 | SQLite 事务/FTS 测试、保存→自然改写检索→Provider 使用→删除闭环测试、UI 检查 |
+| 显式记忆 | 创建、FTS 搜索、中文二字片段回退、编辑、物理删除、审计、可选上下文注入；聊天中明确“忘记/删除某条记忆”时支持本地唯一匹配、确认和版本校验删除 | SQLite 事务/FTS 测试、保存→自然改写检索→Provider 使用→删除闭环测试、聊天删除解析/唯一匹配测试、UI 检查 |
 | 受控网页工具 | 用户明确输入“打开/访问 + HTTP(S) 网址”后，展示确认卡片；允许后调用 macOS 默认浏览器，拒绝或取消不执行；每次请求写入 `tool_runs` 审计表 | URL 解析/危险 scheme/凭据测试、工具审计测试、前端构建；真实默认浏览器打开仍需手工验收 |
 | 一次性本地提醒 | 支持“半小时后提醒我喝水”等相对时间；确认后写入 SQLite，应用内调度器和 macOS 用户级 `launchd` LaunchAgent 共享本地 claim 去重；主面板可查看和取消，聊天可查询待处理提醒，也可对唯一匹配的提醒发起确认后取消；重启会恢复未完成任务，应用完全退出后仍可由系统投递 | Rust 解析/迁移/状态转换、只读本地查询与 LaunchAgent 脚本生成测试、前端构建；绝对日期、重复规则、贪睡和退出登录期间的投递仍未实现；真实通知中心行为仍需 macOS 实机验收 |
 | 桌宠控制 | 角色本体可拖动、单击打开聊天；支持显示、缩放、点击穿透、托盘、窗口恢复和全局快捷键；托盘与 `⌘/Ctrl + Shift + L` 可控制持续监听 | Tauri capability 编译、Rust 编译和手工 UI 检查 |
@@ -43,7 +43,7 @@
 | 音频恢复 | socket 断线会在用户仍期望持续监听时做三次退避重启，主动关闭/权限错误会取消恢复；仍无 heartbeat、设备切换和睡眠恢复 | 完成 heartbeat 与 30 分钟/睡眠/外设验收 |
 | 角色表现 | 已有原创程序化爱丽丝预览、idle/listen/think/speak 姿态、眨眼、呼吸和近似口型；授权 VRM 加载后优先替换 | 授权 VRM + 正式 VRMA 动作验收 |
 | 记忆候选 | 用户可显式 CRUD；模型可提出 `memory.save` 草案，确认后写入本地长期记忆 | 候选表、自动提取和更完整的确认/拒绝 UI 仍待补齐 |
-| 模型工具循环 | OpenAI-compatible 请求已通过 `ToolRegistry` 发送 `system.open_url`/`timer.create`/`timer.cancel`/`memory.save` schema；`ToolPolicy` 负责 JSON、URL、时间、标题和记忆输入校验；SSE 分片会还原单次 ToolCall，进入确认卡后执行结果回传模型继续生成，每轮最多 3 步；显式中文意图入口仍保留 | 已有本地 HTTP Provider、集中参数安全校验和 ToolCall 消息测试；屏幕数据出站授权、多工具并行、更细风险分级和完整端到端 UI 验收仍待补齐 |
+| 模型工具循环 | OpenAI-compatible 请求已通过 `ToolRegistry` 发送 `system.open_url`/`timer.create`/`timer.cancel`/`memory.save` schema；`ToolPolicy` 负责 JSON、URL、时间、标题和记忆输入校验；SSE 分片会还原单次 ToolCall，进入确认卡后执行结果回传模型继续生成，每轮最多 3 步；显式中文意图入口仍保留，`memory.delete` 仅允许用户显式触发，不暴露给模型 | 已有本地 HTTP Provider、集中参数安全校验和 ToolCall 消息测试；屏幕数据出站授权、多工具并行、更细风险分级和完整端到端 UI 验收仍待补齐 |
 
 ## 当前验证命令
 

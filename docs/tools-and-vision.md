@@ -2,7 +2,7 @@
 
 > 版本：v0.1 规划方案
 >
-> 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、模型提议的 `timer.cancel` 和需确认的本地 `screen.observe` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步）；工具 schema 注册与模型参数策略已集中到 Rust `ToolRegistry`/`ToolPolicy`，独立 Vision Provider 配置已落地，但截图发送、视觉分析、多工具并行和其余 Tool MVP 尚未进入实现
+> 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete`、模型提议的 `timer.cancel` 和需确认的本地 `screen.observe` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步）；工具 schema 注册与模型参数策略已集中到 Rust `ToolRegistry`/`ToolPolicy`，独立 Vision Provider 配置已落地，但截图发送、视觉分析、多工具并行和其余 Tool MVP 尚未进入实现
 >
 > 更新日期：2026-08-29
 
@@ -24,9 +24,10 @@
 3. 所有工具请求先经过参数校验、权限策略和用户授权判断，再进入执行器。
 4. 工具结果回到当前 `TurnActor`，由模型继续生成最终回复；当前每次模型响应只允许一个 ToolCall、每轮最多 3 步，工具不能自行修改对话状态。
 5. `memory.save` 是本地写入工具：模型只能提出草案，用户确认后才进入 SQLite；它不获得读取其他记忆或修改角色设定的权限。
-6. 屏幕观察默认按需、单帧、可见，不做后台连续录屏。
-7. Vision Provider 与聊天 LLM 分开配置，允许独立 endpoint、model 和 Keychain key；当前已经落地配置保存，实际图片请求仍需单独接入。
-8. 网页内容、屏幕文字和工具输出一律视为不可信数据，不能替代用户授权。
+6. `memory.delete` 只接受用户当前消息中明确的删除意图，由 Rust 在本地做唯一匹配并请求确认；它不注册为模型工具，也不支持通过聊天清空全部记忆。
+7. 屏幕观察默认按需、单帧、可见，不做后台连续录屏。
+8. Vision Provider 与聊天 LLM 分开配置，允许独立 endpoint、model 和 Keychain key；当前已经落地配置保存，实际图片请求仍需单独接入。
+9. 网页内容、屏幕文字和工具输出一律视为不可信数据，不能替代用户授权。
 
 ## 3. 总体结构
 
@@ -187,6 +188,8 @@ memory.save
 - 对常见的“请记住/别忘了”表达，Core 会先在本地生成确认草案，不依赖聊天 Provider 做意图解析；其他明确表达仍可由模型提出草案。
 - 主面板确认卡显示待保存内容；确认后由 Rust 调用本地记忆仓库写入 SQLite，并保留 `tool_runs` 审计记录。
 - 拒绝、取消、对话失败和工具循环中断都不会写入长期记忆。
+
+用户明确说“忘记/删除某条记忆”时，Core 会先在当前角色可见的本地记忆中搜索；只有找到唯一候选才生成 `memory.delete` 确认卡。确认后使用记忆版本号执行物理删除并写入审计，记忆已变化、未找到或匹配多条时均拒绝猜测。该动作只由本地显式意图触发，不开放给模型 ToolCall。
 - 目标规格仍要求：LLM 只负责把自然语言提出为候选时间；Rust 使用系统时区、当前时间和 DST 规则验证并生成标准时间。
 - “明天上午”“待会儿”等无法唯一确定的表达必须追问，不能猜测后直接创建。
 - SQLite 是计时任务事实来源，保存 `timer_id`、标题、触发时间、时区、状态和原始用户请求。
@@ -301,7 +304,7 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 这组能力建议作为核心对话 MVP 后的 **Tool MVP**：
 
 1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust `tools.rs`、Provider 和 SQLite 审计实现，现有四种模型工具可做真实 ToolCall 循环。
-2. `system.open_url`、`timer.create`、`timer.cancel` 和 `memory.save` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；Registry/Policy 边界已抽出，仍需补多工具循环和更细的风险策略。
+2. `system.open_url`、`timer.create`、`timer.cancel` 和 `memory.save` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；本地显式 `memory.delete` 也已接入确认、版本校验和审计；Registry/Policy 边界已抽出，仍需补多工具循环和更细的风险策略。
 3. 完善 `timer.create/list/cancel`，验证 LaunchAgent 在休眠、重启、时区变化、取消竞态和退出登录场景下的行为；后续再评估 UserNotifications/EventKit。
 4. `screen.observe` 本地单帧已完成最小切片；后续验证 ScreenCaptureKit 权限、窗口排除、显示器/区域选择和临时文件清理。
 5. 独立 Vision Provider 的实际图片请求，先接一个云端兼容模型和一个本地兼容模型；当前仅完成配置与 Keychain 隔离。

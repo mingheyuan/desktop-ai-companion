@@ -499,25 +499,38 @@ impl AppCore {
         } else {
             None
         };
-        let screen_request =
+        let memory_delete =
             if open_url.is_none() && timer_request.is_none() && memory_content.is_none() {
-                parse_explicit_screen_observe_request(&text)
+                self.resolve_explicit_memory_delete(&text).await?
             } else {
                 None
             };
-        let timer_cancel =
-            if open_url.is_none() && timer_request.is_none() && memory_content.is_none() {
-                if screen_request.is_none() {
-                    self.resolve_explicit_timer_cancel(&text)?
-                } else {
-                    None
-                }
+        let screen_request = if open_url.is_none()
+            && timer_request.is_none()
+            && memory_content.is_none()
+            && memory_delete.is_none()
+        {
+            parse_explicit_screen_observe_request(&text)
+        } else {
+            None
+        };
+        let timer_cancel = if open_url.is_none()
+            && timer_request.is_none()
+            && memory_content.is_none()
+            && memory_delete.is_none()
+        {
+            if screen_request.is_none() {
+                self.resolve_explicit_timer_cancel(&text)?
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
         let timer_list_request = open_url.is_none()
             && timer_request.is_none()
             && memory_content.is_none()
+            && memory_delete.is_none()
             && screen_request.is_none()
             && timer_cancel.is_none()
             && parse_explicit_timer_list_request(&text);
@@ -608,6 +621,31 @@ impl AppCore {
                 })
             })
             .or_else(|| {
+                memory_delete.map(|memory| {
+                    let tool_call_id = Uuid::now_v7().to_string();
+                    PendingTool {
+                        approval: ToolApproval {
+                            tool_call_id,
+                            tool_name: "memory.delete".into(),
+                            display_name: "删除记忆".into(),
+                            summary: "只会在确认后删除这条本地长期记忆，不会删除其他记忆。".into(),
+                            url: None,
+                            host: None,
+                            title: Some(memory.content.clone()),
+                            due_at_ms: None,
+                        },
+                        turn_id: turn_id.clone(),
+                        generation,
+                        action: PendingToolAction::DeleteMemory {
+                            id: memory.id,
+                            content: memory.content,
+                            version: memory.version,
+                        },
+                        origin: PendingToolOrigin::Explicit,
+                    }
+                })
+            })
+            .or_else(|| {
                 timer_cancel.map(|timer| {
                     let tool_call_id = Uuid::now_v7().to_string();
                     PendingTool {
@@ -667,6 +705,16 @@ impl AppCore {
                 PendingToolAction::SaveMemory { content } => {
                     json!({ "content": content }).to_string()
                 }
+                PendingToolAction::DeleteMemory {
+                    id,
+                    content,
+                    version,
+                } => json!({
+                    "memory_id": id,
+                    "content": content,
+                    "expected_version": version
+                })
+                .to_string(),
                 PendingToolAction::CancelTimer { timer_id, title } => {
                     json!({ "timer_id": timer_id, "title": title }).to_string()
                 }
@@ -1399,6 +1447,9 @@ impl AppCore {
                 PendingToolAction::SaveMemory { content } => {
                     format!("好的，老师，已取消保存这条记忆：{content}")
                 }
+                PendingToolAction::DeleteMemory { content, .. } => {
+                    format!("好的，老师，已保留这条记忆：{content}")
+                }
                 PendingToolAction::CancelTimer { title, .. } => {
                     format!("好的，老师，已保留提醒：{title}")
                 }
@@ -1497,6 +1548,23 @@ impl AppCore {
                         true,
                     )
                 }),
+            PendingToolAction::DeleteMemory {
+                id,
+                content,
+                version,
+            } => match self.storage.delete_memory(&id, version, now_ms()) {
+                Ok(true) => Ok(format!("已删除本地长期记忆：{content}")),
+                Ok(false) => Err(AppError::new(
+                    "conflict",
+                    "这条记忆已被修改或删除，请刷新记忆列表后重试。",
+                    true,
+                )),
+                Err(error) => Err(AppError::new(
+                    "tool_execution_failed",
+                    format!("本地记忆删除失败：{error}"),
+                    true,
+                )),
+            },
             PendingToolAction::CancelTimer { timer_id, title } => {
                 match self.storage.cancel_timer(&timer_id, now_ms()) {
                     Ok(true) => {
@@ -1544,6 +1612,9 @@ impl AppCore {
                         ),
                         PendingToolAction::SaveMemory { content } => {
                             format!("已保存记忆：{content}")
+                        }
+                        PendingToolAction::DeleteMemory { content, .. } => {
+                            format!("已删除记忆：{content}")
                         }
                         PendingToolAction::CancelTimer { title, .. } => {
                             format!("已取消提醒：{title}")
@@ -1643,6 +1714,21 @@ impl AppCore {
             return Ok(None);
         };
         self.resolve_pending_timer(&query).map(Some)
+    }
+
+    async fn resolve_explicit_memory_delete(
+        &self,
+        text: &str,
+    ) -> Result<Option<MemoryItem>, AppError> {
+        let Some(query) = parse_explicit_memory_delete_query(text) else {
+            return Ok(None);
+        };
+        let character_id = self.character.read().await.character_id.clone();
+        let candidates = self
+            .storage
+            .search_memories(&query, &character_id, 20)
+            .map_err(storage_error)?;
+        resolve_unique_memory_match(candidates, &query).map(Some)
     }
 
     fn resolve_pending_timer(&self, query: &str) -> Result<TimerItem, AppError> {
@@ -2906,6 +2992,145 @@ fn parse_explicit_memory_request(text: &str) -> Option<String> {
         })
 }
 
+fn parse_explicit_memory_delete_query(text: &str) -> Option<String> {
+    if [
+        "不要忘记",
+        "别忘记",
+        "别忘了",
+        "不要删除",
+        "别删除",
+        "不要清除",
+        "别清除",
+        "取消删除",
+        "不用删除",
+    ]
+    .iter()
+    .any(|phrase| text.contains(phrase))
+    {
+        return None;
+    }
+
+    let trimmed = text.trim();
+    let direct_forget = ["忘记", "忘掉"]
+        .iter()
+        .any(|marker| trimmed.starts_with(marker))
+        && !["忘记了", "忘记过", "忘掉了", "忘掉过"]
+            .iter()
+            .any(|marker| trimmed.starts_with(marker));
+    let has_forget_request = [
+        "请帮我忘记",
+        "请帮我忘掉",
+        "帮我忘记",
+        "帮我忘掉",
+        "请忘记",
+        "请忘掉",
+        "让我忘记",
+        "让我忘掉",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker));
+    let has_memory_delete_verb = ["删除", "移除", "清除", "删掉", "忘记", "忘掉"]
+        .iter()
+        .any(|verb| text.contains(verb));
+    let has_memory_target_marker = ["删除记忆", "移除记忆", "清除记忆", "删掉记忆"]
+        .iter()
+        .any(|marker| text.contains(marker));
+    if !direct_forget
+        && !has_forget_request
+        && !(has_memory_delete_verb && (text.contains("记忆") || text.contains("这条")))
+        && !has_memory_target_marker
+    {
+        return None;
+    }
+
+    let markers = [
+        "请帮我忘记",
+        "请帮我忘掉",
+        "帮我忘记",
+        "帮我忘掉",
+        "请忘记",
+        "请忘掉",
+        "让我忘记",
+        "让我忘掉",
+        "删除这条记忆",
+        "移除这条记忆",
+        "清除这条记忆",
+        "删掉这条记忆",
+        "删除记忆",
+        "移除记忆",
+        "清除记忆",
+        "删掉记忆",
+        "忘记",
+        "忘掉",
+        "删除",
+        "移除",
+        "清除",
+        "删掉",
+    ];
+    let marker = markers
+        .iter()
+        .filter_map(|marker| {
+            text.find(marker)
+                .map(|start| (start, marker.len(), *marker))
+        })
+        .min_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)));
+    let Some((start, length, _)) = marker else {
+        return Some(String::new());
+    };
+    let mut query = text[start + length..]
+        .trim_matches(|character: char| {
+            matches!(
+                character,
+                '：' | ':' | '，' | ',' | '。' | '！' | '!' | '？' | '?' | ' '
+            )
+        })
+        .trim()
+        .to_owned();
+    for prefix in ["这条记忆", "这条", "记忆"] {
+        if let Some(rest) = query.strip_prefix(prefix) {
+            query = rest
+                .trim_matches(|character: char| matches!(character, '：' | ':' | '，' | ',' | ' '))
+                .trim()
+                .to_owned();
+            break;
+        }
+    }
+    Some(query)
+}
+
+fn resolve_unique_memory_match(
+    candidates: Vec<MemoryItem>,
+    query: &str,
+) -> Result<MemoryItem, AppError> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Err(AppError::new(
+            "memory_delete_target_required",
+            "请明确说出要忘记的记忆内容；暂不支持通过聊天清空全部记忆。",
+            false,
+        ));
+    }
+    let exact = candidates
+        .iter()
+        .filter(|memory| memory.content.trim() == query)
+        .cloned()
+        .collect::<Vec<_>>();
+    let matches = if exact.is_empty() { candidates } else { exact };
+    match matches.len() {
+        0 => Err(AppError::new(
+            "memory_not_found",
+            "没有找到能唯一匹配的本地记忆，请在记忆面板中选择。",
+            false,
+        )),
+        1 => Ok(matches.into_iter().next().expect("one memory match")),
+        _ => Err(AppError::new(
+            "memory_ambiguous",
+            "有多条记忆可能匹配，请在记忆面板中选择要删除的那一条。",
+            false,
+        )),
+    }
+}
+
 fn parse_open_url_request(text: &str) -> Result<Option<OpenUrlRequest>, AppError> {
     let has_open_intent = ["打开", "访问", "进入", "浏览"]
         .iter()
@@ -3725,6 +3950,68 @@ mod tests {
             Some("我喜欢蓝色".into())
         );
         assert_eq!(parse_explicit_memory_request("请记住"), None);
+    }
+
+    #[test]
+    fn parses_explicit_memory_delete_queries_without_guessing() {
+        assert_eq!(
+            parse_explicit_memory_delete_query("请帮我忘记：我喜欢蓝色"),
+            Some("我喜欢蓝色".into())
+        );
+        assert_eq!(
+            parse_explicit_memory_delete_query("删除记忆：老师喜欢蓝色"),
+            Some("老师喜欢蓝色".into())
+        );
+        assert_eq!(
+            parse_explicit_memory_delete_query("删除这条记忆"),
+            Some(String::new())
+        );
+        assert!(parse_explicit_memory_delete_query("不要忘记我喜欢蓝色").is_none());
+        assert!(parse_explicit_memory_delete_query("我忘记了开会时间").is_none());
+        assert!(parse_explicit_memory_delete_query("你好吗").is_none());
+    }
+
+    #[test]
+    fn resolves_only_one_memory_candidate_for_chat_deletion() {
+        let memory = |id: &str, content: &str| MemoryItem {
+            id: id.into(),
+            scope: "user".into(),
+            character_id: None,
+            kind: "note".into(),
+            content: content.into(),
+            importance: 0.7,
+            version: 1,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        let candidate = memory("memory-1", "我喜欢蓝色");
+        assert_eq!(
+            resolve_unique_memory_match(vec![candidate.clone()], "我喜欢蓝色")
+                .unwrap()
+                .id,
+            candidate.id
+        );
+        assert_eq!(
+            resolve_unique_memory_match(Vec::new(), "我喜欢蓝色")
+                .unwrap_err()
+                .code,
+            "memory_not_found"
+        );
+        assert_eq!(
+            resolve_unique_memory_match(
+                vec![candidate.clone(), memory("memory-2", "我也喜欢蓝色")],
+                "蓝色"
+            )
+            .unwrap_err()
+            .code,
+            "memory_ambiguous"
+        );
+        assert_eq!(
+            resolve_unique_memory_match(vec![candidate], "")
+                .unwrap_err()
+                .code,
+            "memory_delete_target_required"
+        );
     }
 
     #[tokio::test]

@@ -22,6 +22,11 @@ pub(crate) enum ToolAction {
     SaveMemory {
         content: String,
     },
+    DeleteMemory {
+        id: String,
+        content: String,
+        version: u64,
+    },
     CancelTimer {
         timer_id: String,
         title: String,
