@@ -2,7 +2,7 @@
 
 > 版本：v0.1 规划方案
 >
-> 状态：已完成参考项目调研；`system.open_url` 和一次性本地计时提醒的低风险垂直切片已实现，模型 ToolCall、屏幕感知和其余 Tool MVP 尚未进入实现
+> 状态：已完成参考项目调研；`system.open_url` 和一次性本地计时提醒已支持显式意图与 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步），屏幕感知、多工具并行和其余 Tool MVP 尚未进入实现
 >
 > 更新日期：2026-08-29
 
@@ -19,10 +19,10 @@
 
 ## 2. 已确认的技术方向
 
-1. Rust 核心内建立受控 `ToolRuntime`，模型不能直接调用系统 API。
+1. Rust 核心内建立受控 `ToolRuntime`；当前已落地 schema、参数校验、确认、执行和审计，模型不能直接调用系统 API。
 2. 内置工具使用 JSON Schema 描述输入输出；MCP 只作为后续扩展协议，不强迫简单工具运行在外部进程中。
 3. 所有工具请求先经过参数校验、权限策略和用户授权判断，再进入执行器。
-4. 工具结果回到当前 `TurnActor`，由模型继续生成最终回复；工具不能自行修改对话状态。
+4. 工具结果回到当前 `TurnActor`，由模型继续生成最终回复；当前每次模型响应只允许一个 ToolCall、每轮最多 3 步，工具不能自行修改对话状态。
 5. 屏幕观察默认按需、单帧、可见，不做后台连续录屏。
 6. Vision Provider 与聊天 LLM 分开配置，允许独立 endpoint、model 和 Keychain key。
 7. 网页内容、屏幕文字和工具输出一律视为不可信数据，不能替代用户授权。
@@ -165,7 +165,7 @@ timer.cancel
 ```
 
 - 当前支持相对时间的一次性提醒，例如“30 分钟后提醒我喝水”“半小时后叫我”；用户确认后才写入 SQLite。
-- Rust 负责识别有限的中文相对时间、范围校验、生成 due time 和调度；当前不依赖 LLM ToolCall。
+- Rust 负责识别有限的中文相对时间、范围校验、生成 due time 和调度；同时支持模型通过 `timer.create` 提供 `title + delay_seconds` 候选，仍必须经过用户确认。
 - 主面板提供待处理提醒列表和取消操作；`timer.create` 与 `timer.cancel` 也写入 `tool_runs` 审计记录。
 - 应用运行期间由 Tauri notification plugin 发送 macOS 通知；应用重启后会重新读取 pending 任务，并对已到期任务只触发一次。
 - 应用完全退出时不会由系统独立投递通知；要覆盖该场景，需要后续接入 macOS 原生 UserNotifications 日历/时间间隔 trigger，并增加休眠、时区和桌宠动作验证。
@@ -248,7 +248,7 @@ vision.send_policy: never | ask_each_time | allow_for_session
 
 ## 9. 与对话、桌宠和记忆的关系
 
-工具循环插入 `TurnActor` 的生成过程：
+当前已实现的工具循环插入 `TurnActor` 的生成过程：
 
 ```text
 LLM 生成
@@ -281,8 +281,8 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 
 这组能力建议作为核心对话 MVP 后的 **Tool MVP**：
 
-1. `ToolRegistry + ToolPolicyEngine + ToolRunStore`，使用假工具完成工具循环测试。
-2. 完善 `system.open_url` 的模型 ToolCall 接入、URL 安全策略和授权 UI。
+1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust Provider/Tool 分支实现，现有两工具可做真实 ToolCall 循环。
+2. `system.open_url` 的模型 ToolCall 接入、URL 安全策略和授权 UI 已完成；仍需抽成独立 Registry/Policy 模块并补多工具循环。
 3. 完善 `timer.create/list/cancel`，接入系统级离线通知并验证休眠、重启、时区和重复触发。
 4. `screen.observe` 本地单帧，验证权限、窗口排除和临时文件清理。
 5. 独立 Vision Provider，先接一个云端兼容模型和一个本地兼容模型。

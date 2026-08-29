@@ -4,7 +4,7 @@
 
 项目希望结合“钢琴女友”类产品的陪伴感、记忆管理和低频互动，以及桌宠应用的便捷性、可移动性和可动表现，再加入自然的语音交互能力。
 
-当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线，并已进入业务实现。现有代码可以启动 Tauri 双窗口应用，运行透明桌宠、受控 VRM 导入、文字流式对话、可取消 turn、mock/OpenAI-compatible LLM Provider、SQLite 会话与显式记忆管理，以及由 Rust 管理的桌宠显示、缩放、点击穿透、托盘和全局快捷键。首个 macOS 语音切片也已接入：独立签名 `AudioHost.app`、显式权限申请、PTT、Apple Speech partial/final、设备端持续唤醒和系统 TTS。工具侧已接入 `system.open_url` 和一次性本地计时提醒：网页与提醒都会先展示确认卡片，提醒写入 SQLite 并由应用内调度器触发 macOS 通知；屏幕感知和通用模型工具循环仍待后续实现。
+当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线，并已进入业务实现。现有代码可以启动 Tauri 双窗口应用，运行透明桌宠、受控 VRM 导入、文字流式对话、可取消 turn、mock/OpenAI-compatible LLM Provider、SQLite 会话与显式记忆管理，以及由 Rust 管理的桌宠显示、缩放、点击穿透、托盘和全局快捷键。首个 macOS 语音切片也已接入：独立签名 `AudioHost.app`、显式权限申请、PTT、Apple Speech partial/final、设备端持续唤醒和系统 TTS。工具侧已接入 `system.open_url` 和一次性本地计时提醒，并已打通 OpenAI-compatible 的模型 ToolCall：模型提议工具后先确认，执行结果再回传模型生成最终回复；屏幕感知和多工具并行仍待后续实现。
 
 ## 初始角色设定
 
@@ -153,7 +153,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 ### MVP 暂不包含
 
 - 多角色系统和移动端。
-- 通用模型工具循环、按需屏幕理解和 GUI 自动化；当前只包含低风险的 `system.open_url` 显式网址试点和一次性本地计时提醒。
+- 多工具并行、按需屏幕理解和 GUI 自动化；当前已支持单次一个模型 ToolCall 的网页/提醒提议、确认、执行和结果回传，每轮最多连续 3 步。
 - 自主生活、主动发消息和复杂情绪成长。
 - 完整换装系统。
 
@@ -227,7 +227,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - 当前显式记忆写入由 Rust/SQLite 事务串行化；未来接入自动提取时只生成待确认候选，只有用户明确保存或确认的记忆参与检索。
 - 桌宠悬浮层与主面板分离，并使用 `ActivityStore + AttentionResolver` 处理多个活动的呈现优先级。
 - 播放中自然语音打断必须先验证 AEC；若不稳定，MVP 明确降级为快捷键和点击打断。
-- 后续工具由 Rust `ToolRuntime` 统一注册、授权、执行和审计；模型不能直接操作系统。
+- 工具由 Rust `ToolRuntime` 统一注册、授权、执行和审计；当前每次只接收一个模型 ToolCall、每轮最多连续 3 步，模型不能直接操作系统。
 - 屏幕理解采用按需单帧和独立 Vision Provider，聊天 Key 与视觉 Key 默认隔离。
 
 上述细节已经写入 [`docs/implementation/`](docs/implementation/README.md)。其中目标规格与当前实现差异会明确记录；AudioHost 进程握手 Spike 已通过，持续监听稳定性、睡眠恢复、唤醒误触率和取消一致性仍需实机验收。
@@ -290,7 +290,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 ## 当前状态
 
-已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。记忆面板还提供本地数据摘要与二次确认入口，可独立清空聊天记录或全部长期记忆，不影响 Provider、角色模型和桌宠设置。`system.open_url` 已形成首个工具垂直切片：显式网址识别、HTTP/HTTPS 校验、确认卡片、默认浏览器执行、取消和 `tool_runs` 审计均已接入；一次性本地计时提醒也已形成自然语言候选、确认、SQLite 持久化、查看/取消、重启恢复和 macOS 通知闭环。它们暂不代表模型工具循环、系统级离线定时投递或浏览器自动化已经完成。
+已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。记忆面板还提供本地数据摘要与二次确认入口，可独立清空聊天记录或全部长期记忆，不影响 Provider、角色模型和桌宠设置。`system.open_url` 与一次性本地计时提醒已形成显式意图和模型 ToolCall 两条入口，包含 schema、SSE 分片解析、确认卡片、执行、结果回传和 `tool_runs` 审计；提醒还支持查看、取消、重启恢复和 macOS 通知。当前限制是单次单工具调用、每轮最多 3 步、应用运行时调度，尚未接入屏幕感知、并行工具和系统级离线通知。
 
 语音首个闭环已完成代码接入：Swift `AudioHost.app`、UDS 安全握手、权限状态、PTT、Apple Speech partial/final、设备端“爱丽丝”持续唤醒、`AVSpeechSynthesizer` 回复、停止朗读和新输入打断。发音区间事件会经过 `turn_id + generation` 过滤后驱动 VRM `aa` 表情；角色另有 idle/listening/thinking/speaking 基础程序化姿态、眨眼与呼吸。Rust、前端、Swift 编译均已通过，并有不请求权限的真实 `.app` 握手测试。MVP 正式验收仍需要稳定本地签名后的首次实机授权，以及 PTT、TTS、唤醒词和持续监听的长时间实测。Sherpa KWS/VAD、正式 VRMA 动作和真实 PCM/RMS 口型属于后续质量增强，不替代当前可运行 fallback 的验收。
 

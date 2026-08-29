@@ -42,7 +42,7 @@
 | 音频恢复 | socket 断线会在用户仍期望持续监听时做三次退避重启，主动关闭/权限错误会取消恢复；仍无 heartbeat、设备切换和睡眠恢复 | 完成 heartbeat 与 30 分钟/睡眠/外设验收 |
 | 角色表现 | 已有原创程序化爱丽丝预览、idle/listen/think/speak 姿态、眨眼、呼吸和近似口型；授权 VRM 加载后优先替换 | 授权 VRM + 正式 VRMA 动作验收 |
 | 记忆候选 | 用户可显式 CRUD；无模型自动候选确认流 | 候选表、确认/拒绝 UI 和冲突策略 |
-| 模型工具循环 | 当前两个工具仍由 Rust 识别显式中文意图并进入确认卡；OpenAI-compatible ToolCall、多工具循环和模型自主提议尚未接入 | ToolRegistry、ToolPolicy、ToolCall 流解析、工具结果回传和循环取消测试 |
+| 模型工具循环 | OpenAI-compatible 请求已发送 `system.open_url`/`timer.create` schema；SSE 分片会还原单次 ToolCall，进入确认卡后执行结果回传模型继续生成，每轮最多 3 步；显式中文意图入口仍保留 | 已有本地 HTTP Provider、参数安全校验和 ToolCall 消息测试；多工具并行、统一 ToolRegistry/Policy 模块化和更完整的端到端 UI 验收仍待补齐 |
 
 ## 当前验证命令
 

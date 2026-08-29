@@ -2,7 +2,7 @@
 
 > 版本：v0.4 实现基线
 >
-> 状态：实现规格初稿已补齐，进入编码前需完成评审与高风险技术 Spike
+> 状态：核心 MVP 已进入编码；工具运行时首批网页/提醒切片已落地，屏幕感知等高风险能力仍需单独 Spike
 >
 > 更新日期：2026-08-28
 
@@ -10,7 +10,7 @@
 
 本文定义 MVP 内部各组件的职责、进程边界、通信方式、状态管理、语音链路、记忆流程和桌宠交互组织方式，并为后续工具调用与按需屏幕感知保留受控扩展点。
 
-这份文档解决的是“各技术如何协作”，不是立即开始编码的信号。可执行细节见 [`implementation/README.md`](implementation/README.md)；在第 13 节列出的评审与 Spike 完成前，不初始化业务代码骨架。
+这份文档解决的是“各技术如何协作”。可执行细节见 [`implementation/README.md`](implementation/README.md)；屏幕采集、系统级离线通知等高风险能力仍需完成对应评审与 Spike 后再接入。
 
 ### MVP 架构目标
 
@@ -45,7 +45,7 @@ flowchart LR
         AudioWorker["AudioWorker\n音频控制队列"]
         MemoryWorker["MemoryWorker\n记忆串行写入"]
         Providers["ProviderRegistry\nLLM / ASR / TTS / Vision"]
-        Tools["ToolRuntime（规划）\nRegistry / Policy / Executor"]
+        Tools["ToolRuntime（首批已实现）\nSchema / Approval / Executor"]
         Screen["ScreenObserver（规划）\n按需单帧"]
         Activity["ActivityStore + AttentionResolver"]
         Behavior["BehaviorScheduler\n角色表现调度"]
@@ -104,7 +104,7 @@ Rust 是应用业务状态的唯一事实来源，主要模块如下：
 - `AudioWorker`：串行处理音频控制请求，维护 AudioHost 连接、唤醒词、VAD、ASR 和播放会话。
 - `MemoryWorker`：记忆唯一写入口；串行执行候选合并、确认、修改、删除和索引更新。
 - `ProviderRegistry`：隔离 LLM、ASR、TTS 和 Vision Provider；Provider 不直接修改 UI、工具权限或数据库。
-- `ToolRuntime`（规划）：注册、校验、授权和执行有限工具，并把结果返回当前 `TurnActor`；详细方案见 [`tools-and-vision.md`](tools-and-vision.md)。
+- `ToolRuntime`（首批已实现）：校验、授权和执行 `system.open_url`/`timer.create`，并把结果回传当前 `TurnActor`；当前每次只接受一个模型 ToolCall，每轮最多连续 3 步，详细方案见 [`tools-and-vision.md`](tools-and-vision.md)。
 - `ScreenObserver`（规划）：按需捕获当前窗口、显示器或选区，管理临时截图与 Vision Provider 路由；不等同于 GUI 自动化。
 - `ActivityStore`：记录需要呈现给用户的当前活动、结果和阻塞项。
 - `AttentionResolver`：按优先级从多个活动中选出桌宠当前应该表达的状态。

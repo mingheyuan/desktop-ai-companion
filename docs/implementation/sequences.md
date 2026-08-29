@@ -65,7 +65,43 @@ sequenceDiagram
 
 TTS 失败只使语音降级；已有 LLM 文本仍可完成。LLM 失败则 turn failed，不生成记忆候选。
 
-## 3. 唤醒词语音对话
+## 3. 模型 ToolCall、确认与恢复
+
+当前实现每次模型响应只允许一个已注册的 `system.open_url` 或 `timer.create` 调用，每轮最多连续 3 步；显式中文意图仍可直接进入同一确认/执行边界。
+
+```mermaid
+sequenceDiagram
+    participant UI as React
+    participant Core as Rust Turn Coordinator
+    participant LLM as OpenAI-compatible Provider
+    participant DB as SQLite/tool_runs
+    participant OS as macOS Tool
+
+    Core->>LLM: messages + tool schemas
+    LLM-->>Core: streamed ToolCall fragments
+    Core->>Core: aggregate, validate and classify
+    Core->>DB: insert model_suggested tool_run(pending)
+    Core-->>UI: pending_tool_approval
+    alt user rejects
+        UI->>Core: tool_decide(false)
+        Core->>DB: tool_run=rejected
+        Core->>LLM: assistant tool_call + tool result(rejected)
+    else user approves
+        UI->>Core: tool_decide(true)
+        Core->>DB: tool_run=approved
+        Core->>OS: execute validated tool
+        OS-->>Core: result or error
+        Core->>DB: tool_run=succeeded/failed
+        Core->>LLM: assistant tool_call + tool result
+    end
+    LLM-->>Core: final TextDelta / Completed
+    Core->>DB: commit assistant message + turn completed
+    Core-->>UI: final snapshot and turn:ended
+```
+
+工具结果作为不可信的 `tool` 消息回传；工具不能直接修改对话或记忆。用户切换输入或取消时，当前 generation 失效，待确认工具运行记为 cancelled。
+
+## 4. 唤醒词语音对话
 
 以下是目标 KWS/VAD 时序。当前切片由 AudioHost 内 Apple Speech 设备端识别同时完成唤醒短语检测与 partial/final，未经过 PCM media socket；当前协议见 [实现状态矩阵](status.md#当前-audiohost-协议v10-子集)。
 
@@ -100,7 +136,7 @@ sequenceDiagram
 
 KWS 命中不是用户消息；VAD 结束也不是用户消息。只有非空 `asr.final` 创建 turn。
 
-## 4. 按键说话
+## 5. 按键说话
 
 ```mermaid
 sequenceDiagram
@@ -123,7 +159,7 @@ sequenceDiagram
 
 PTT 可在 ListeningMode=Disabled/QuietHours 使用。快捷键 key-up 丢失时，30 秒硬上限会 finalize；窗口失焦不能自行停止系统级快捷键 capture。
 
-## 5. 新输入打断旧回复
+## 6. 新输入打断旧回复
 
 ```mermaid
 sequenceDiagram
@@ -150,7 +186,7 @@ sequenceDiagram
 
 逻辑取消不等待 Host ack 才生效。Host 超时由 AudioHost supervisor 单独处理。
 
-## 6. 记忆候选确认
+## 7. 记忆候选确认
 
 ```mermaid
 sequenceDiagram
@@ -176,7 +212,7 @@ sequenceDiagram
 
 未确认候选不能被 Context Builder 检索。确认命令按 candidate ID 幂等；重复确认返回同一 memory ID。
 
-## 7. AudioHost 崩溃恢复
+## 8. AudioHost 崩溃恢复
 
 ```mermaid
 sequenceDiagram

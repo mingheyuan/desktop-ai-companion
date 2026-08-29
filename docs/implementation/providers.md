@@ -61,23 +61,20 @@ trait LlmProvider: Send + Sync {
 }
 
 struct LlmRequest {
-    request_id: String,
-    turn_id: String,
-    generation: u64,
-    model: String,
-    messages: Vec<ContextMessage>,
-    temperature: Option<f32>,
-    max_output_tokens: Option<u32>,
+    messages: Vec<LlmMessage>,
+    memory_context: Vec<String>,
+    tools: Vec<ToolDefinition>,
+    tool_steps: u8,
 }
 
 enum LlmEvent {
-    TextDelta { text: String },
-    ToolCallDelta { call_id: String, name: String, arguments_delta: String },
-    Completed { finish_reason: String, usage: Option<Usage> },
+    TextDelta(String),
+    ToolCalls(Vec<ToolCall>),
+    Completed,
 }
 ```
 
-MVP 不执行工具调用。若模型输出 ToolCallDelta，Provider 完整解析后把 turn 结束为受控的 `tool_not_enabled`，不能把参数当文本执行。该事件现在保留，是为了未来 Tool Runtime 不破坏 LLM 接口。
+当前已支持首个模型工具循环子集：OpenAI-compatible Provider 在请求中发送严格 schema，聚合 SSE 中的 ToolCall 分片；Rust 只接受已注册的 `system.open_url` 和 `timer.create`，先进入用户确认，再将工具结果作为 `tool` 消息回传模型。每次模型响应暂只允许一个 ToolCall，每轮最多连续 3 步；未知工具、非法 JSON 或危险参数会被拒绝，不能把参数当作普通文本或 Shell 指令执行。
 
 ### 上下文装配顺序
 

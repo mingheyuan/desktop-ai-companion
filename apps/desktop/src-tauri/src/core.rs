@@ -27,7 +27,9 @@ use crate::{
         TurnState, VoicePermissions, VoiceSettings,
     },
     desktop::apply_pet_window_settings,
-    provider::{create_provider, LlmEvent, LlmRequest},
+    provider::{
+        companion_tool_definitions, create_provider, LlmEvent, LlmMessage, LlmRequest, ToolCall,
+    },
     secret::SecretStore,
     storage::{Storage, TimerInput, ToolRunInput},
 };
@@ -88,6 +90,7 @@ struct PendingTool {
     turn_id: String,
     generation: u64,
     action: PendingToolAction,
+    origin: PendingToolOrigin,
 }
 
 #[derive(Clone)]
@@ -102,11 +105,34 @@ enum PendingToolAction {
     },
 }
 
+#[derive(Clone)]
+enum PendingToolOrigin {
+    Explicit,
+    Model {
+        call: ToolCall,
+        messages: Vec<LlmMessage>,
+        memory_context: Vec<String>,
+        tool_steps: u8,
+    },
+}
+
 struct VoiceFinal {
     app: AppHandle,
     text: String,
     source: String,
 }
+
+struct ModelToolContext<'a> {
+    app: &'a AppHandle,
+    turn_id: &'a str,
+    generation: u64,
+    messages: &'a [LlmMessage],
+    memory_context: &'a [String],
+    response: &'a str,
+    tool_steps: u8,
+}
+
+const MAX_TOOL_STEPS: u8 = 3;
 
 pub struct AppCore {
     storage: Storage,
@@ -469,6 +495,7 @@ impl AppCore {
                     turn_id: turn_id.clone(),
                     generation,
                     action: PendingToolAction::OpenUrl { url: request.url },
+                    origin: PendingToolOrigin::Explicit,
                 }
             })
             .or_else(|| {
@@ -492,6 +519,7 @@ impl AppCore {
                             due_at_ms: request.due_at_ms,
                             original_request: request.original_request,
                         },
+                        origin: PendingToolOrigin::Explicit,
                     }
                 })
             });
@@ -561,7 +589,7 @@ impl AppCore {
         text: String,
         cancel: CancellationToken,
     ) {
-        let history = match self.storage.list_messages(&self.conversation_id, 24) {
+        let history: Vec<_> = match self.storage.list_messages(&self.conversation_id, 24) {
             Ok(history) => history
                 .into_iter()
                 .filter(|message| message.turn_id != turn_id)
@@ -608,6 +636,43 @@ impl AppCore {
         } else {
             Vec::new()
         };
+        let mut messages = history
+            .into_iter()
+            .map(|message| match message.role {
+                crate::contracts::MessageRole::User => LlmMessage::User {
+                    content: message.canonical_text,
+                },
+                crate::contracts::MessageRole::Assistant => LlmMessage::Assistant {
+                    content: Some(message.canonical_text),
+                    tool_calls: Vec::new(),
+                },
+            })
+            .collect::<Vec<_>>();
+        messages.push(LlmMessage::User { content: text });
+        self.run_llm_request(
+            app,
+            turn_id,
+            generation,
+            LlmRequest {
+                messages,
+                memory_context,
+                tools: companion_tool_definitions(),
+                tool_steps: 0,
+            },
+            cancel,
+        )
+        .await;
+    }
+
+    async fn run_llm_request(
+        self: Arc<Self>,
+        app: AppHandle,
+        turn_id: String,
+        generation: u64,
+        request: LlmRequest,
+        cancel: CancellationToken,
+    ) {
+        let settings = self.provider.read().await.clone();
         let api_key = match self.resolve_llm_api_key().await {
             Ok(value) => value,
             Err(error) => {
@@ -633,14 +698,7 @@ impl AppCore {
         };
         let mut stream = match tokio::time::timeout(
             Duration::from_secs(15),
-            provider.start(
-                LlmRequest {
-                    user_text: text,
-                    history,
-                    memory_context,
-                },
-                cancel.clone(),
-            ),
+            provider.start(request.clone(), cancel.clone()),
         )
         .await
         {
@@ -723,59 +781,166 @@ impl AppCore {
                     }
                     idle_timeout.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(30));
                     match event {
-                Some(Ok(LlmEvent::TextDelta(delta))) => {
-                    response.push_str(&delta);
-                    pending_delta.push_str(&delta);
-                    if pending_delta.chars().count() >= 24 {
-                        self.emit_pending_delta(&app, &turn_id, generation, &mut pending_delta).await;
-                    }
-                }
-                Some(Ok(LlmEvent::Completed)) => {
-                    self.emit_pending_delta(&app, &turn_id, generation, &mut pending_delta).await;
-                    if response.trim().is_empty() {
-                        self.fail_turn(
-                            &app,
-                            &turn_id,
-                            generation,
-                            "empty_response",
-                            AppError::new("empty_response", "模型没有返回可显示文本。", true),
-                            "",
-                        )
-                        .await;
-                        return;
-                    }
-                    self.complete_turn(&app, &turn_id, generation, &response)
-                        .await;
-                    return;
-                }
-                Some(Err(error)) if error.code == "cancelled" => return,
-                Some(Err(error)) => {
-                    self.fail_turn(
-                        &app,
-                        &turn_id,
-                        generation,
-                        "provider_error",
-                        error,
-                        &response,
-                    )
-                    .await;
-                    return;
-                }
-                None => {
-                    self.fail_turn(
-                        &app,
-                        &turn_id,
-                        generation,
-                        "stream_ended",
-                        AppError::new("provider_unavailable", "LLM 流在完成事件前结束。", true),
-                        &response,
-                    ).await;
-                    return;
-                }
+                        Some(Ok(LlmEvent::TextDelta(delta))) => {
+                            response.push_str(&delta);
+                            pending_delta.push_str(&delta);
+                            if pending_delta.chars().count() >= 24 {
+                                self.emit_pending_delta(&app, &turn_id, generation, &mut pending_delta).await;
+                            }
+                        }
+                        Some(Ok(LlmEvent::ToolCalls(calls))) => {
+                            self.emit_pending_delta(&app, &turn_id, generation, &mut pending_delta).await;
+                            if request.tool_steps >= MAX_TOOL_STEPS {
+                                self.fail_turn(
+                                    &app,
+                                    &turn_id,
+                                    generation,
+                                    "tool_loop_limit",
+                                    AppError::new("tool_loop_limit", "本轮工具调用已达到 3 步上限。", false),
+                                    &response,
+                                ).await;
+                                return;
+                            }
+                            if calls.len() != 1 {
+                                self.fail_turn(
+                                    &app,
+                                    &turn_id,
+                                    generation,
+                                    "tool_not_supported",
+                                    AppError::new("tool_not_supported", "当前一次只支持一个工具调用。", false),
+                                    &response,
+                                ).await;
+                                return;
+                            }
+                            let call = calls.into_iter().next().expect("one tool call");
+                            if let Err(error) = self
+                                .queue_model_tool_call(
+                                    ModelToolContext {
+                                        app: &app,
+                                        turn_id: &turn_id,
+                                        generation,
+                                        messages: &request.messages,
+                                        memory_context: &request.memory_context,
+                                        response: &response,
+                                        tool_steps: request.tool_steps,
+                                    },
+                                    call,
+                                )
+                                .await
+                            {
+                                self.fail_turn(&app, &turn_id, generation, "tool_invalid", error, &response).await;
+                            }
+                            return;
+                        }
+                        Some(Ok(LlmEvent::Completed)) => {
+                            self.emit_pending_delta(&app, &turn_id, generation, &mut pending_delta).await;
+                            if response.trim().is_empty() {
+                                self.fail_turn(
+                                    &app,
+                                    &turn_id,
+                                    generation,
+                                    "empty_response",
+                                    AppError::new("empty_response", "模型没有返回可显示文本。", true),
+                                    "",
+                                ).await;
+                                return;
+                            }
+                            self.complete_turn(&app, &turn_id, generation, &response).await;
+                            return;
+                        }
+                        Some(Err(error)) if error.code == "cancelled" => return,
+                        Some(Err(error)) => {
+                            self.fail_turn(&app, &turn_id, generation, "provider_error", error, &response).await;
+                            return;
+                        }
+                        None => {
+                            self.fail_turn(
+                                &app,
+                                &turn_id,
+                                generation,
+                                "stream_ended",
+                                AppError::new("provider_unavailable", "LLM 流在完成事件前结束。", true),
+                                &response,
+                            ).await;
+                            return;
+                        }
                     }
                 }
             }
         }
+    }
+
+    async fn queue_model_tool_call(
+        &self,
+        context: ModelToolContext<'_>,
+        call: ToolCall,
+    ) -> Result<(), AppError> {
+        let mut candidate = model_tool_candidate(&call, now_ms())?;
+        if let PendingToolAction::CreateTimer {
+            original_request, ..
+        } = &mut candidate.action
+        {
+            if let Some(user_request) =
+                context
+                    .messages
+                    .iter()
+                    .rev()
+                    .find_map(|message| match message {
+                        LlmMessage::User { content } => Some(content.trim()),
+                        _ => None,
+                    })
+            {
+                *original_request = user_request.to_owned();
+            }
+        }
+        let tool_call_id = Uuid::now_v7().to_string();
+        self.storage
+            .begin_tool_run(
+                ToolRunInput {
+                    id: &tool_call_id,
+                    conversation_id: &self.conversation_id,
+                    turn_id: context.turn_id,
+                    tool_name: &call.name,
+                    arguments_json: &candidate.arguments_json,
+                    origin: "model_suggested",
+                },
+                now_ms(),
+            )
+            .map_err(storage_error)?;
+        let mut continuation = context.messages.to_vec();
+        continuation.push(LlmMessage::Assistant {
+            content: (!context.response.trim().is_empty()).then(|| context.response.to_owned()),
+            tool_calls: vec![call.clone()],
+        });
+        let pending = PendingTool {
+            approval: ToolApproval {
+                tool_call_id,
+                tool_name: call.name.clone(),
+                display_name: candidate.display_name,
+                summary: candidate.summary,
+                url: candidate.url,
+                host: candidate.host,
+                title: candidate.title,
+                due_at_ms: candidate.due_at_ms,
+            },
+            turn_id: context.turn_id.to_owned(),
+            generation: context.generation,
+            action: candidate.action,
+            origin: PendingToolOrigin::Model {
+                call,
+                messages: continuation,
+                memory_context: context.memory_context.to_vec(),
+                tool_steps: context.tool_steps + 1,
+            },
+        };
+        {
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.turn_state = TurnState::Active;
+            runtime.generation_state = GenerationState::Finished;
+            runtime.pending_tool = Some(pending);
+        }
+        self.emit_snapshot(context.app).await
     }
 
     async fn emit_pending_delta(
@@ -987,7 +1152,7 @@ impl AppCore {
             if pending.approval.tool_call_id != tool_call_id {
                 return Err(AppError::new(
                     "conflict",
-                    "网页打开请求已更新，请使用当前确认卡片。",
+                    "工具请求已更新，请使用当前确认卡片。",
                     true,
                 ));
             }
@@ -1015,8 +1180,17 @@ impl AppCore {
                     now_ms(),
                 )
                 .map_err(storage_error)?;
-            self.complete_turn(app, &pending.turn_id, pending.generation, &message)
-                .await;
+            if matches!(&pending.origin, PendingToolOrigin::Model { .. }) {
+                self.resume_model_tool(
+                    app,
+                    pending,
+                    "用户拒绝了这次工具调用，工具没有执行。".into(),
+                )
+                .await?;
+            } else {
+                self.complete_turn(app, &pending.turn_id, pending.generation, &message)
+                    .await;
+            }
             return Ok(());
         }
 
@@ -1028,42 +1202,12 @@ impl AppCore {
                 now_ms(),
             )
             .map_err(storage_error)?;
-        match pending.action.clone() {
+        let execution = match pending.action.clone() {
             PendingToolAction::OpenUrl { url } => {
                 let result = open_url_in_default_browser(&url).await;
                 match result {
-                    Ok(()) => {
-                        self.storage
-                            .finish_tool_run(
-                                &pending.approval.tool_call_id,
-                                "succeeded",
-                                "已交给系统默认浏览器打开。",
-                                now_ms(),
-                            )
-                            .map_err(storage_error)?;
-                        self.complete_turn(
-                            app,
-                            &pending.turn_id,
-                            pending.generation,
-                            &format!("网页已打开，老师：{url}"),
-                        )
-                        .await;
-                    }
-                    Err(error) => {
-                        let _ = self.storage.finish_tool_run(
-                            &pending.approval.tool_call_id,
-                            "failed",
-                            &error.message,
-                            now_ms(),
-                        );
-                        self.complete_turn(
-                            app,
-                            &pending.turn_id,
-                            pending.generation,
-                            &format!("没有成功打开网页：{}", error.message),
-                        )
-                        .await;
-                    }
+                    Ok(()) => Ok(format!("已交给系统默认浏览器打开网页：{url}")),
+                    Err(error) => Err(error),
                 }
             }
             PendingToolAction::CreateTimer {
@@ -1085,40 +1229,125 @@ impl AppCore {
                     now_ms(),
                 ) {
                     Ok(_) => {
-                        self.storage
-                            .finish_tool_run(
-                                &pending.approval.tool_call_id,
-                                "succeeded",
-                                "一次性提醒已写入本地数据库。",
-                                now_ms(),
-                            )
-                            .map_err(storage_error)?;
                         self.timer_notify.notify_one();
-                        self.complete_turn(
-                            app,
-                            &pending.turn_id,
-                            pending.generation,
-                            &format!(
-                                "已设置提醒：{title}（约{}后提醒）",
-                                format_timer_delay(due_at_ms - now_ms())
-                            ),
-                        )
+                        Ok(format!(
+                            "已创建一次性提醒：{title}，约{}后触发。",
+                            format_timer_delay(due_at_ms - now_ms())
+                        ))
+                    }
+                    Err(error) => Err(AppError::new(
+                        "tool_execution_failed",
+                        format!("本地提醒创建失败：{error}"),
+                        true,
+                    )),
+                }
+            }
+        };
+        match execution {
+            Ok(result) => {
+                self.storage
+                    .finish_tool_run(
+                        &pending.approval.tool_call_id,
+                        "succeeded",
+                        &result,
+                        now_ms(),
+                    )
+                    .map_err(storage_error)?;
+                if matches!(&pending.origin, PendingToolOrigin::Model { .. }) {
+                    self.resume_model_tool(app, pending, result).await?;
+                } else {
+                    let message = match &pending.action {
+                        PendingToolAction::OpenUrl { url } => format!("网页已打开，老师：{url}"),
+                        PendingToolAction::CreateTimer {
+                            title, due_at_ms, ..
+                        } => format!(
+                            "已设置提醒：{title}（约{}后提醒）",
+                            format_timer_delay(*due_at_ms - now_ms())
+                        ),
+                    };
+                    self.complete_turn(app, &pending.turn_id, pending.generation, &message)
                         .await;
-                    }
-                    Err(error) => {
-                        let message = format!("本地提醒创建失败：{error}");
-                        let _ = self.storage.finish_tool_run(
-                            &pending.approval.tool_call_id,
-                            "failed",
-                            &message,
-                            now_ms(),
-                        );
-                        self.complete_turn(app, &pending.turn_id, pending.generation, &message)
-                            .await;
-                    }
+                }
+            }
+            Err(error) => {
+                let error_message = error.message.clone();
+                let _ = self.storage.finish_tool_run(
+                    &pending.approval.tool_call_id,
+                    "failed",
+                    &error_message,
+                    now_ms(),
+                );
+                if matches!(&pending.origin, PendingToolOrigin::Model { .. }) {
+                    self.resume_model_tool(app, pending, format!("工具执行失败：{error_message}"))
+                        .await?;
+                } else {
+                    self.complete_turn(
+                        app,
+                        &pending.turn_id,
+                        pending.generation,
+                        &format!("工具执行失败：{error_message}"),
+                    )
+                    .await;
                 }
             }
         }
+        Ok(())
+    }
+
+    async fn resume_model_tool(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        pending: PendingTool,
+        tool_result: String,
+    ) -> Result<(), AppError> {
+        let PendingToolOrigin::Model {
+            call,
+            mut messages,
+            memory_context,
+            tool_steps,
+        } = pending.origin
+        else {
+            return Err(AppError::new(
+                "internal",
+                "显式工具请求不能恢复模型工具循环。",
+                false,
+            ));
+        };
+        messages.push(LlmMessage::Tool {
+            tool_call_id: call.id,
+            content: tool_result,
+        });
+        let cancel = self
+            .active_turn
+            .lock()
+            .await
+            .as_ref()
+            .filter(|active| {
+                active.turn_id == pending.turn_id && active.generation == pending.generation
+            })
+            .map(|active| active.cancel.clone())
+            .ok_or_else(|| {
+                AppError::new("conflict", "当前对话已经结束，无法继续工具请求。", true)
+            })?;
+        let core = Arc::clone(self);
+        let turn_id = pending.turn_id;
+        let generation = pending.generation;
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            core.run_llm_request(
+                app,
+                turn_id,
+                generation,
+                LlmRequest {
+                    messages,
+                    memory_context,
+                    tools: companion_tool_definitions(),
+                    tool_steps,
+                },
+                cancel,
+            )
+            .await;
+        });
         Ok(())
     }
 
@@ -2187,6 +2416,17 @@ struct OpenUrlRequest {
     host: String,
 }
 
+struct ModelToolCandidate {
+    action: PendingToolAction,
+    display_name: String,
+    summary: String,
+    url: Option<String>,
+    host: Option<String>,
+    title: Option<String>,
+    due_at_ms: Option<i64>,
+    arguments_json: String,
+}
+
 fn parse_open_url_request(text: &str) -> Result<Option<OpenUrlRequest>, AppError> {
     let has_open_intent = ["打开", "访问", "进入", "浏览"]
         .iter()
@@ -2234,12 +2474,24 @@ fn parse_open_url_request(text: &str) -> Result<Option<OpenUrlRequest>, AppError
     let Some(candidate) = candidate else {
         return Ok(None);
     };
+    Ok(Some(normalize_open_url(&candidate)?))
+}
+
+fn normalize_open_url(candidate: &str) -> Result<OpenUrlRequest, AppError> {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return Err(AppError::new(
+            "invalid_tool_arguments",
+            "网页地址不能为空。",
+            false,
+        ));
+    }
     let normalized = if candidate.to_ascii_lowercase().starts_with("www.")
         || (!candidate.contains("://") && candidate.contains('.'))
     {
         format!("https://{candidate}")
     } else {
-        candidate
+        candidate.to_owned()
     };
     let parsed = reqwest::Url::parse(&normalized)
         .map_err(|_| AppError::new("invalid_tool_arguments", "网页地址不是有效 URL。", false))?;
@@ -2257,10 +2509,140 @@ fn parse_open_url_request(text: &str) -> Result<Option<OpenUrlRequest>, AppError
             false,
         ));
     }
-    Ok(Some(OpenUrlRequest {
+    Ok(OpenUrlRequest {
         url: parsed.to_string(),
         host: parsed.host_str().unwrap_or_default().to_owned(),
-    }))
+    })
+}
+
+fn model_tool_candidate(call: &ToolCall, now_ms: i64) -> Result<ModelToolCandidate, AppError> {
+    let arguments: Value = serde_json::from_str(&call.arguments).map_err(|_| {
+        AppError::new(
+            "invalid_tool_arguments",
+            "模型返回的工具参数不是有效 JSON。",
+            false,
+        )
+    })?;
+    let object = arguments.as_object().ok_or_else(|| {
+        AppError::new(
+            "invalid_tool_arguments",
+            "模型工具参数必须是 JSON 对象。",
+            false,
+        )
+    })?;
+    match call.name.as_str() {
+        "system.open_url" => {
+            reject_unknown_tool_arguments(object, &["url"])?;
+            let url = object.get("url").and_then(Value::as_str).ok_or_else(|| {
+                AppError::new("invalid_tool_arguments", "打开网页需要 url 参数。", false)
+            })?;
+            let request = normalize_open_url(url)?;
+            Ok(ModelToolCandidate {
+                action: PendingToolAction::OpenUrl {
+                    url: request.url.clone(),
+                },
+                display_name: "打开网页".into(),
+                summary: "模型请求使用系统默认浏览器打开此网址；执行前需要你的确认。".into(),
+                url: Some(request.url.clone()),
+                host: Some(request.host),
+                title: None,
+                due_at_ms: None,
+                arguments_json: json!({ "url": request.url }).to_string(),
+            })
+        }
+        "timer.create" => {
+            reject_unknown_tool_arguments(object, &["title", "delay_seconds"])?;
+            let title = object
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    AppError::new(
+                        "invalid_tool_arguments",
+                        "创建提醒需要非空 title 参数。",
+                        false,
+                    )
+                })?;
+            if title.chars().count() > 500 {
+                return Err(AppError::new(
+                    "invalid_tool_arguments",
+                    "提醒内容不能超过 500 个字符。",
+                    false,
+                ));
+            }
+            let delay_seconds = object
+                .get("delay_seconds")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| {
+                    AppError::new(
+                        "invalid_tool_arguments",
+                        "创建提醒需要整数 delay_seconds 参数。",
+                        false,
+                    )
+                })?;
+            if !(1..=7 * 24 * 60 * 60).contains(&delay_seconds) {
+                return Err(AppError::new(
+                    "invalid_tool_arguments",
+                    "一次性提醒只支持 1 秒到 7 天后的时间。",
+                    false,
+                ));
+            }
+            let delay_ms = delay_seconds.checked_mul(1_000).ok_or_else(|| {
+                AppError::new(
+                    "invalid_tool_arguments",
+                    "提醒时间超出系统可支持范围。",
+                    false,
+                )
+            })?;
+            let due_at_ms = now_ms.checked_add(delay_ms).ok_or_else(|| {
+                AppError::new(
+                    "invalid_tool_arguments",
+                    "提醒时间超出系统可支持范围。",
+                    false,
+                )
+            })?;
+            Ok(ModelToolCandidate {
+                action: PendingToolAction::CreateTimer {
+                    title: title.to_owned(),
+                    due_at_ms,
+                    original_request: format!("模型请求创建提醒：{title}"),
+                },
+                display_name: "创建提醒".into(),
+                summary: "模型请求创建一次性本地提醒；执行前需要你的确认。".into(),
+                url: None,
+                host: None,
+                title: Some(title.to_owned()),
+                due_at_ms: Some(due_at_ms),
+                arguments_json: json!({
+                    "title": title,
+                    "delay_seconds": delay_seconds,
+                    "due_at_ms": due_at_ms,
+                    "timezone": "local"
+                })
+                .to_string(),
+            })
+        }
+        other => Err(AppError::new(
+            "tool_not_supported",
+            format!("当前未启用模型工具：{other}"),
+            false,
+        )),
+    }
+}
+
+fn reject_unknown_tool_arguments(
+    arguments: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+) -> Result<(), AppError> {
+    if arguments.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err(AppError::new(
+            "invalid_tool_arguments",
+            "模型工具参数包含未声明的字段。",
+            false,
+        ));
+    }
+    Ok(())
 }
 
 struct TimerRequest {
@@ -2685,6 +3067,50 @@ mod tests {
             .is_none());
     }
 
+    #[test]
+    fn validates_model_tool_candidates_before_approval() {
+        let url = model_tool_candidate(
+            &ToolCall {
+                id: "call-url".into(),
+                name: "system.open_url".into(),
+                arguments: r#"{"url":"https://example.com"}"#.into(),
+            },
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(url.host.as_deref(), Some("example.com"));
+
+        let timer = model_tool_candidate(
+            &ToolCall {
+                id: "call-timer".into(),
+                name: "timer.create".into(),
+                arguments: r#"{"title":"喝水","delay_seconds":30}"#.into(),
+            },
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(timer.due_at_ms, Some(31_000));
+
+        assert!(model_tool_candidate(
+            &ToolCall {
+                id: "call-unsafe".into(),
+                name: "system.open_url".into(),
+                arguments: r#"{"url":"file:///tmp/secret"}"#.into(),
+            },
+            1_000,
+        )
+        .is_err());
+        assert!(model_tool_candidate(
+            &ToolCall {
+                id: "call-unknown".into(),
+                name: "system.run_shell".into(),
+                arguments: "{}".into(),
+            },
+            1_000,
+        )
+        .is_err());
+    }
+
     #[tokio::test]
     async fn explicit_memory_is_retrieved_used_and_deleted() {
         let storage = Storage::open_in_memory().unwrap();
@@ -2704,9 +3130,12 @@ mod tests {
         let mut stream = provider
             .start(
                 LlmRequest {
-                    user_text: "老师喜欢什么颜色？".into(),
-                    history: vec![],
+                    messages: vec![LlmMessage::User {
+                        content: "老师喜欢什么颜色？".into(),
+                    }],
                     memory_context: memory_context_with_budget(matched, 2_400),
+                    tools: companion_tool_definitions(),
+                    tool_steps: 0,
                 },
                 CancellationToken::new(),
             )

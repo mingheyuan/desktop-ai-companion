@@ -77,6 +77,9 @@ source: text | wake_word | push_to_talk
 | Preparing | `context.ready` | 启动 LLM stream，Generation=Streaming | Active |
 | Preparing | `context.failed` | 标记用户消息保留、助手消息失败 | Failed |
 | Active | `llm.delta` | 追加 canonical assistant buffer；按批次发 UI；分句送 TTS | Active |
+| Active | `llm.tool_call` | 停止本轮继续输出，校验已注册工具并写入待确认运行记录 | Active + NeedsInput |
+| Active + NeedsInput | `tool.approved` | 执行单个工具；成功或失败结果回传同一 `TurnActor` | Active |
+| Active + NeedsInput | `tool.rejected` | 将拒绝结果回传同一 `TurnActor`，由模型生成说明 | Active |
 | Active | `llm.completed` | Generation=Finished；封口剩余 TTS chunk | Finalizing |
 | Active | `llm.failed` | Generation=Failed；停止待播队列 | Failed |
 | Finalizing | `playback.drained` | 事务提交助手消息，安排记忆提取 | Completed |
