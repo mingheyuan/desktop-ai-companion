@@ -15,6 +15,7 @@ type BbTexture = {
 type BbFace = {
   uv?: number[];
   texture?: number | null;
+  rotation?: number;
 };
 
 type BbElement = {
@@ -49,7 +50,7 @@ type BbModel = {
 const PIXELS_PER_UNIT = 16;
 const sourceModel = modelData as unknown as BbModel;
 const sourceGunModel = gunData as unknown as BbModel;
-const faceOrder = ["east", "west", "up", "down", "north", "south"] as const;
+const faceOrder = ["east", "west", "up", "down", "south", "north"] as const;
 
 function bbVector(values: number[]) {
   return new THREE.Vector3(
@@ -92,11 +93,20 @@ function setFaceUvs(
   if (!uv || uv.length < 4) return;
   const [u1, v1, u2, v2] = uv;
   const corners = [
-    [u1 / resolution.width, v2 / resolution.height],
-    [u2 / resolution.width, v2 / resolution.height],
-    [u1 / resolution.width, v1 / resolution.height],
-    [u2 / resolution.width, v1 / resolution.height],
+    [u1 / resolution.width, 1 - v1 / resolution.height],
+    [u2 / resolution.width, 1 - v1 / resolution.height],
+    [u1 / resolution.width, 1 - v2 / resolution.height],
+    [u2 / resolution.width, 1 - v2 / resolution.height],
   ];
+  let rotation = ((face.rotation ?? 0) % 360 + 360) % 360;
+  while (rotation >= 90) {
+    const [first, second, third, fourth] = corners;
+    corners[0] = third;
+    corners[1] = first;
+    corners[2] = fourth;
+    corners[3] = second;
+    rotation -= 90;
+  }
   const attribute = geometry.getAttribute("uv");
   for (let index = 0; index < 4; index += 1) {
     attribute.setXY(faceIndex * 4 + index, corners[index][0], corners[index][1]);
@@ -180,10 +190,10 @@ function buildBbmodelPreview(model: BbModel, rootName: string) {
   for (const texture of model.textures) {
     const loaded = texture.source ? textureLoader.load(texture.source) : new THREE.Texture();
     loaded.colorSpace = THREE.SRGBColorSpace;
-    // BBModel UVs use pixel coordinates from the top-left of the image. The
-    // regular Three.js image upload path must flip the source so those V
-    // coordinates render upright on BoxGeometry faces.
-    loaded.flipY = true;
+    // BBModel UVs use pixel coordinates from the top-left of the image. Keep
+    // the image upload unflipped and convert the V coordinate explicitly in
+    // setFaceUvs, matching the reference three-blockbench loader.
+    loaded.flipY = false;
     loaded.magFilter = THREE.NearestFilter;
     loaded.minFilter = THREE.NearestFilter;
     loaded.wrapS = THREE.ClampToEdgeWrapping;
