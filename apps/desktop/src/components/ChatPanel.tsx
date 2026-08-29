@@ -288,7 +288,7 @@ export function ChatPanel() {
           {snapshot.pending_tool_approval.due_at_ms && <p className="tool-host">提醒时间：{formatTimerDue(snapshot.pending_tool_approval.due_at_ms)}</p>}
           <div className="tool-approval-actions">
             <button type="button" className="secondary" disabled={toolBusy} onClick={() => void decidePendingTool(false)}>取消</button>
-            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : snapshot.pending_tool_approval.tool_name === "timer.create" ? "设置提醒" : snapshot.pending_tool_approval.tool_name === "memory.save" ? "保存记忆" : "允许打开"}</button>
+            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : snapshot.pending_tool_approval.tool_name === "timer.create" ? "设置提醒" : snapshot.pending_tool_approval.tool_name === "timer.cancel" ? "取消提醒" : snapshot.pending_tool_approval.tool_name === "memory.save" ? "保存记忆" : "允许打开"}</button>
           </div>
           {toolError && <p className="settings-error">{toolError}</p>}
         </section>

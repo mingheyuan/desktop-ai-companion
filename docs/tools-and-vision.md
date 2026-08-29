@@ -166,6 +166,7 @@ timer.cancel
 ```
 
 - 当前支持相对时间的一次性提醒，例如“30 分钟后提醒我喝水”“半小时后叫我”；用户确认后才写入 SQLite。
+- 可以在聊天中说“取消提醒：喝水”或“取消提醒”。系统只会在唯一匹配到本地待处理提醒后展示确认卡片；没有匹配或存在歧义时不会猜测目标。
 - Rust 负责识别有限的中文相对时间、范围校验、生成 due time 和调度；同时支持模型通过 `timer.create` 提供 `title + delay_seconds` 候选，仍必须经过用户确认。
 - 主面板提供待处理提醒列表和取消操作；`timer.create` 与 `timer.cancel` 也写入 `tool_runs` 审计记录。
 - 应用运行期间由 Tauri notification plugin 发送 macOS 通知；应用重启后会重新读取 pending 任务，并对已到期任务只触发一次。

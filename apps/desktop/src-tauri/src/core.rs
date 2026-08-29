@@ -23,8 +23,8 @@ use crate::{
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, DataSummary, EventEnvelope,
         GenerationState, InputState, ListeningMode, MemoryItem, MouthLevelPayload, PetSettings,
-        PlaybackState, ProviderSettings, TextDeltaPayload, ToolApproval, TurnEndedPayload,
-        TurnState, VoicePermissions, VoiceSettings,
+        PlaybackState, ProviderSettings, TextDeltaPayload, TimerItem, ToolApproval,
+        TurnEndedPayload, TurnState, VoicePermissions, VoiceSettings,
     },
     desktop::apply_pet_window_settings,
     provider::{
@@ -105,6 +105,10 @@ enum PendingToolAction {
     },
     SaveMemory {
         content: String,
+    },
+    CancelTimer {
+        timer_id: String,
+        title: String,
     },
 }
 
@@ -471,6 +475,12 @@ impl AppCore {
         } else {
             None
         };
+        let timer_cancel =
+            if open_url.is_none() && timer_request.is_none() && memory_content.is_none() {
+                self.resolve_explicit_timer_cancel(&text)?
+            } else {
+                None
+            };
 
         let _interaction_guard = self.interaction_command.lock().await;
         self.interrupt_playback().await;
@@ -556,6 +566,30 @@ impl AppCore {
                         origin: PendingToolOrigin::Explicit,
                     }
                 })
+            })
+            .or_else(|| {
+                timer_cancel.map(|timer| {
+                    let tool_call_id = Uuid::now_v7().to_string();
+                    PendingTool {
+                        approval: ToolApproval {
+                            tool_call_id,
+                            tool_name: "timer.cancel".into(),
+                            display_name: "取消提醒".into(),
+                            summary: "只会取消这条已经存在的本地提醒，不会删除其他提醒。".into(),
+                            url: None,
+                            host: None,
+                            title: Some(timer.title.clone()),
+                            due_at_ms: Some(timer.due_at_ms),
+                        },
+                        turn_id: turn_id.clone(),
+                        generation,
+                        action: PendingToolAction::CancelTimer {
+                            timer_id: timer.id,
+                            title: timer.title,
+                        },
+                        origin: PendingToolOrigin::Explicit,
+                    }
+                })
             });
         if let Some(tool) = pending_tool.as_ref() {
             let arguments_json = match &tool.action {
@@ -570,6 +604,9 @@ impl AppCore {
                 .to_string(),
                 PendingToolAction::SaveMemory { content } => {
                     json!({ "content": content }).to_string()
+                }
+                PendingToolAction::CancelTimer { timer_id, title } => {
+                    json!({ "timer_id": timer_id, "title": title }).to_string()
                 }
             };
             self.storage
@@ -1230,6 +1267,9 @@ impl AppCore {
                 PendingToolAction::SaveMemory { content } => {
                     format!("好的，老师，已取消保存这条记忆：{content}")
                 }
+                PendingToolAction::CancelTimer { title, .. } => {
+                    format!("好的，老师，已保留提醒：{title}")
+                }
             };
             self.storage
                 .finish_tool_run(
@@ -1317,6 +1357,20 @@ impl AppCore {
                         true,
                     )
                 }),
+            PendingToolAction::CancelTimer { timer_id, title } => {
+                match self.storage.cancel_timer(&timer_id, now_ms()) {
+                    Ok(true) => {
+                        self.timer_notify.notify_one();
+                        Ok(format!("已取消本地提醒：{title}"))
+                    }
+                    Ok(false) => Err(AppError::new(
+                        "not_found",
+                        "这条提醒不存在、已经触发或已经取消。",
+                        false,
+                    )),
+                    Err(error) => Err(storage_error(error)),
+                }
+            }
         };
         match execution {
             Ok(result) => {
@@ -1341,6 +1395,9 @@ impl AppCore {
                         ),
                         PendingToolAction::SaveMemory { content } => {
                             format!("已保存记忆：{content}")
+                        }
+                        PendingToolAction::CancelTimer { title, .. } => {
+                            format!("已取消提醒：{title}")
                         }
                     };
                     self.complete_turn(app, &pending.turn_id, pending.generation, &message)
@@ -1427,6 +1484,35 @@ impl AppCore {
             .await;
         });
         Ok(())
+    }
+
+    fn resolve_explicit_timer_cancel(&self, text: &str) -> Result<Option<TimerItem>, AppError> {
+        let Some(query) = parse_timer_cancel_query(text) else {
+            return Ok(None);
+        };
+        let timers = self
+            .storage
+            .list_pending_timers(50)
+            .map_err(storage_error)?;
+        let matches = timers
+            .into_iter()
+            .filter(|timer| {
+                query.is_empty() || timer.title == query || timer.title.contains(&query)
+            })
+            .collect::<Vec<_>>();
+        match matches.len() {
+            0 => Err(AppError::new(
+                "timer_not_found",
+                "没有找到能唯一匹配的待处理提醒，请在提醒列表中选择。",
+                false,
+            )),
+            1 => Ok(matches.into_iter().next()),
+            _ => Err(AppError::new(
+                "timer_ambiguous",
+                "有多条提醒可能匹配，请在提醒列表中选择要取消的那一条。",
+                false,
+            )),
+        }
     }
 
     pub async fn cancel_timer(&self, app: &AppHandle, timer_id: &str) -> Result<(), AppError> {
@@ -2896,6 +2982,49 @@ fn parse_timer_request(text: &str, now_ms: i64) -> Result<Option<TimerRequest>, 
     }))
 }
 
+fn parse_timer_cancel_query(text: &str) -> Option<String> {
+    if !text.contains("取消") && !text.contains("撤销") {
+        return None;
+    }
+    if !["提醒", "闹钟", "定时", "计时"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        return None;
+    }
+
+    let query = [
+        "请帮我",
+        "帮我",
+        "麻烦",
+        "请",
+        "取消",
+        "撤销",
+        "提醒",
+        "闹钟",
+        "定时",
+        "计时",
+        "叫我",
+        "刚才",
+        "那个",
+        "一下",
+        "掉",
+    ]
+    .into_iter()
+    .fold(text.to_owned(), |value, marker| value.replace(marker, " "));
+    Some(
+        query
+            .trim_matches(|character: char| {
+                matches!(
+                    character,
+                    '：' | ':' | '，' | ',' | '。' | '！' | '!' | '？' | '?' | ' '
+                )
+            })
+            .trim()
+            .to_owned(),
+    )
+}
+
 fn parse_relative_delay_ms(text: &str) -> Option<i64> {
     let common_phrases = [
         ("半小时", 30 * 60 * 1_000_i64),
@@ -3294,6 +3423,16 @@ mod tests {
         assert!(parse_timer_request("取消 30 分钟后的提醒", 1_000)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn parses_explicit_timer_cancel_query() {
+        assert_eq!(
+            parse_timer_cancel_query("请取消提醒：喝水"),
+            Some("喝水".into())
+        );
+        assert_eq!(parse_timer_cancel_query("取消提醒"), Some(String::new()));
+        assert_eq!(parse_timer_cancel_query("请打开网页"), None);
     }
 
     #[test]
