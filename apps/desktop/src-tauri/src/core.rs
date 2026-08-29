@@ -12,8 +12,9 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 use time::format_description::well_known::Rfc3339;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -28,7 +29,7 @@ use crate::{
     desktop::apply_pet_window_settings,
     provider::{create_provider, LlmEvent, LlmRequest},
     secret::SecretStore,
-    storage::{Storage, ToolRunInput},
+    storage::{Storage, TimerInput, ToolRunInput},
 };
 
 struct RuntimeState {
@@ -86,6 +87,19 @@ struct PendingTool {
     approval: ToolApproval,
     turn_id: String,
     generation: u64,
+    action: PendingToolAction,
+}
+
+#[derive(Clone)]
+enum PendingToolAction {
+    OpenUrl {
+        url: String,
+    },
+    CreateTimer {
+        title: String,
+        due_at_ms: i64,
+        original_request: String,
+    },
 }
 
 struct VoiceFinal {
@@ -113,6 +127,8 @@ pub struct AppCore {
     audio_generation: AtomicU64,
     voice_final_tx: tokio::sync::mpsc::UnboundedSender<VoiceFinal>,
     audio_recovery_tx: tokio::sync::mpsc::UnboundedSender<AppHandle>,
+    timer_notify: Arc<Notify>,
+    timer_scheduler_started: AtomicBool,
     next_generation: AtomicU64,
     event_sequence: AtomicU64,
 }
@@ -132,6 +148,7 @@ impl AppCore {
         let voice_settings = storage.load_voice_settings().map_err(storage_error)?;
         let (voice_final_tx, mut voice_final_rx) = tokio::sync::mpsc::unbounded_channel();
         let (audio_recovery_tx, mut audio_recovery_rx) = tokio::sync::mpsc::unbounded_channel();
+        let timer_notify = Arc::new(Notify::new());
         let core = Arc::new(Self {
             storage,
             conversation_id,
@@ -151,6 +168,8 @@ impl AppCore {
             audio_generation: AtomicU64::new(0),
             voice_final_tx,
             audio_recovery_tx,
+            timer_notify,
+            timer_scheduler_started: AtomicBool::new(false),
             next_generation: AtomicU64::new(0),
             event_sequence: AtomicU64::new(0),
         });
@@ -177,6 +196,46 @@ impl AppCore {
         Ok(core)
     }
 
+    pub fn start_timer_scheduler(self: &Arc<Self>, app: AppHandle) {
+        if self.timer_scheduler_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let core = Arc::clone(self);
+        let notify = Arc::clone(&self.timer_notify);
+        tauri::async_runtime::spawn(async move {
+            loop {
+                let next = core.storage.next_pending_timer();
+                let timer = match next {
+                    Ok(timer) => timer,
+                    Err(error) => {
+                        let mut runtime = core.runtime.write().await;
+                        runtime.revision += 1;
+                        runtime.last_error = Some(storage_error(error));
+                        drop(runtime);
+                        let _ = core.emit_snapshot(&app).await;
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        continue;
+                    }
+                };
+                match timer {
+                    Some(timer) => {
+                        let wait_ms = (timer.due_at_ms - now_ms()).max(0) as u64;
+                        if wait_ms == 0 {
+                            core.fire_due_timer(&app, &timer.id).await;
+                            continue;
+                        }
+                        let wait = Duration::from_millis(wait_ms).min(Duration::from_secs(60));
+                        tokio::select! {
+                            _ = tokio::time::sleep(wait) => {}
+                            _ = notify.notified() => {}
+                        }
+                    }
+                    None => notify.notified().await,
+                }
+            }
+        });
+    }
+
     pub async fn snapshot(&self) -> Result<AppSnapshot, AppError> {
         let runtime = self.runtime.read().await;
         let provider = self.provider.read().await.clone();
@@ -186,6 +245,10 @@ impl AppCore {
         let messages = self
             .storage
             .list_messages(&self.conversation_id, 200)
+            .map_err(storage_error)?;
+        let timers = self
+            .storage
+            .list_pending_timers(20)
             .map_err(storage_error)?;
         Ok(AppSnapshot {
             revision: runtime.revision,
@@ -212,6 +275,7 @@ impl AppCore {
                 .pending_tool
                 .as_ref()
                 .map(|tool| tool.approval.clone()),
+            timers,
             last_error: runtime.last_error.clone(),
         })
     }
@@ -365,6 +429,11 @@ impl AppCore {
             ));
         }
         let open_url = parse_open_url_request(&text)?;
+        let timer_request = if open_url.is_none() {
+            parse_timer_request(&text, now_ms())?
+        } else {
+            None
+        };
 
         let _interaction_guard = self.interaction_command.lock().await;
         self.interrupt_playback().await;
@@ -382,19 +451,62 @@ impl AppCore {
             )
             .map_err(storage_error)?;
 
-        let pending_tool = open_url.map(|request| PendingTool {
-            approval: ToolApproval {
-                tool_call_id: Uuid::now_v7().to_string(),
-                tool_name: "system.open_url".into(),
-                display_name: "打开网页".into(),
-                url: request.url.clone(),
-                host: request.host,
-                summary: "只会调用系统默认浏览器打开此网址，不会读取或修改网页内容。".into(),
-            },
-            turn_id: turn_id.clone(),
-            generation,
-        });
+        let pending_tool = open_url
+            .map(|request| {
+                let tool_call_id = Uuid::now_v7().to_string();
+                PendingTool {
+                    approval: ToolApproval {
+                        tool_call_id,
+                        tool_name: "system.open_url".into(),
+                        display_name: "打开网页".into(),
+                        summary: "只会调用系统默认浏览器打开此网址，不会读取或修改网页内容。"
+                            .into(),
+                        url: Some(request.url.clone()),
+                        host: Some(request.host),
+                        title: None,
+                        due_at_ms: None,
+                    },
+                    turn_id: turn_id.clone(),
+                    generation,
+                    action: PendingToolAction::OpenUrl { url: request.url },
+                }
+            })
+            .or_else(|| {
+                timer_request.map(|request| {
+                    let tool_call_id = Uuid::now_v7().to_string();
+                    PendingTool {
+                        approval: ToolApproval {
+                            tool_call_id,
+                            tool_name: "timer.create".into(),
+                            display_name: "创建提醒".into(),
+                            summary: "提醒会保存在本机，并在到期时通过 macOS 通知提示。".into(),
+                            url: None,
+                            host: None,
+                            title: Some(request.title.clone()),
+                            due_at_ms: Some(request.due_at_ms),
+                        },
+                        turn_id: turn_id.clone(),
+                        generation,
+                        action: PendingToolAction::CreateTimer {
+                            title: request.title,
+                            due_at_ms: request.due_at_ms,
+                            original_request: request.original_request,
+                        },
+                    }
+                })
+            });
         if let Some(tool) = pending_tool.as_ref() {
+            let arguments_json = match &tool.action {
+                PendingToolAction::OpenUrl { url } => json!({ "url": url }).to_string(),
+                PendingToolAction::CreateTimer {
+                    title, due_at_ms, ..
+                } => json!({
+                    "title": title,
+                    "due_at_ms": due_at_ms,
+                    "timezone": "local"
+                })
+                .to_string(),
+            };
             self.storage
                 .begin_tool_run(
                     ToolRunInput {
@@ -402,7 +514,7 @@ impl AppCore {
                         conversation_id: &self.conversation_id,
                         turn_id: &turn_id,
                         tool_name: &tool.approval.tool_name,
-                        arguments_json: &json!({ "url": tool.approval.url }).to_string(),
+                        arguments_json: &arguments_json,
                         origin: "user_explicit",
                     },
                     now_ms(),
@@ -889,21 +1001,22 @@ impl AppCore {
         self.emit_snapshot(app).await?;
 
         if !approved {
+            let message = match &pending.action {
+                PendingToolAction::OpenUrl { url } => format!("好的，老师，已取消打开网页：{url}"),
+                PendingToolAction::CreateTimer { title, .. } => {
+                    format!("好的，老师，已取消提醒：{title}")
+                }
+            };
             self.storage
                 .finish_tool_run(
                     &pending.approval.tool_call_id,
                     "rejected",
-                    "用户取消了网页打开请求。",
+                    "用户取消了工具请求。",
                     now_ms(),
                 )
                 .map_err(storage_error)?;
-            self.complete_turn(
-                app,
-                &pending.turn_id,
-                pending.generation,
-                &format!("好的，老师，已取消打开网页：{}", pending.approval.url),
-            )
-            .await;
+            self.complete_turn(app, &pending.turn_id, pending.generation, &message)
+                .await;
             return Ok(());
         }
 
@@ -911,46 +1024,156 @@ impl AppCore {
             .finish_tool_run(
                 &pending.approval.tool_call_id,
                 "approved",
-                "用户允许打开网页。",
+                "用户允许执行工具。",
                 now_ms(),
             )
             .map_err(storage_error)?;
-        let result = open_url_in_default_browser(&pending.approval.url).await;
-        match result {
-            Ok(()) => {
-                self.storage
-                    .finish_tool_run(
-                        &pending.approval.tool_call_id,
-                        "succeeded",
-                        "已交给系统默认浏览器打开。",
-                        now_ms(),
-                    )
-                    .map_err(storage_error)?;
-                self.complete_turn(
-                    app,
-                    &pending.turn_id,
-                    pending.generation,
-                    &format!("网页已打开，老师：{}", pending.approval.url),
-                )
-                .await;
+        match pending.action.clone() {
+            PendingToolAction::OpenUrl { url } => {
+                let result = open_url_in_default_browser(&url).await;
+                match result {
+                    Ok(()) => {
+                        self.storage
+                            .finish_tool_run(
+                                &pending.approval.tool_call_id,
+                                "succeeded",
+                                "已交给系统默认浏览器打开。",
+                                now_ms(),
+                            )
+                            .map_err(storage_error)?;
+                        self.complete_turn(
+                            app,
+                            &pending.turn_id,
+                            pending.generation,
+                            &format!("网页已打开，老师：{url}"),
+                        )
+                        .await;
+                    }
+                    Err(error) => {
+                        let _ = self.storage.finish_tool_run(
+                            &pending.approval.tool_call_id,
+                            "failed",
+                            &error.message,
+                            now_ms(),
+                        );
+                        self.complete_turn(
+                            app,
+                            &pending.turn_id,
+                            pending.generation,
+                            &format!("没有成功打开网页：{}", error.message),
+                        )
+                        .await;
+                    }
+                }
             }
-            Err(error) => {
-                let _ = self.storage.finish_tool_run(
-                    &pending.approval.tool_call_id,
-                    "failed",
-                    &error.message,
+            PendingToolAction::CreateTimer {
+                title,
+                due_at_ms,
+                original_request,
+            } => {
+                let timer_id = Uuid::now_v7().to_string();
+                match self.storage.create_timer(
+                    TimerInput {
+                        id: &timer_id,
+                        conversation_id: &self.conversation_id,
+                        tool_run_id: &pending.approval.tool_call_id,
+                        title: &title,
+                        due_at_ms,
+                        timezone: "local",
+                        original_request: &original_request,
+                    },
                     now_ms(),
-                );
-                self.complete_turn(
-                    app,
-                    &pending.turn_id,
-                    pending.generation,
-                    &format!("没有成功打开网页：{}", error.message),
-                )
-                .await;
+                ) {
+                    Ok(_) => {
+                        self.storage
+                            .finish_tool_run(
+                                &pending.approval.tool_call_id,
+                                "succeeded",
+                                "一次性提醒已写入本地数据库。",
+                                now_ms(),
+                            )
+                            .map_err(storage_error)?;
+                        self.timer_notify.notify_one();
+                        self.complete_turn(
+                            app,
+                            &pending.turn_id,
+                            pending.generation,
+                            &format!(
+                                "已设置提醒：{title}（约{}后提醒）",
+                                format_timer_delay(due_at_ms - now_ms())
+                            ),
+                        )
+                        .await;
+                    }
+                    Err(error) => {
+                        let message = format!("本地提醒创建失败：{error}");
+                        let _ = self.storage.finish_tool_run(
+                            &pending.approval.tool_call_id,
+                            "failed",
+                            &message,
+                            now_ms(),
+                        );
+                        self.complete_turn(app, &pending.turn_id, pending.generation, &message)
+                            .await;
+                    }
+                }
             }
         }
         Ok(())
+    }
+
+    pub async fn cancel_timer(&self, app: &AppHandle, timer_id: &str) -> Result<(), AppError> {
+        if timer_id.trim().is_empty() {
+            return Err(AppError::new(
+                "invalid_request",
+                "提醒 ID 不能为空。",
+                false,
+            ));
+        }
+        let cancelled = self
+            .storage
+            .cancel_timer(timer_id, now_ms())
+            .map_err(storage_error)?;
+        if !cancelled {
+            return Err(AppError::new(
+                "not_found",
+                "提醒不存在、已经触发或已经取消。",
+                false,
+            ));
+        }
+        self.timer_notify.notify_one();
+        self.emit_snapshot(app).await
+    }
+
+    async fn fire_due_timer(&self, app: &AppHandle, timer_id: &str) {
+        match self.storage.claim_due_timer(timer_id, now_ms()) {
+            Ok(Some(timer)) => {
+                let notification = app
+                    .notification()
+                    .builder()
+                    .title("爱丽丝的提醒")
+                    .body(&timer.title)
+                    .show();
+                if let Err(error) = notification {
+                    let mut runtime = self.runtime.write().await;
+                    runtime.revision += 1;
+                    runtime.last_error = Some(AppError::new(
+                        "notification_failed",
+                        format!("提醒已到期，但 macOS 通知发送失败：{error}"),
+                        true,
+                    ));
+                }
+                let _ = self.emit_snapshot(app).await;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let mut runtime = self.runtime.write().await;
+                runtime.revision += 1;
+                runtime.last_error = Some(storage_error(error));
+                drop(runtime);
+                let _ = self.emit_snapshot(app).await;
+            }
+        }
     }
 
     pub async fn update_provider(
@@ -1069,6 +1292,7 @@ impl AppCore {
         self.storage
             .clear_conversation_history(&self.conversation_id, now_ms())
             .map_err(storage_error)?;
+        self.timer_notify.notify_one();
         {
             let mut runtime = self.runtime.write().await;
             runtime.revision += 1;
@@ -2039,6 +2263,123 @@ fn parse_open_url_request(text: &str) -> Result<Option<OpenUrlRequest>, AppError
     }))
 }
 
+struct TimerRequest {
+    title: String,
+    due_at_ms: i64,
+    original_request: String,
+}
+
+fn parse_timer_request(text: &str, now_ms: i64) -> Result<Option<TimerRequest>, AppError> {
+    let has_timer_intent = ["提醒", "叫我", "闹钟", "定时", "计时"]
+        .iter()
+        .any(|keyword| text.contains(keyword));
+    if !has_timer_intent
+        || (text.contains("取消")
+            && ["提醒", "闹钟", "定时", "计时"]
+                .iter()
+                .any(|keyword| text.contains(keyword)))
+    {
+        return Ok(None);
+    }
+    let Some(delay_ms) = parse_relative_delay_ms(text) else {
+        return Ok(None);
+    };
+    if !(1_000..=7 * 24 * 60 * 60 * 1_000).contains(&delay_ms) {
+        return Err(AppError::new(
+            "invalid_tool_arguments",
+            "一次性提醒只支持 1 秒到 7 天后的时间。",
+            false,
+        ));
+    }
+    let due_at_ms = now_ms.checked_add(delay_ms).ok_or_else(|| {
+        AppError::new(
+            "invalid_tool_arguments",
+            "提醒时间超出系统可支持范围。",
+            false,
+        )
+    })?;
+    Ok(Some(TimerRequest {
+        title: text.trim().to_owned(),
+        due_at_ms,
+        original_request: text.trim().to_owned(),
+    }))
+}
+
+fn parse_relative_delay_ms(text: &str) -> Option<i64> {
+    let common_phrases = [
+        ("半小时", 30 * 60 * 1_000_i64),
+        ("一小时", 60 * 60 * 1_000_i64),
+        ("一个小时", 60 * 60 * 1_000_i64),
+        ("两小时", 2 * 60 * 60 * 1_000_i64),
+        ("二小时", 2 * 60 * 60 * 1_000_i64),
+        ("三小时", 3 * 60 * 60 * 1_000_i64),
+    ];
+    if text.contains("后") || text.contains("以后") {
+        for (phrase, delay) in common_phrases {
+            if text.contains(&format!("{phrase}后")) || text.contains(&format!("{phrase}以后")) {
+                return Some(delay);
+            }
+        }
+    }
+
+    let marker = text.rfind("以后").or_else(|| text.rfind('后'))?;
+    let before = text[..marker].trim_end();
+    let (unit_length, multiplier) = if before.ends_with("分钟") {
+        ("分钟".len(), 60 * 1_000)
+    } else if before.ends_with("小时") {
+        ("小时".len(), 60 * 60 * 1_000)
+    } else if before.ends_with('秒') {
+        ('秒'.len_utf8(), 1_000)
+    } else if before.ends_with('分') {
+        ('分'.len_utf8(), 60 * 1_000)
+    } else if before.ends_with('时') {
+        ('时'.len_utf8(), 60 * 60 * 1_000)
+    } else if before.ends_with('天') {
+        ('天'.len_utf8(), 24 * 60 * 60 * 1_000)
+    } else {
+        return None;
+    };
+    let number_text = before[..before.len() - unit_length].trim_end();
+    let end = number_text.len();
+    let bytes = number_text.as_bytes();
+    let mut number_start = end;
+    while number_start > 0 && bytes[number_start - 1].is_ascii_digit() {
+        number_start -= 1;
+    }
+    if number_start == end {
+        return None;
+    }
+    let amount = number_text[number_start..end].parse::<i64>().ok()?;
+    amount.checked_mul(multiplier)
+}
+
+fn format_timer_delay(delay_ms: i64) -> String {
+    let total_seconds = (delay_ms.max(1) / 1_000) as u64;
+    if total_seconds < 60 {
+        return format!("{total_seconds}秒");
+    }
+    let total_minutes = total_seconds / 60;
+    if total_minutes < 60 {
+        return format!("{total_minutes}分钟");
+    }
+    let hours = total_minutes / 60;
+    let minutes = total_minutes % 60;
+    if hours < 24 {
+        return if minutes == 0 {
+            format!("{hours}小时")
+        } else {
+            format!("{hours}小时{minutes}分钟")
+        };
+    }
+    let days = hours / 24;
+    let remaining_hours = hours % 24;
+    if remaining_hours == 0 {
+        format!("{days}天")
+    } else {
+        format!("{days}天{remaining_hours}小时")
+    }
+}
+
 async fn open_url_in_default_browser(url: &str) -> Result<(), AppError> {
     #[cfg(target_os = "macos")]
     {
@@ -2316,6 +2657,30 @@ mod tests {
         assert!(parse_open_url_request("打开 file:///tmp/secret.txt").is_err());
         assert!(parse_open_url_request("打开 https://user:password@example.com").is_err());
         assert!(parse_open_url_request("打开网页但没有提供网址")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn parses_relative_timer_request() {
+        let timer = parse_timer_request("半小时后提醒我喝水", 1_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(timer.due_at_ms, 1_801_000);
+        assert_eq!(timer.title, "半小时后提醒我喝水");
+
+        let timer = parse_timer_request("提醒我 30 分钟后开会", 2_000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(timer.due_at_ms, 1_802_000);
+    }
+
+    #[test]
+    fn ignores_non_relative_timer_request() {
+        assert!(parse_timer_request("明天下午提醒我开会", 1_000)
+            .unwrap()
+            .is_none());
+        assert!(parse_timer_request("取消 30 分钟后的提醒", 1_000)
             .unwrap()
             .is_none());
     }

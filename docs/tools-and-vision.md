@@ -2,7 +2,7 @@
 
 > 版本：v0.1 规划方案
 >
-> 状态：已完成参考项目调研；`system.open_url` 首个低风险垂直切片已实现，其余 Tool MVP 尚未进入实现
+> 状态：已完成参考项目调研；`system.open_url` 和一次性本地计时提醒的低风险垂直切片已实现，模型 ToolCall、屏幕感知和其余 Tool MVP 尚未进入实现
 >
 > 更新日期：2026-08-29
 
@@ -156,7 +156,7 @@ system.open_url
 
 ### 7.1 应用内计时提醒
 
-首版提供：
+当前已实现首个受限切片：
 
 ```text
 timer.create
@@ -164,10 +164,16 @@ timer.list
 timer.cancel
 ```
 
-- LLM 只负责把自然语言提出为候选时间；Rust 使用系统时区、当前时间和 DST 规则验证并生成标准时间。
+- 当前支持相对时间的一次性提醒，例如“30 分钟后提醒我喝水”“半小时后叫我”；用户确认后才写入 SQLite。
+- Rust 负责识别有限的中文相对时间、范围校验、生成 due time 和调度；当前不依赖 LLM ToolCall。
+- 主面板提供待处理提醒列表和取消操作；`timer.create` 与 `timer.cancel` 也写入 `tool_runs` 审计记录。
+- 应用运行期间由 Tauri notification plugin 发送 macOS 通知；应用重启后会重新读取 pending 任务，并对已到期任务只触发一次。
+- 应用完全退出时不会由系统独立投递通知；要覆盖该场景，需要后续接入 macOS 原生 UserNotifications 日历/时间间隔 trigger，并增加休眠、时区和桌宠动作验证。
+- 当前不支持绝对日期、重复提醒、贪睡和 Apple 提醒事项同步。
+- 目标规格仍要求：LLM 只负责把自然语言提出为候选时间；Rust 使用系统时区、当前时间和 DST 规则验证并生成标准时间。
 - “明天上午”“待会儿”等无法唯一确定的表达必须追问，不能猜测后直接创建。
 - SQLite 是计时任务事实来源，保存 `timer_id`、标题、触发时间、时区、状态和原始用户请求。
-- macOS 使用 UserNotifications 的日历或时间间隔 trigger 注册本地通知；应用运行时同时触发桌宠动作、声音和 TTS。
+- 完整版本应使用 UserNotifications 的日历或时间间隔 trigger 注册本地通知；应用运行时同时触发桌宠动作、声音和 TTS。
 - 系统休眠或应用重启后重新核对任务；过期任务按策略立即提醒一次或标记错过，不能重复触发。
 - 首版只做一次性计时；重复、贪睡和复杂日历规则后续增加。
 
@@ -277,7 +283,7 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 
 1. `ToolRegistry + ToolPolicyEngine + ToolRunStore`，使用假工具完成工具循环测试。
 2. 完善 `system.open_url` 的模型 ToolCall 接入、URL 安全策略和授权 UI。
-3. `timer.create/list/cancel`，验证休眠、重启、时区和重复触发。
+3. 完善 `timer.create/list/cancel`，接入系统级离线通知并验证休眠、重启、时区和重复触发。
 4. `screen.observe` 本地单帧，验证权限、窗口排除和临时文件清理。
 5. 独立 Vision Provider，先接一个云端兼容模型和一个本地兼容模型。
 6. EventKit 提醒事项。

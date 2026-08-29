@@ -80,9 +80,21 @@ export interface ToolApproval {
   tool_call_id: string;
   tool_name: string;
   display_name: string;
-  url: string;
-  host: string;
   summary: string;
+  url?: string;
+  host?: string;
+  title?: string;
+  due_at_ms?: number;
+}
+
+export interface TimerItem {
+  id: string;
+  title: string;
+  due_at_ms: number;
+  timezone: string;
+  original_request: string;
+  status: string;
+  created_at_ms: number;
 }
 
 export interface AppSnapshot {
@@ -107,6 +119,7 @@ export interface AppSnapshot {
   voice_input_route: "unknown" | "on_device" | "system_service";
   mouth_level: number;
   pending_tool_approval: ToolApproval | null;
+  timers: TimerItem[];
   last_error: AppError | null;
 }
 

@@ -202,9 +202,26 @@ pub struct ToolApproval {
     pub tool_call_id: String,
     pub tool_name: String,
     pub display_name: String,
-    pub url: String,
-    pub host: String,
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimerItem {
+    pub id: String,
+    pub title: String,
+    pub due_at_ms: i64,
+    pub timezone: String,
+    pub original_request: String,
+    pub status: String,
+    pub created_at_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,6 +274,7 @@ pub struct AppSnapshot {
     pub voice_input_route: String,
     pub mouth_level: f64,
     pub pending_tool_approval: Option<ToolApproval>,
+    pub timers: Vec<TimerItem>,
     pub last_error: Option<AppError>,
 }
 
@@ -373,6 +391,12 @@ pub struct ToolDecisionRequest {
     pub request_id: String,
     pub tool_call_id: String,
     pub approved: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CancelTimerRequest {
+    pub request_id: String,
+    pub timer_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::contracts::{
     CharacterSettings, ChatMessage, DataSummary, MemoryItem, MessageRole, MessageStatus,
-    PetSettings, ProviderSettings, VoiceSettings,
+    PetSettings, ProviderSettings, TimerItem, VoiceSettings,
 };
 
 pub struct Storage {
@@ -20,6 +20,16 @@ pub struct ToolRunInput<'a> {
     pub tool_name: &'a str,
     pub arguments_json: &'a str,
     pub origin: &'a str,
+}
+
+pub struct TimerInput<'a> {
+    pub id: &'a str,
+    pub conversation_id: &'a str,
+    pub tool_run_id: &'a str,
+    pub title: &'a str,
+    pub due_at_ms: i64,
+    pub timezone: &'a str,
+    pub original_request: &'a str,
 }
 
 impl Storage {
@@ -61,7 +71,7 @@ impl Storage {
             [],
             |row| row.get(0),
         )?;
-        if current_version > 3 {
+        if current_version > 4 {
             return Err(rusqlite::Error::InvalidQuery);
         }
         if current_version == 0 {
@@ -208,6 +218,32 @@ impl Storage {
             )?;
             transaction.execute(
                 "INSERT INTO schema_migrations(version, name, applied_at_ms) VALUES(3, 'tool_runtime_audit', CAST(strftime('%s','now') AS INTEGER) * 1000)",
+                [],
+            )?;
+            transaction.commit()?;
+        }
+        if current_version < 4 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(
+                "CREATE TABLE IF NOT EXISTS timers (
+                   id TEXT PRIMARY KEY,
+                   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                   tool_run_id TEXT UNIQUE REFERENCES tool_runs(id) ON DELETE SET NULL,
+                   title TEXT NOT NULL,
+                   due_at_ms INTEGER NOT NULL,
+                   timezone TEXT NOT NULL,
+                   original_request TEXT NOT NULL,
+                   status TEXT NOT NULL CHECK(status IN ('pending','fired','cancelled')),
+                   created_at_ms INTEGER NOT NULL,
+                   updated_at_ms INTEGER NOT NULL,
+                   fired_at_ms INTEGER,
+                   cancelled_at_ms INTEGER
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_timers_pending_due
+                   ON timers(status, due_at_ms);",
+            )?;
+            transaction.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at_ms) VALUES(4, 'timers', CAST(strftime('%s','now') AS INTEGER) * 1000)",
                 [],
             )?;
             transaction.commit()?;
@@ -794,6 +830,10 @@ impl Storage {
             [conversation_id],
         )?;
         transaction.execute(
+            "DELETE FROM timers WHERE conversation_id=?1",
+            [conversation_id],
+        )?;
+        transaction.execute(
             "UPDATE conversations SET updated_at_ms=?1 WHERE id=?2",
             params![now_ms, conversation_id],
         )?;
@@ -861,6 +901,97 @@ impl Storage {
         )?;
         Ok(())
     }
+
+    pub fn create_timer(
+        &self,
+        input: TimerInput<'_>,
+        now_ms: i64,
+    ) -> Result<TimerItem, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        connection.execute(
+            "INSERT INTO timers(id, conversation_id, tool_run_id, title, due_at_ms, timezone, original_request, status, created_at_ms, updated_at_ms)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?8)",
+            params![
+                input.id,
+                input.conversation_id,
+                input.tool_run_id,
+                input.title,
+                input.due_at_ms,
+                input.timezone,
+                input.original_request,
+                now_ms
+            ],
+        )?;
+        Ok(TimerItem {
+            id: input.id.to_owned(),
+            title: input.title.to_owned(),
+            due_at_ms: input.due_at_ms,
+            timezone: input.timezone.to_owned(),
+            original_request: input.original_request.to_owned(),
+            status: "pending".into(),
+            created_at_ms: now_ms,
+        })
+    }
+
+    pub fn list_pending_timers(&self, limit: usize) -> Result<Vec<TimerItem>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let mut statement = connection.prepare(
+            "SELECT id, title, due_at_ms, timezone, original_request, status, created_at_ms
+             FROM timers WHERE status='pending' ORDER BY due_at_ms ASC LIMIT ?1",
+        )?;
+        let rows = statement.query_map([limit.clamp(1, 50) as i64], map_timer_row)?;
+        rows.collect()
+    }
+
+    pub fn next_pending_timer(&self) -> Result<Option<TimerItem>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        connection
+            .query_row(
+                "SELECT id, title, due_at_ms, timezone, original_request, status, created_at_ms
+                 FROM timers WHERE status='pending' ORDER BY due_at_ms ASC LIMIT 1",
+                [],
+                map_timer_row,
+            )
+            .optional()
+    }
+
+    pub fn claim_due_timer(
+        &self,
+        timer_id: &str,
+        now_ms: i64,
+    ) -> Result<Option<TimerItem>, rusqlite::Error> {
+        let mut connection = self.connection.lock().expect("storage mutex poisoned");
+        let transaction = connection.transaction()?;
+        let timer = transaction
+            .query_row(
+                "SELECT id, title, due_at_ms, timezone, original_request, status, created_at_ms
+                 FROM timers WHERE id=?1 AND status='pending' AND due_at_ms<=?2",
+                params![timer_id, now_ms],
+                map_timer_row,
+            )
+            .optional()?;
+        let Some(mut timer) = timer else {
+            transaction.commit()?;
+            return Ok(None);
+        };
+        transaction.execute(
+            "UPDATE timers SET status='fired', updated_at_ms=?1, fired_at_ms=?1 WHERE id=?2 AND status='pending'",
+            params![now_ms, timer_id],
+        )?;
+        timer.status = "fired".into();
+        transaction.commit()?;
+        Ok(Some(timer))
+    }
+
+    pub fn cancel_timer(&self, timer_id: &str, now_ms: i64) -> Result<bool, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let changed = connection.execute(
+            "UPDATE timers SET status='cancelled', updated_at_ms=?1, cancelled_at_ms=?1
+             WHERE id=?2 AND status='pending'",
+            params![now_ms, timer_id],
+        )?;
+        Ok(changed == 1)
+    }
 }
 
 fn map_memory_row(row: &rusqlite::Row<'_>) -> Result<MemoryItem, rusqlite::Error> {
@@ -874,6 +1005,18 @@ fn map_memory_row(row: &rusqlite::Row<'_>) -> Result<MemoryItem, rusqlite::Error
         version: row.get(6)?,
         created_at_ms: row.get(7)?,
         updated_at_ms: row.get(8)?,
+    })
+}
+
+fn map_timer_row(row: &rusqlite::Row<'_>) -> Result<TimerItem, rusqlite::Error> {
+    Ok(TimerItem {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        due_at_ms: row.get(2)?,
+        timezone: row.get(3)?,
+        original_request: row.get(4)?,
+        status: row.get(5)?,
+        created_at_ms: row.get(6)?,
     })
 }
 
@@ -1187,5 +1330,91 @@ mod tests {
             )
             .unwrap();
         assert_eq!(row, ("succeeded".into(), "浏览器已打开".into()));
+    }
+
+    #[test]
+    fn timers_round_trip_and_transition_once() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(1).unwrap();
+        storage
+            .begin_turn(&conversation, "timer-turn", 1, "text", "提醒我喝水", 2)
+            .unwrap();
+        storage
+            .begin_tool_run(
+                ToolRunInput {
+                    id: "timer-tool",
+                    conversation_id: &conversation,
+                    turn_id: "timer-turn",
+                    tool_name: "timer.create",
+                    arguments_json: r#"{"title":"喝水","due_at_ms":100}"#,
+                    origin: "user_explicit",
+                },
+                3,
+            )
+            .unwrap();
+        let timer = storage
+            .create_timer(
+                TimerInput {
+                    id: "timer-1",
+                    conversation_id: &conversation,
+                    tool_run_id: "timer-tool",
+                    title: "喝水",
+                    due_at_ms: 100,
+                    timezone: "local",
+                    original_request: "30 秒后提醒我喝水",
+                },
+                4,
+            )
+            .unwrap();
+        assert_eq!(
+            storage.list_pending_timers(20).unwrap(),
+            vec![timer.clone()]
+        );
+        assert!(storage.claim_due_timer("timer-1", 99).unwrap().is_none());
+        let fired = storage.claim_due_timer("timer-1", 100).unwrap().unwrap();
+        assert_eq!(fired.status, "fired");
+        assert!(storage.claim_due_timer("timer-1", 101).unwrap().is_none());
+
+        storage
+            .begin_turn(
+                &conversation,
+                "timer-turn-2",
+                2,
+                "text",
+                "设置第二个提醒",
+                5,
+            )
+            .unwrap();
+        storage
+            .begin_tool_run(
+                ToolRunInput {
+                    id: "timer-tool-2",
+                    conversation_id: &conversation,
+                    turn_id: "timer-turn-2",
+                    tool_name: "timer.create",
+                    arguments_json: r#"{"title":"取消我","due_at_ms":200}"#,
+                    origin: "user_explicit",
+                },
+                5,
+            )
+            .unwrap();
+        let cancelled = storage
+            .create_timer(
+                TimerInput {
+                    id: "timer-2",
+                    conversation_id: &conversation,
+                    tool_run_id: "timer-tool-2",
+                    title: "取消我",
+                    due_at_ms: 200,
+                    timezone: "local",
+                    original_request: "取消测试",
+                },
+                5,
+            )
+            .unwrap();
+        assert_eq!(cancelled.status, "pending");
+        assert!(storage.cancel_timer("timer-2", 6).unwrap());
+        assert!(!storage.cancel_timer("timer-2", 7).unwrap());
+        assert!(storage.list_pending_timers(20).unwrap().is_empty());
     }
 }

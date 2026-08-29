@@ -5,11 +5,11 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     contracts::{
-        ActionRequest, AppError, AppSnapshot, CancelTurnRequest, CharacterSettings,
-        CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryItem, PetSettings,
-        ProviderSettings, SearchMemoriesRequest, SetListeningRequest, SubmitTextRequest,
-        ToolDecisionRequest, UpdateMemoryRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
-        UpdateVoiceSettingsRequest, VoiceSettings,
+        ActionRequest, AppError, AppSnapshot, CancelTimerRequest, CancelTurnRequest,
+        CharacterSettings, CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryItem,
+        PetSettings, ProviderSettings, SearchMemoriesRequest, SetListeningRequest,
+        SubmitTextRequest, ToolDecisionRequest, UpdateMemoryRequest, UpdatePetSettingsRequest,
+        UpdateProviderRequest, UpdateVoiceSettingsRequest, VoiceSettings,
     },
     core::AppCore,
     desktop,
@@ -68,6 +68,16 @@ pub async fn tool_decide(
         .0
         .decide_tool(&app, &request.tool_call_id, request.approved)
         .await
+}
+
+#[tauri::command]
+pub async fn timer_cancel(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: CancelTimerRequest,
+) -> Result<(), AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.cancel_timer(&app, &request.timer_id).await
 }
 
 #[tauri::command]

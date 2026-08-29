@@ -149,6 +149,24 @@ CREATE TABLE tool_runs (
 CREATE INDEX idx_tool_runs_conversation_time
   ON tool_runs(conversation_id, created_at_ms);
 
+CREATE TABLE timers (
+  id                TEXT PRIMARY KEY,
+  conversation_id   TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  tool_run_id       TEXT UNIQUE REFERENCES tool_runs(id) ON DELETE SET NULL,
+  title             TEXT NOT NULL,
+  due_at_ms         INTEGER NOT NULL,
+  timezone          TEXT NOT NULL,
+  original_request  TEXT NOT NULL,
+  status            TEXT NOT NULL CHECK(status IN ('pending','fired','cancelled')),
+  created_at_ms     INTEGER NOT NULL,
+  updated_at_ms     INTEGER NOT NULL,
+  fired_at_ms       INTEGER,
+  cancelled_at_ms   INTEGER
+);
+
+CREATE INDEX idx_timers_pending_due
+  ON timers(status, due_at_ms);
+
 CREATE TABLE app_settings (
   key           TEXT PRIMARY KEY,
   value_json    TEXT NOT NULL,
@@ -195,6 +213,8 @@ update 随后更新 `memories` 并插入新索引项；delete 随后删除 `memo
 - 启动完整性检查发现 FTS 漂移时可从 `memories` 重建，不得从聊天记录重新推断已删除记忆。
 
 `tool_runs` 保存工具调用的规范化参数、来源、授权/执行状态和脱敏结果摘要，不保存 API Key、原始音频或屏幕图像。应用启动时，未完成的 `pending/approved` 工具请求会标记为失败，避免确认卡片或执行记录在重启后悬挂。
+
+`timers` 是一次性本地提醒的持久事实来源。创建提醒前先完成 `tool_runs` 的用户确认；确认后插入 `pending` 记录。调度器只能通过带状态条件的 claim 将到期记录转换为 `fired`，取消同样只能从 `pending` 转换为 `cancelled`，从而保证重启、并发唤醒或重复扫描不会重复触发。当前 `timezone='local'` 只表达本地相对计时，绝对日期、DST 复核和系统级离线通知仍是后续增强。
 
 ## 5. 记忆候选流程
 

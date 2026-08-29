@@ -48,6 +48,7 @@ const emptySnapshot: AppSnapshot = {
   voice_input_route: "unknown",
   mouth_level: 0,
   pending_tool_approval: null,
+  timers: [],
   last_error: null,
 };
 

@@ -1,5 +1,5 @@
 import { FormEvent, useRef, useState } from "react";
-import { cancelTurn, decideTool, finishPushToTalk, importCharacterVrm, isTauri, openVoicePrivacySettings, requestVoicePermissions, setListening, startPushToTalk, stopPlayback, submitText, updatePetSettings, updateVoiceSettings } from "../lib/tauri";
+import { cancelTimer, cancelTurn, decideTool, finishPushToTalk, importCharacterVrm, isTauri, openVoicePrivacySettings, requestVoicePermissions, setListening, startPushToTalk, stopPlayback, submitText, updatePetSettings, updateVoiceSettings } from "../lib/tauri";
 import { useAppStore } from "../stores/app";
 import { ProviderSettingsDialog } from "./ProviderSettingsDialog";
 import { MemoryPanel } from "./MemoryPanel";
@@ -11,6 +11,7 @@ export function ChatPanel() {
   const [submitError, setSubmitError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [timersOpen, setTimersOpen] = useState(false);
   const [petUpdating, setPetUpdating] = useState(false);
   const [petError, setPetError] = useState("");
   const [importingVrm, setImportingVrm] = useState(false);
@@ -18,6 +19,8 @@ export function ChatPanel() {
   const [voiceError, setVoiceError] = useState("");
   const [toolBusy, setToolBusy] = useState(false);
   const [toolError, setToolError] = useState("");
+  const [timerBusy, setTimerBusy] = useState(false);
+  const [timerError, setTimerError] = useState("");
   const pttStart = useRef<Promise<void> | null>(null);
   const voicePermissionNotDetermined = snapshot.voice_permissions.microphone === "not_determined"
     || snapshot.voice_permissions.speech_recognition === "not_determined";
@@ -138,11 +141,33 @@ export function ChatPanel() {
     } catch (reason) {
       if (typeof reason === "string") setToolError(reason);
       else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setToolError(reason.message);
-      else setToolError("处理网页打开请求失败。");
+      else setToolError("处理工具请求失败。");
     } finally {
       setToolBusy(false);
     }
   };
+
+  const cancelScheduledTimer = async (timerId: string) => {
+    if (timerBusy || !isTauri()) return;
+    setTimerBusy(true);
+    setTimerError("");
+    try {
+      await cancelTimer(timerId);
+    } catch (reason) {
+      if (typeof reason === "string") setTimerError(reason);
+      else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setTimerError(reason.message);
+      else setTimerError("取消提醒失败。");
+    } finally {
+      setTimerBusy(false);
+    }
+  };
+
+  const formatTimerDue = (timestamp: number) => new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
 
   return (
     <main className="panel-shell">
@@ -155,6 +180,7 @@ export function ChatPanel() {
           <span className="provider-badge">{snapshot.provider.provider === "mock" ? "MOCK" : snapshot.provider.model}</span>
           <div className={`status-pill state-${snapshot.avatar_state}`}>{snapshot.avatar_state}</div>
           <button className="header-text-button" type="button" onClick={() => setMemoryOpen(true)}>记忆</button>
+          <button className="header-text-button" type="button" onClick={() => setTimersOpen((open) => !open)}>提醒{snapshot.timers.length ? ` ${snapshot.timers.length}` : ""}</button>
           <button className="icon-button" type="button" onClick={() => setSettingsOpen(true)} aria-label="打开设置">⚙</button>
         </div>
       </header>
@@ -256,13 +282,38 @@ export function ChatPanel() {
             <span className="tool-risk-badge">需要确认</span>
           </div>
           <p className="tool-approval-summary">{snapshot.pending_tool_approval.summary}</p>
-          <code className="tool-url">{snapshot.pending_tool_approval.url}</code>
-          <p className="tool-host">目标域名：{snapshot.pending_tool_approval.host}</p>
+          {snapshot.pending_tool_approval.url && <code className="tool-url">{snapshot.pending_tool_approval.url}</code>}
+          {snapshot.pending_tool_approval.host && <p className="tool-host">目标域名：{snapshot.pending_tool_approval.host}</p>}
+          {snapshot.pending_tool_approval.title && <p className="tool-host">提醒内容：{snapshot.pending_tool_approval.title}</p>}
+          {snapshot.pending_tool_approval.due_at_ms && <p className="tool-host">提醒时间：{formatTimerDue(snapshot.pending_tool_approval.due_at_ms)}</p>}
           <div className="tool-approval-actions">
             <button type="button" className="secondary" disabled={toolBusy} onClick={() => void decidePendingTool(false)}>取消</button>
-            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : "允许打开"}</button>
+            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : snapshot.pending_tool_approval.tool_name === "timer.create" ? "设置提醒" : "允许打开"}</button>
           </div>
           {toolError && <p className="settings-error">{toolError}</p>}
+        </section>
+      )}
+
+      {timersOpen && (
+        <section className="timer-panel" aria-label="待处理提醒">
+          <div className="timer-panel-heading">
+            <div>
+              <p className="eyebrow">LOCAL TIMERS</p>
+              <h2>待处理提醒</h2>
+            </div>
+            <button className="icon-button" type="button" onClick={() => setTimersOpen(false)} aria-label="关闭提醒列表">×</button>
+          </div>
+          {snapshot.timers.length === 0 && <p className="timer-empty">还没有待处理的提醒。</p>}
+          {snapshot.timers.map((timer) => (
+            <article className="timer-item" key={timer.id}>
+              <div>
+                <p>{timer.title}</p>
+                <span>{formatTimerDue(timer.due_at_ms)} · {timer.timezone}</span>
+              </div>
+              <button type="button" disabled={timerBusy || !isTauri()} onClick={() => void cancelScheduledTimer(timer.id)}>取消</button>
+            </article>
+          ))}
+          {timerError && <p className="settings-error">{timerError}</p>}
         </section>
       )}
 

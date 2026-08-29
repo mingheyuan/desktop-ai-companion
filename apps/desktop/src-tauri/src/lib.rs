@@ -60,12 +60,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(shortcut_plugin)
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&data_dir)?;
             let storage = Storage::open(&data_dir.join("companion.sqlite3"))?;
             let core = AppCore::new(storage)?;
+            core.start_timer_scheduler(app.handle().clone());
             app.manage(CoreState(core));
             desktop::setup_from_state(app)?;
             Ok(())
@@ -75,6 +77,7 @@ pub fn run() {
             commands::chat_submit_text,
             commands::turn_cancel,
             commands::tool_decide,
+            commands::timer_cancel,
             commands::settings_update_provider,
             commands::pet_open_panel,
             commands::pet_update_settings,

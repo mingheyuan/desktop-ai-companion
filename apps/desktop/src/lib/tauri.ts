@@ -159,6 +159,15 @@ export async function decideTool(toolCallId: string, approved: boolean): Promise
   });
 }
 
+export async function cancelTimer(timerId: string): Promise<void> {
+  await invoke("timer_cancel", {
+    request: {
+      request_id: crypto.randomUUID(),
+      timer_id: timerId,
+    },
+  });
+}
+
 export async function updateVoiceSettings(current: VoiceSettings, ttsEnabled: boolean): Promise<VoiceSettings> {
   return invoke<VoiceSettings>("voice_update_settings", {
     request: {

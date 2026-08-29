@@ -74,6 +74,15 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .tool-approval-actions button { border: 0; border-radius: 9px; padding: 8px 13px; color: #eef5ff; background: #3979dd; cursor: pointer; font-size: 11px; }
 .tool-approval-actions button.secondary { background: #283858; }
 .tool-approval-actions button:disabled { cursor: default; opacity: .5; }
+.timer-panel { margin: 14px 32px 0; border: 1px solid rgba(127, 165, 239, .22); border-radius: 15px; padding: 14px 16px; background: rgba(15, 25, 51, .72); box-shadow: 0 12px 30px rgba(0, 0, 0, .14); }
+.timer-panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.timer-panel-heading h2 { margin: 0; font-size: 16px; }
+.timer-empty { margin: 14px 0 2px; color: #7386af; font-size: 11px; }
+.timer-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 10px; border-top: 1px solid rgba(127, 164, 238, .12); padding-top: 10px; }
+.timer-item p { margin: 0 0 4px; color: #dbe6ff; font-size: 12px; }
+.timer-item span { color: #7185b2; font-size: 10px; }
+.timer-item button { flex: 0 0 auto; border: 0; border-radius: 8px; padding: 6px 10px; color: #ffb2c2; background: rgba(119, 28, 55, .35); cursor: pointer; font-size: 10px; }
+.timer-item button:disabled { cursor: default; opacity: .5; }
 
 .conversation { overflow-y: auto; padding: 26px 32px; }
 .empty-state { height: 100%; display: grid; place-content: center; text-align: center; color: #8fa1c7; }
