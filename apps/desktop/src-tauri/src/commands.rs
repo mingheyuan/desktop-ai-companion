@@ -6,11 +6,12 @@ use tauri_plugin_dialog::DialogExt;
 use crate::{
     contracts::{
         ActionRequest, AppError, AppSnapshot, CancelTimerRequest, CancelTurnRequest,
-        CharacterSettings, CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryItem,
-        PetSettings, ProviderSettings, ScreenObservationPreview, ScreenObservationRequest,
-        SearchMemoriesRequest, SetListeningRequest, SubmitTextRequest, ToolDecisionRequest,
-        UpdateMemoryRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
-        UpdateVoiceSettingsRequest, VisionProviderSettings, VoiceSettings,
+        CharacterSettings, CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryCandidate,
+        MemoryItem, PetSettings, ProviderSettings, ReviewMemoryCandidateRequest,
+        ScreenObservationPreview, ScreenObservationRequest, SearchMemoriesRequest,
+        SetListeningRequest, SubmitTextRequest, ToolDecisionRequest, UpdateMemoryRequest,
+        UpdatePetSettingsRequest, UpdateProviderRequest, UpdateVoiceSettingsRequest,
+        VisionProviderSettings, VoiceSettings,
     },
     core::AppCore,
     desktop,
@@ -205,6 +206,27 @@ pub async fn memory_search(
 ) -> Result<Vec<MemoryItem>, AppError> {
     validate_request_id(&request.request_id)?;
     state.0.search_memories(&request.query, request.limit).await
+}
+
+#[tauri::command]
+pub fn memory_list_candidates(
+    state: State<'_, CoreState>,
+    request: ActionRequest,
+) -> Result<Vec<MemoryCandidate>, AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.list_memory_candidates(20)
+}
+
+#[tauri::command]
+pub async fn memory_review_candidate(
+    state: State<'_, CoreState>,
+    request: ReviewMemoryCandidateRequest,
+) -> Result<Option<MemoryItem>, AppError> {
+    validate_request_id(&request.request_id)?;
+    state
+        .0
+        .review_memory_candidate(&request.candidate_id, request.approved)
+        .await
 }
 
 #[tauri::command]

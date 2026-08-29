@@ -2,7 +2,7 @@
 
 > 版本：v0.1 规划方案
 >
-> 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete`、模型提议的 `timer.cancel` 和需确认的本地 `screen.observe` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步）；工具 schema 注册与模型参数策略已集中到 Rust `ToolRegistry`/`ToolPolicy`，独立 Vision Provider 配置已落地，但截图发送、视觉分析、多工具并行和其余 Tool MVP 尚未进入实现
+> 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete`、模型提议的 `timer.cancel` 和需确认的本地 `screen.observe` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步）；`memory.save` 候选已持久化并可在记忆面板审核；工具 schema 注册与模型参数策略已集中到 Rust `ToolRegistry`/`ToolPolicy`，独立 Vision Provider 配置已落地，但截图发送、视觉分析、多工具并行和其余 Tool MVP 尚未进入实现
 >
 > 更新日期：2026-08-30
 
@@ -186,8 +186,9 @@ memory.save
 
 - 当用户明确表达“记住”意图时，模型可以提出一条经长度校验的记忆草案。
 - 对常见的“请记住/别忘了”表达，Core 会先在本地生成确认草案，不依赖聊天 Provider 做意图解析；其他明确表达仍可由模型提出草案。
-- 主面板确认卡显示待保存内容；确认后由 Rust 调用本地记忆仓库写入 SQLite，并保留 `tool_runs` 审计记录。
-- 拒绝、取消、对话失败和工具循环中断都不会写入长期记忆。
+- 候选会在进入确认卡时写入 SQLite 的 `memory_candidates(status='pending')`；即使确认卡被取消或应用重启，也不会丢失待审核内容。
+- 主面板确认卡或记忆面板都可以审核候选；确认后由 Rust 在单事务内写入长期记忆、FTS 和 `memory_audit`，并将候选标记为 `confirmed`，同时保留 `tool_runs` 审计记录。
+- 拒绝、取消、对话失败和工具循环中断都不会直接写入长期记忆；取消后的候选仍可由用户稍后在记忆面板明确保存。
 
 用户明确说“忘记/删除某条记忆”时，Core 会先在当前角色可见的本地记忆中搜索；只有找到唯一候选才生成 `memory.delete` 确认卡。确认后使用记忆版本号执行物理删除并写入审计，记忆已变化、未找到或匹配多条时均拒绝猜测。该动作只由本地显式意图触发，不开放给模型 ToolCall。
 - 目标规格仍要求：LLM 只负责把自然语言提出为候选时间；Rust 使用系统时区、当前时间和 DST 规则验证并生成标准时间。

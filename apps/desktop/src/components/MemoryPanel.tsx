@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import type { DataSummary, MemoryItem } from "../contracts";
-import { clearConversationData, clearMemoryData, createMemory, deleteMemory, getDataSummary, isTauri, searchMemories, updateMemory } from "../lib/tauri";
+import type { DataSummary, MemoryCandidate, MemoryItem } from "../contracts";
+import { clearConversationData, clearMemoryData, createMemory, deleteMemory, getDataSummary, isTauri, listMemoryCandidates, reviewMemoryCandidate, searchMemories, updateMemory } from "../lib/tauri";
 
 function errorMessage(reason: unknown, fallback: string) {
   if (typeof reason === "string") return reason;
@@ -13,6 +13,7 @@ function errorMessage(reason: unknown, fallback: string) {
 export function MemoryPanel({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<MemoryItem[]>([]);
+  const [candidates, setCandidates] = useState<MemoryCandidate[]>([]);
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState<{ id: string; content: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -27,6 +28,15 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
       setSummary(await getDataSummary());
     } catch (reason) {
       setError(errorMessage(reason, "读取本地数据摘要失败。"));
+    }
+  };
+
+  const loadCandidates = async () => {
+    if (!isTauri()) return;
+    try {
+      setCandidates(await listMemoryCandidates());
+    } catch (reason) {
+      setError(errorMessage(reason, "读取记忆候选失败。"));
     }
   };
 
@@ -48,6 +58,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     void loadSummary();
+    void loadCandidates();
   }, []);
 
   const create = async (event: FormEvent) => {
@@ -99,6 +110,26 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const reviewCandidate = async (candidate: MemoryCandidate, approved: boolean) => {
+    if (busy || !isTauri()) return;
+    setBusy(true);
+    setError("");
+    try {
+      await reviewMemoryCandidate(candidate.id, approved);
+      setCandidates((current) => current.filter((item) => item.id !== candidate.id));
+      await loadSummary();
+      if (approved) {
+        await refresh("");
+        setQuery("");
+      }
+    } catch (reason) {
+      setError(errorMessage(reason, approved ? "保存记忆候选失败。" : "拒绝记忆候选失败。"));
+      await loadCandidates();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const clearData = async (scope: "conversation" | "memories") => {
     if (busy || !isTauri()) return;
     setBusy(true);
@@ -140,7 +171,31 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
 
         {error && <p className="settings-error">{error}</p>}
         <div className="memory-list">
-          {items.length === 0 && <p className="memory-empty">{isTauri() ? "没有匹配的记忆。" : "浏览器预览不会读取本地记忆。"}</p>}
+          {candidates.length > 0 && (
+            <section className="memory-candidate-section" aria-label="待确认记忆候选">
+              <div className="memory-candidate-heading">
+                <div>
+                  <p className="eyebrow">REVIEW QUEUE</p>
+                  <h3>待确认候选</h3>
+                </div>
+                <span>{candidates.length} 条</span>
+              </div>
+              <p className="memory-candidate-hint">这些内容只会在你点击“保存到记忆”后进入长期记忆。</p>
+              {candidates.map((candidate) => (
+                <article className="memory-candidate-card" key={candidate.id}>
+                  <p>{candidate.content}</p>
+                  <footer>
+                    <span>置信度 {Math.round(candidate.confidence * 100)}% · {new Date(candidate.created_at_ms).toLocaleDateString()}</span>
+                    <div>
+                      <button type="button" className="danger" disabled={busy} onClick={() => void reviewCandidate(candidate, false)}>拒绝</button>
+                      <button type="button" disabled={busy} onClick={() => void reviewCandidate(candidate, true)}>保存到记忆</button>
+                    </div>
+                  </footer>
+                </article>
+              ))}
+            </section>
+          )}
+          {items.length === 0 && <p className="memory-empty">{isTauri() ? (candidates.length > 0 ? "还没有已保存的长期记忆。" : "没有匹配的记忆。") : "浏览器预览不会读取本地记忆。"}</p>}
           {items.map((memory) => (
             <article className="memory-card" key={memory.id}>
               {editing?.id === memory.id ? (

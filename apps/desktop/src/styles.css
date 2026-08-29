@@ -145,6 +145,19 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .memory-create button:disabled, .memory-card button:disabled { cursor: default; opacity: .5; }
 .memory-list { min-height: 0; overflow-y: auto; margin-top: 8px; padding-right: 4px; }
 .memory-empty { color: #7386af; text-align: center; }
+.memory-candidate-section { margin-bottom: 16px; border: 1px solid rgba(255, 200, 107, .28); border-radius: 13px; padding: 12px; background: rgba(72, 53, 29, .25); }
+.memory-candidate-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.memory-candidate-heading h3 { margin: 0; color: #ffe0a6; font-size: 13px; }
+.memory-candidate-heading > span { color: #d5aa6e; font-size: 10px; }
+.memory-candidate-hint { margin: 8px 0 0; color: #ad956e; font-size: 10px; line-height: 1.45; }
+.memory-candidate-card { margin-top: 10px; border-top: 1px solid rgba(255, 200, 107, .16); padding-top: 10px; }
+.memory-candidate-card > p { margin: 0; color: #f2e2c1; line-height: 1.55; white-space: pre-wrap; }
+.memory-candidate-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 9px; }
+.memory-candidate-card footer span { color: #a58d69; font-size: 10px; }
+.memory-candidate-card footer div { display: flex; gap: 7px; }
+.memory-candidate-card button { border: 0; border-radius: 8px; padding: 6px 9px; color: #eaf2ff; background: #3979dd; cursor: pointer; font-size: 10px; }
+.memory-candidate-card button.danger { color: #ffb7c4; background: rgba(119, 28, 55, .35); }
+.memory-candidate-card button:disabled { cursor: default; opacity: .5; }
 .memory-card { margin-bottom: 10px; border: 1px solid rgba(127, 164, 238, .14); border-radius: 13px; padding: 12px; background: rgba(20, 31, 61, .7); }
 .memory-card > p { margin: 0; color: #dbe6ff; line-height: 1.6; white-space: pre-wrap; }
 .memory-card footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }

@@ -24,8 +24,8 @@ use crate::{
     audio::{self, AudioWriter},
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, DataSummary, EventEnvelope,
-        GenerationState, InputState, ListeningMode, MemoryItem, MouthLevelPayload, PetSettings,
-        PlaybackState, ProviderSettings, ScreenObservation, ScreenObservationPreview,
+        GenerationState, InputState, ListeningMode, MemoryCandidate, MemoryItem, MouthLevelPayload,
+        PetSettings, PlaybackState, ProviderSettings, ScreenObservation, ScreenObservationPreview,
         TextDeltaPayload, TimerItem, ToolApproval, TurnEndedPayload, TurnState, VoicePermissions,
         VoiceSettings,
     },
@@ -33,7 +33,7 @@ use crate::{
     notifications,
     provider::{create_provider, LlmEvent, LlmMessage, LlmRequest, ToolCall},
     secret::SecretStore,
-    storage::{Storage, TimerInput, ToolRunInput},
+    storage::{MemoryCandidateInput, Storage, TimerInput, ToolRunInput},
     tools::{
         normalize_open_url, validate_memory_content, OpenUrlRequest, ToolAction, ToolPolicy,
         ToolRegistry,
@@ -738,6 +738,32 @@ impl AppCore {
                     now_ms(),
                 )
                 .map_err(storage_error)?;
+            if let PendingToolAction::SaveMemory { content } = &tool.action {
+                let confidence = if matches!(&tool.origin, PendingToolOrigin::Explicit) {
+                    1.0
+                } else {
+                    0.7
+                };
+                if let Err(error) = self.storage.create_memory_candidate(MemoryCandidateInput {
+                    id: &tool.approval.tool_call_id,
+                    source_turn_id: &turn_id,
+                    source_message_id: None,
+                    scope: "user",
+                    kind: "note",
+                    content,
+                    confidence,
+                    sensitivity: "normal",
+                    created_at_ms: now_ms(),
+                }) {
+                    let _ = self.storage.finish_tool_run(
+                        &tool.approval.tool_call_id,
+                        "failed",
+                        "无法创建本地记忆候选。",
+                        now_ms(),
+                    );
+                    return Err(storage_error(error));
+                }
+            }
         }
 
         let cancel = CancellationToken::new();
@@ -1183,6 +1209,27 @@ impl AppCore {
                 now_ms(),
             )
             .map_err(storage_error)?;
+        if let PendingToolAction::SaveMemory { content } = &candidate.action {
+            if let Err(error) = self.storage.create_memory_candidate(MemoryCandidateInput {
+                id: &tool_call_id,
+                source_turn_id: context.turn_id,
+                source_message_id: None,
+                scope: "user",
+                kind: "note",
+                content,
+                confidence: 0.7,
+                sensitivity: "normal",
+                created_at_ms: now_ms(),
+            }) {
+                let _ = self.storage.finish_tool_run(
+                    &tool_call_id,
+                    "failed",
+                    "无法创建本地记忆候选。",
+                    now_ms(),
+                );
+                return Err(storage_error(error));
+            }
+        }
         let mut continuation = context.messages.to_vec();
         continuation.push(LlmMessage::Assistant {
             content: (!context.response.trim().is_empty()).then(|| context.response.to_owned()),
@@ -1460,6 +1507,11 @@ impl AppCore {
                     "好的，老师，已取消读取当前屏幕。".into()
                 }
             };
+            if matches!(&pending.action, PendingToolAction::SaveMemory { .. }) {
+                let _ = self
+                    .storage
+                    .reject_memory_candidate(&pending.approval.tool_call_id, now_ms());
+            }
             self.storage
                 .finish_tool_run(
                     &pending.approval.tool_call_id,
@@ -1490,6 +1542,7 @@ impl AppCore {
                 now_ms(),
             )
             .map_err(storage_error)?;
+        let pending_tool_id = pending.approval.tool_call_id.clone();
         let execution = match pending.action.clone() {
             PendingToolAction::OpenUrl { url } => {
                 let result = open_url_in_default_browser(&url).await;
@@ -1535,22 +1588,27 @@ impl AppCore {
                     )),
                 }
             }
-            PendingToolAction::SaveMemory { content } => self
-                .storage
-                .create_user_memory(&content, now_ms())
-                .map(|memory| {
-                    format!(
+            PendingToolAction::SaveMemory { .. } => {
+                match self
+                    .storage
+                    .confirm_memory_candidate(&pending_tool_id, now_ms())
+                {
+                    Ok(Some(memory)) => Ok(format!(
                         "已保存本地长期记忆：{}（记忆 ID：{}）",
                         memory.content, memory.id
-                    )
-                })
-                .map_err(|error| {
-                    AppError::new(
+                    )),
+                    Ok(None) => Err(AppError::new(
+                        "conflict",
+                        "这条记忆候选已被处理，请刷新记忆面板。",
+                        true,
+                    )),
+                    Err(error) => Err(AppError::new(
                         "tool_execution_failed",
                         format!("本地记忆保存失败：{error}"),
                         true,
-                    )
-                }),
+                    )),
+                }
+            }
             PendingToolAction::DeleteMemory {
                 id,
                 content,
@@ -1966,6 +2024,62 @@ impl AppCore {
         self.storage
             .search_memories(query, &character_id, limit)
             .map_err(storage_error)
+    }
+
+    pub fn list_memory_candidates(&self, limit: usize) -> Result<Vec<MemoryCandidate>, AppError> {
+        self.storage
+            .list_pending_memory_candidates(limit)
+            .map_err(storage_error)
+    }
+
+    pub async fn review_memory_candidate(
+        &self,
+        candidate_id: &str,
+        approved: bool,
+    ) -> Result<Option<MemoryItem>, AppError> {
+        if candidate_id.trim().is_empty() {
+            return Err(AppError::new(
+                "invalid_request",
+                "记忆候选 ID 不能为空。",
+                false,
+            ));
+        }
+        let _interaction_guard = self.interaction_command.lock().await;
+        if self
+            .runtime
+            .read()
+            .await
+            .pending_tool
+            .as_ref()
+            .is_some_and(|tool| tool.approval.tool_call_id == candidate_id)
+        {
+            return Err(AppError::new(
+                "conflict",
+                "请先处理上方的工具确认卡片，再单独审核这条候选。",
+                true,
+            ));
+        }
+        if approved {
+            self.storage
+                .confirm_memory_candidate(candidate_id, now_ms())
+                .map_err(storage_error)?
+                .ok_or_else(|| {
+                    AppError::new("conflict", "这条记忆候选已被处理，请刷新后重试。", true)
+                })
+                .map(Some)
+        } else if self
+            .storage
+            .reject_memory_candidate(candidate_id, now_ms())
+            .map_err(storage_error)?
+        {
+            Ok(None)
+        } else {
+            Err(AppError::new(
+                "conflict",
+                "这条记忆候选已被处理，请刷新后重试。",
+                true,
+            ))
+        }
     }
 
     pub fn create_memory(&self, content: &str) -> Result<MemoryItem, AppError> {

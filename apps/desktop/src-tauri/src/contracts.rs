@@ -190,6 +190,19 @@ pub struct MemoryItem {
     pub updated_at_ms: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryCandidate {
+    pub id: String,
+    pub scope: String,
+    pub kind: String,
+    pub content: String,
+    pub confidence: f64,
+    pub sensitivity: String,
+    pub status: String,
+    pub created_at_ms: i64,
+    pub reviewed_at_ms: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DataSummary {
     pub message_count: u64,
@@ -449,6 +462,13 @@ pub struct DeleteMemoryRequest {
     pub request_id: String,
     pub id: String,
     pub expected_version: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReviewMemoryCandidateRequest {
+    pub request_id: String,
+    pub candidate_id: String,
+    pub approved: bool,
 }
 
 fn default_memory_limit() -> usize {

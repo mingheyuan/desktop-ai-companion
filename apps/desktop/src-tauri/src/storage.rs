@@ -5,8 +5,8 @@ use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::contracts::{
-    CharacterSettings, ChatMessage, DataSummary, MemoryItem, MessageRole, MessageStatus,
-    PetSettings, ProviderSettings, TimerHistoryItem, TimerItem, VoiceSettings,
+    CharacterSettings, ChatMessage, DataSummary, MemoryCandidate, MemoryItem, MessageRole,
+    MessageStatus, PetSettings, ProviderSettings, TimerHistoryItem, TimerItem, VoiceSettings,
 };
 
 pub struct Storage {
@@ -30,6 +30,18 @@ pub struct TimerInput<'a> {
     pub due_at_ms: i64,
     pub timezone: &'a str,
     pub original_request: &'a str,
+}
+
+pub struct MemoryCandidateInput<'a> {
+    pub id: &'a str,
+    pub source_turn_id: &'a str,
+    pub source_message_id: Option<&'a str>,
+    pub scope: &'a str,
+    pub kind: &'a str,
+    pub content: &'a str,
+    pub confidence: f64,
+    pub sensitivity: &'a str,
+    pub created_at_ms: i64,
 }
 
 impl Storage {
@@ -811,7 +823,7 @@ impl Storage {
             memory_count: connection
                 .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))?,
             memory_candidate_count: connection.query_row(
-                "SELECT COUNT(*) FROM memory_candidates",
+                "SELECT COUNT(*) FROM memory_candidates WHERE status='pending'",
                 [],
                 |row| row.get(0),
             )?,
@@ -849,6 +861,161 @@ impl Storage {
         transaction.execute("DELETE FROM relationship_state", [])?;
         transaction.execute("DELETE FROM memory_audit", [])?;
         transaction.commit()
+    }
+
+    pub fn create_memory_candidate(
+        &self,
+        input: MemoryCandidateInput<'_>,
+    ) -> Result<MemoryCandidate, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let candidate = MemoryCandidate {
+            id: input.id.to_owned(),
+            scope: input.scope.to_owned(),
+            kind: input.kind.to_owned(),
+            content: input.content.to_owned(),
+            confidence: input.confidence,
+            sensitivity: input.sensitivity.to_owned(),
+            status: "pending".into(),
+            created_at_ms: input.created_at_ms,
+            reviewed_at_ms: None,
+        };
+        let normalized_key = normalize_memory_text(&candidate.content);
+        connection.execute(
+            "INSERT INTO memory_candidates(
+                id, source_turn_id, source_message_id, scope, kind, content,
+                normalized_key, confidence, sensitivity, status, created_at_ms
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10)",
+            params![
+                candidate.id,
+                input.source_turn_id,
+                input.source_message_id,
+                candidate.scope,
+                candidate.kind,
+                candidate.content,
+                normalized_key,
+                candidate.confidence,
+                candidate.sensitivity,
+                candidate.created_at_ms,
+            ],
+        )?;
+        Ok(candidate)
+    }
+
+    pub fn list_pending_memory_candidates(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<MemoryCandidate>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let mut statement = connection.prepare(
+            "SELECT id, scope, kind, content, confidence, sensitivity, status,
+                    created_at_ms, reviewed_at_ms
+             FROM memory_candidates
+             WHERE status='pending'
+             ORDER BY created_at_ms DESC
+             LIMIT ?1",
+        )?;
+        let rows = statement.query_map([limit.clamp(1, 50) as i64], map_memory_candidate_row)?;
+        rows.collect()
+    }
+
+    pub fn confirm_memory_candidate(
+        &self,
+        candidate_id: &str,
+        now_ms: i64,
+    ) -> Result<Option<MemoryItem>, rusqlite::Error> {
+        let mut connection = self.connection.lock().expect("storage mutex poisoned");
+        let transaction = connection.transaction()?;
+        let candidate = transaction
+            .query_row(
+                "SELECT scope, kind, content, confidence, sensitivity, source_message_id,
+                        created_at_ms
+                 FROM memory_candidates
+                 WHERE id=?1 AND status='pending'",
+                [candidate_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, f64>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((scope, kind, content, confidence, sensitivity, source_message_id, created_at_ms)) =
+            candidate
+        else {
+            return Ok(None);
+        };
+        if scope != "user" {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let item = MemoryItem {
+            id: Uuid::now_v7().to_string(),
+            scope,
+            character_id: None,
+            kind,
+            content,
+            importance: 0.7,
+            version: 1,
+            created_at_ms,
+            updated_at_ms: now_ms,
+        };
+        let normalized_key = normalize_memory_text(&item.content);
+        transaction.execute(
+            "INSERT INTO memories(
+                id, scope, character_id, kind, content, normalized_key, importance,
+                confidence, sensitivity, source_message_id, source_candidate_id,
+                version, created_at_ms, updated_at_ms
+             ) VALUES(?1, 'user', NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?11)",
+            params![
+                item.id,
+                item.kind,
+                item.content,
+                normalized_key,
+                item.importance,
+                confidence,
+                sensitivity,
+                source_message_id,
+                candidate_id,
+                item.created_at_ms,
+                item.updated_at_ms,
+            ],
+        )?;
+        let rowid = transaction.last_insert_rowid();
+        transaction.execute(
+            "INSERT INTO memory_fts(rowid, content, normalized_key) VALUES(?1, ?2, ?3)",
+            params![rowid, item.content, normalized_key],
+        )?;
+        transaction.execute(
+            "INSERT INTO memory_audit(id, memory_id, action, occurred_at_ms)
+             VALUES(?1, ?2, 'confirmed', ?3)",
+            params![Uuid::now_v7().to_string(), item.id, now_ms],
+        )?;
+        transaction.execute(
+            "UPDATE memory_candidates SET status='confirmed', reviewed_at_ms=?1
+             WHERE id=?2 AND status='pending'",
+            params![now_ms, candidate_id],
+        )?;
+        transaction.commit()?;
+        Ok(Some(item))
+    }
+
+    pub fn reject_memory_candidate(
+        &self,
+        candidate_id: &str,
+        now_ms: i64,
+    ) -> Result<bool, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let changed = connection.execute(
+            "UPDATE memory_candidates SET status='rejected', reviewed_at_ms=?1
+             WHERE id=?2 AND status='pending'",
+            params![now_ms, candidate_id],
+        )?;
+        Ok(changed == 1)
     }
 
     pub fn begin_tool_run(
@@ -1033,6 +1200,20 @@ fn map_memory_row(row: &rusqlite::Row<'_>) -> Result<MemoryItem, rusqlite::Error
         version: row.get(6)?,
         created_at_ms: row.get(7)?,
         updated_at_ms: row.get(8)?,
+    })
+}
+
+fn map_memory_candidate_row(row: &rusqlite::Row<'_>) -> Result<MemoryCandidate, rusqlite::Error> {
+    Ok(MemoryCandidate {
+        id: row.get(0)?,
+        scope: row.get(1)?,
+        kind: row.get(2)?,
+        content: row.get(3)?,
+        confidence: row.get(4)?,
+        sensitivity: row.get(5)?,
+        status: row.get(6)?,
+        created_at_ms: row.get(7)?,
+        reviewed_at_ms: row.get(8)?,
     })
 }
 
@@ -1258,6 +1439,95 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM memory_audit", [], |row| row.get(0))
             .unwrap();
         assert_eq!(audit_count, 3);
+    }
+
+    #[test]
+    fn memory_candidates_are_reviewed_into_formal_memories() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(1).unwrap();
+        storage
+            .begin_turn(&conversation, "candidate-turn", 1, "text", "记住蓝色", 2)
+            .unwrap();
+
+        let candidate = storage
+            .create_memory_candidate(MemoryCandidateInput {
+                id: "candidate-1",
+                source_turn_id: "candidate-turn",
+                source_message_id: None,
+                scope: "user",
+                kind: "preference",
+                content: "老师喜欢蓝色",
+                confidence: 0.8,
+                sensitivity: "normal",
+                created_at_ms: 3,
+            })
+            .unwrap();
+        assert_eq!(candidate.status, "pending");
+        assert_eq!(
+            storage.list_pending_memory_candidates(20).unwrap(),
+            vec![candidate]
+        );
+
+        let memory = storage
+            .confirm_memory_candidate("candidate-1", 4)
+            .unwrap()
+            .unwrap();
+        assert_eq!(memory.content, "老师喜欢蓝色");
+        assert!(storage
+            .list_pending_memory_candidates(20)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            storage.search_memories("喜欢蓝色", "aris", 8).unwrap()[0].id,
+            memory.id
+        );
+
+        let connection = storage.connection.lock().unwrap();
+        let status: String = connection
+            .query_row(
+                "SELECT status FROM memory_candidates WHERE id='candidate-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "confirmed");
+    }
+
+    #[test]
+    fn memory_candidate_rejection_is_idempotent() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(1).unwrap();
+        storage
+            .begin_turn(&conversation, "reject-turn", 1, "text", "记住红色", 2)
+            .unwrap();
+        storage
+            .create_memory_candidate(MemoryCandidateInput {
+                id: "candidate-reject",
+                source_turn_id: "reject-turn",
+                source_message_id: None,
+                scope: "user",
+                kind: "note",
+                content: "红色",
+                confidence: 0.6,
+                sensitivity: "normal",
+                created_at_ms: 3,
+            })
+            .unwrap();
+
+        assert!(storage
+            .reject_memory_candidate("candidate-reject", 4)
+            .unwrap());
+        assert!(!storage
+            .reject_memory_candidate("candidate-reject", 5)
+            .unwrap());
+        assert!(storage
+            .list_pending_memory_candidates(20)
+            .unwrap()
+            .is_empty());
+        assert!(storage
+            .confirm_memory_candidate("candidate-reject", 6)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

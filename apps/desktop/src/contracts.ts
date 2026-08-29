@@ -52,6 +52,18 @@ export interface MemoryItem {
   updated_at_ms: number;
 }
 
+export interface MemoryCandidate {
+  id: string;
+  scope: string;
+  kind: string;
+  content: string;
+  confidence: number;
+  sensitivity: string;
+  status: string;
+  created_at_ms: number;
+  reviewed_at_ms: number | null;
+}
+
 export interface DataSummary {
   message_count: number;
   memory_count: number;

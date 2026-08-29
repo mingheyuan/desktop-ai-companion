@@ -87,6 +87,8 @@ pub fn run() {
             commands::pet_update_settings,
             commands::character_import_vrm,
             commands::memory_search,
+            commands::memory_list_candidates,
+            commands::memory_review_candidate,
             commands::memory_create,
             commands::memory_update,
             commands::memory_delete,
