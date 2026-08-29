@@ -197,6 +197,16 @@ impl Default for CharacterSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolApproval {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub display_name: String,
+    pub url: String,
+    pub host: String,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppError {
     pub code: String,
@@ -246,6 +256,7 @@ pub struct AppSnapshot {
     pub asr_partial: String,
     pub voice_input_route: String,
     pub mouth_level: f64,
+    pub pending_tool_approval: Option<ToolApproval>,
     pub last_error: Option<AppError>,
 }
 
@@ -355,6 +366,13 @@ fn default_memory_limit() -> usize {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ActionRequest {
     pub request_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToolDecisionRequest {
+    pub request_id: String,
+    pub tool_call_id: String,
+    pub approved: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

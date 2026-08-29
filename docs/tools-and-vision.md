@@ -2,9 +2,9 @@
 
 > 版本：v0.1 规划方案
 >
-> 状态：已完成参考项目调研；作为核心对话 MVP 之后的 Tool MVP，尚未进入实现
+> 状态：已完成参考项目调研；`system.open_url` 首个低风险垂直切片已实现，其余 Tool MVP 尚未进入实现
 >
-> 更新日期：2026-08-28
+> 更新日期：2026-08-29
 
 ## 1. 功能愿景
 
@@ -117,7 +117,7 @@ Proposed | AwaitingApproval | Running | Succeeded | Cancelled | Failed | Denied
 
 | 风险级别 | 示例 | 首版策略 |
 | --- | --- | --- |
-| `low_side_effect` | 打开经过校验的 HTTPS 网页 | 用户当前消息明确要求时可执行；模型自行建议时先确认 |
+| `low_side_effect` | 打开经过校验的 HTTP/HTTPS 网页 | 用户当前消息明确要求时可执行；模型自行建议时先确认 |
 | `user_data_write` | 创建、修改、取消计时或提醒 | 展示规范化时间和标题；歧义时间必须追问，成功后提供撤销入口 |
 | `sensitive_read` | 截取当前窗口或屏幕 | 需要系统权限、明显指示器和当前请求/会话授权；云端上传另有开关 |
 | `external_write` | 提交网页、发送消息、修改第三方账户 | 不进入首批工具；未来始终确认最终动作 |
@@ -137,12 +137,12 @@ system.open_url
 
 执行流程：
 
-1. Rust 解析并规范化 URL。
+1. Rust 识别用户明确的“打开/访问/进入/浏览 + URL”意图并规范化 URL。
 2. 首版只允许 `https` 和 `http`，拒绝 `file`、`javascript`、`data` 和未知自定义 scheme。
-3. 拒绝包含用户名/密码的 URL；确认卡片显示最终 scheme、Unicode/Punycode 域名和目标地址。
-4. 用户没有提供明确 URL 且站点名称存在歧义时先询问，不能让模型静默猜测目标域名。
-5. 使用 Tauri 官方 `opener` plugin 交给系统默认浏览器。
-6. 返回“已提交给默认浏览器”的结果，不把页面是否加载成功伪装成已验证事实。
+3. 拒绝包含用户名/密码的 URL；确认卡片显示最终 scheme、域名和目标地址。
+4. 当前未提供明确 URL 的站点名称仍走普通对话，不静默猜测目标域名；后续再接入澄清流程。
+5. 用户确认后由 macOS `/usr/bin/open` 交给系统默认浏览器；固定可执行路径，不提供 Shell 输入口。
+6. 返回“已提交给默认浏览器”的结果，不把页面是否加载成功伪装成已验证事实；取消、失败和结果均写入 `tool_runs`。
 
 简单打开网页不需要 Playwright、浏览器扩展或视觉模型。
 
@@ -276,7 +276,7 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 这组能力建议作为核心对话 MVP 后的 **Tool MVP**：
 
 1. `ToolRegistry + ToolPolicyEngine + ToolRunStore`，使用假工具完成工具循环测试。
-2. `system.open_url`，验证 URL 安全策略和授权 UI。
+2. 完善 `system.open_url` 的模型 ToolCall 接入、URL 安全策略和授权 UI。
 3. `timer.create/list/cancel`，验证休眠、重启、时区和重复触发。
 4. `screen.observe` 本地单帧，验证权限、窗口排除和临时文件清理。
 5. 独立 Vision Provider，先接一个云端兼容模型和一个本地兼容模型。

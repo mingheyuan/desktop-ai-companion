@@ -8,7 +8,7 @@ use crate::{
         ActionRequest, AppError, AppSnapshot, CancelTurnRequest, CharacterSettings,
         CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryItem, PetSettings,
         ProviderSettings, SearchMemoriesRequest, SetListeningRequest, SubmitTextRequest,
-        UpdateMemoryRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
+        ToolDecisionRequest, UpdateMemoryRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
         UpdateVoiceSettingsRequest, VoiceSettings,
     },
     core::AppCore,
@@ -54,6 +54,19 @@ pub async fn turn_cancel(
     state
         .0
         .cancel_turn(&app, &request.turn_id, &request.reason)
+        .await
+}
+
+#[tauri::command]
+pub async fn tool_decide(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: ToolDecisionRequest,
+) -> Result<(), AppError> {
+    validate_request_id(&request.request_id)?;
+    state
+        .0
+        .decide_tool(&app, &request.tool_call_id, request.approved)
         .await
 }
 

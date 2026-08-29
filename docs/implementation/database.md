@@ -133,6 +133,22 @@ CREATE TABLE memory_audit (
   occurred_at_ms INTEGER NOT NULL
 );
 
+CREATE TABLE tool_runs (
+  id               TEXT PRIMARY KEY,
+  conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  turn_id          TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+  tool_name        TEXT NOT NULL,
+  arguments_json   TEXT NOT NULL,
+  origin           TEXT NOT NULL CHECK(origin IN ('user_explicit','model_suggested','scheduled')),
+  status           TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','succeeded','failed','cancelled')),
+  result_summary   TEXT,
+  created_at_ms    INTEGER NOT NULL,
+  completed_at_ms  INTEGER
+);
+
+CREATE INDEX idx_tool_runs_conversation_time
+  ON tool_runs(conversation_id, created_at_ms);
+
 CREATE TABLE app_settings (
   key           TEXT PRIMARY KEY,
   value_json    TEXT NOT NULL,
@@ -177,6 +193,8 @@ update 随后更新 `memories` 并插入新索引项；delete 随后删除 `memo
 - 少于 3 个字符的查询不走 trigram，改用 `normalized_key` 精确/前缀匹配，并限定最近 200 条候选。
 - 用户删除记忆时物理删除正文，MemoryWorker 在同一事务同步删除 FTS；audit 只保留 ID、动作和时间，不保留正文。
 - 启动完整性检查发现 FTS 漂移时可从 `memories` 重建，不得从聊天记录重新推断已删除记忆。
+
+`tool_runs` 保存工具调用的规范化参数、来源、授权/执行状态和脱敏结果摘要，不保存 API Key、原始音频或屏幕图像。应用启动时，未完成的 `pending/approved` 工具请求会标记为失败，避免确认卡片或执行记录在重启后悬挂。
 
 ## 5. 记忆候选流程
 

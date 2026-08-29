@@ -13,6 +13,15 @@ pub struct Storage {
     connection: Mutex<Connection>,
 }
 
+pub struct ToolRunInput<'a> {
+    pub id: &'a str,
+    pub conversation_id: &'a str,
+    pub turn_id: &'a str,
+    pub tool_name: &'a str,
+    pub arguments_json: &'a str,
+    pub origin: &'a str,
+}
+
 impl Storage {
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
         let mut connection = Connection::open(path)?;
@@ -52,7 +61,7 @@ impl Storage {
             [],
             |row| row.get(0),
         )?;
-        if current_version > 2 {
+        if current_version > 3 {
             return Err(rusqlite::Error::InvalidQuery);
         }
         if current_version == 0 {
@@ -179,6 +188,30 @@ impl Storage {
             )?;
             transaction.commit()?;
         }
+        if current_version < 3 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(
+                "CREATE TABLE IF NOT EXISTS tool_runs (
+                   id TEXT PRIMARY KEY,
+                   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                   turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+                   tool_name TEXT NOT NULL,
+                   arguments_json TEXT NOT NULL,
+                   origin TEXT NOT NULL CHECK(origin IN ('user_explicit','model_suggested','scheduled')),
+                   status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','succeeded','failed','cancelled')),
+                   result_summary TEXT,
+                   created_at_ms INTEGER NOT NULL,
+                   completed_at_ms INTEGER
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_tool_runs_conversation_time
+                   ON tool_runs(conversation_id, created_at_ms);",
+            )?;
+            transaction.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at_ms) VALUES(3, 'tool_runtime_audit', CAST(strftime('%s','now') AS INTEGER) * 1000)",
+                [],
+            )?;
+            transaction.commit()?;
+        }
         Ok(())
     }
 
@@ -211,6 +244,12 @@ impl Storage {
         )?;
         connection.execute(
             "UPDATE messages SET status='failed', completed_at_ms=?1 WHERE status IN ('pending','streaming')",
+            [now_ms],
+        )?;
+        connection.execute(
+            "UPDATE tool_runs
+             SET status='failed', result_summary='应用在工具确认或执行前退出。', completed_at_ms=?1
+             WHERE status IN ('pending','approved')",
             [now_ms],
         )?;
         Ok(())
@@ -771,6 +810,57 @@ impl Storage {
         transaction.execute("DELETE FROM memory_audit", [])?;
         transaction.commit()
     }
+
+    pub fn begin_tool_run(
+        &self,
+        input: ToolRunInput<'_>,
+        now_ms: i64,
+    ) -> Result<(), rusqlite::Error> {
+        if !matches!(
+            input.origin,
+            "user_explicit" | "model_suggested" | "scheduled"
+        ) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        connection.execute(
+            "INSERT INTO tool_runs(id, conversation_id, turn_id, tool_name, arguments_json, origin, status, created_at_ms)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
+            params![
+                input.id,
+                input.conversation_id,
+                input.turn_id,
+                input.tool_name,
+                input.arguments_json,
+                input.origin,
+                now_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn finish_tool_run(
+        &self,
+        id: &str,
+        status: &str,
+        result_summary: &str,
+        now_ms: i64,
+    ) -> Result<(), rusqlite::Error> {
+        if !matches!(
+            status,
+            "approved" | "rejected" | "succeeded" | "failed" | "cancelled"
+        ) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        connection.execute(
+            "UPDATE tool_runs
+             SET status=?1, result_summary=?2, completed_at_ms=?3
+             WHERE id=?4 AND status IN ('pending','approved')",
+            params![status, result_summary, now_ms, id],
+        )?;
+        Ok(())
+    }
 }
 
 fn map_memory_row(row: &rusqlite::Row<'_>) -> Result<MemoryItem, rusqlite::Error> {
@@ -1052,5 +1142,50 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM memory_audit", [], |row| row.get(0))
             .unwrap();
         assert_eq!(audit_count, 0);
+    }
+
+    #[test]
+    fn tool_runs_record_approval_and_result() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(1).unwrap();
+        storage
+            .begin_turn(
+                &conversation,
+                "tool-turn",
+                1,
+                "text",
+                "打开 https://example.com",
+                2,
+            )
+            .unwrap();
+        storage
+            .begin_tool_run(
+                ToolRunInput {
+                    id: "tool-1",
+                    conversation_id: &conversation,
+                    turn_id: "tool-turn",
+                    tool_name: "system.open_url",
+                    arguments_json: r#"{"url":"https://example.com/"}"#,
+                    origin: "user_explicit",
+                },
+                3,
+            )
+            .unwrap();
+        storage
+            .finish_tool_run("tool-1", "approved", "用户允许", 4)
+            .unwrap();
+        storage
+            .finish_tool_run("tool-1", "succeeded", "浏览器已打开", 5)
+            .unwrap();
+
+        let connection = storage.connection.lock().unwrap();
+        let row: (String, String) = connection
+            .query_row(
+                "SELECT status, result_summary FROM tool_runs WHERE id='tool-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("succeeded".into(), "浏览器已打开".into()));
     }
 }

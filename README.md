@@ -4,7 +4,7 @@
 
 项目希望结合“钢琴女友”类产品的陪伴感、记忆管理和低频互动，以及桌宠应用的便捷性、可移动性和可动表现，再加入自然的语音交互能力。
 
-当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线，并已进入业务实现。现有代码可以启动 Tauri 双窗口应用，运行透明桌宠、受控 VRM 导入、文字流式对话、可取消 turn、mock/OpenAI-compatible LLM Provider、SQLite 会话与显式记忆管理，以及由 Rust 管理的桌宠显示、缩放、点击穿透、托盘和全局快捷键。首个 macOS 语音切片也已接入：独立签名 `AudioHost.app`、显式权限申请、PTT、Apple Speech partial/final、设备端持续唤醒和系统 TTS；工具调用与屏幕感知仍作为后续 Tool MVP 单独规划。
+当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线，并已进入业务实现。现有代码可以启动 Tauri 双窗口应用，运行透明桌宠、受控 VRM 导入、文字流式对话、可取消 turn、mock/OpenAI-compatible LLM Provider、SQLite 会话与显式记忆管理，以及由 Rust 管理的桌宠显示、缩放、点击穿透、托盘和全局快捷键。首个 macOS 语音切片也已接入：独立签名 `AudioHost.app`、显式权限申请、PTT、Apple Speech partial/final、设备端持续唤醒和系统 TTS。现在又接入了首个低风险工具 `system.open_url`：用户明确给出网址后，应用会先展示确认卡片，再调用系统默认浏览器；计时提醒、屏幕感知和通用工具循环仍作为后续 Tool MVP 规划。
 
 ## 初始角色设定
 
@@ -79,7 +79,7 @@
 - 处理重复记忆和相互冲突的信息。
 - 角色核心人格不能被普通对话无条件覆盖。
 
-### 工具与屏幕感知（规划能力）
+### 工具与屏幕感知（逐步实现）
 
 - 在用户明确要求下，用默认浏览器打开经过校验的网页。
 - 创建、查看和取消本地计时提醒，后续可选择同步到 Apple 提醒事项。
@@ -87,6 +87,8 @@
 - 屏幕图片可以交给独立的 Vision Provider，并使用单独的 endpoint、模型和 Keychain key。
 - 工具调用具有参数校验、风险分级、授权确认、取消、超时和审计记录。
 - “看见屏幕”不自动获得点击、输入、发送消息、删除数据或执行 Shell 的权限。
+
+当前已实现 `system.open_url` 的显式网址试点；它只允许 HTTP/HTTPS，执行前需要用户确认，并写入本地工具审计记录。
 
 ### 语音
 
@@ -151,7 +153,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 ### MVP 暂不包含
 
 - 多角色系统和移动端。
-- 工具执行、按需屏幕理解和通用 GUI 自动化；已作为后续 Tool MVP 单独规划。
+- 通用工具循环、按需屏幕理解和 GUI 自动化；当前只包含低风险的 `system.open_url` 显式网址试点。
 - 自主生活、主动发消息和复杂情绪成长。
 - 完整换装系统。
 
@@ -288,7 +290,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 ## 当前状态
 
-已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。记忆面板还提供本地数据摘要与二次确认入口，可独立清空聊天记录或全部长期记忆，不影响 Provider、角色模型和桌宠设置。
+已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。记忆面板还提供本地数据摘要与二次确认入口，可独立清空聊天记录或全部长期记忆，不影响 Provider、角色模型和桌宠设置。`system.open_url` 已形成首个工具垂直切片：显式网址识别、HTTP/HTTPS 校验、确认卡片、默认浏览器执行、取消和 `tool_runs` 审计均已接入；它暂不代表模型工具循环或浏览器自动化已经完成。
 
 语音首个闭环已完成代码接入：Swift `AudioHost.app`、UDS 安全握手、权限状态、PTT、Apple Speech partial/final、设备端“爱丽丝”持续唤醒、`AVSpeechSynthesizer` 回复、停止朗读和新输入打断。发音区间事件会经过 `turn_id + generation` 过滤后驱动 VRM `aa` 表情；角色另有 idle/listening/thinking/speaking 基础程序化姿态、眨眼与呼吸。Rust、前端、Swift 编译均已通过，并有不请求权限的真实 `.app` 握手测试。MVP 正式验收仍需要稳定本地签名后的首次实机授权，以及 PTT、TTS、唤醒词和持续监听的长时间实测。Sherpa KWS/VAD、正式 VRMA 动作和真实 PCM/RMS 口型属于后续质量增强，不替代当前可运行 fallback 的验收。
 

@@ -74,6 +74,7 @@ pub fn run() {
             commands::app_get_snapshot,
             commands::chat_submit_text,
             commands::turn_cancel,
+            commands::tool_decide,
             commands::settings_update_provider,
             commands::pet_open_panel,
             commands::pet_update_settings,

@@ -1,5 +1,5 @@
 import { FormEvent, useRef, useState } from "react";
-import { cancelTurn, finishPushToTalk, importCharacterVrm, isTauri, openVoicePrivacySettings, requestVoicePermissions, setListening, startPushToTalk, stopPlayback, submitText, updatePetSettings, updateVoiceSettings } from "../lib/tauri";
+import { cancelTurn, decideTool, finishPushToTalk, importCharacterVrm, isTauri, openVoicePrivacySettings, requestVoicePermissions, setListening, startPushToTalk, stopPlayback, submitText, updatePetSettings, updateVoiceSettings } from "../lib/tauri";
 import { useAppStore } from "../stores/app";
 import { ProviderSettingsDialog } from "./ProviderSettingsDialog";
 import { MemoryPanel } from "./MemoryPanel";
@@ -8,6 +8,7 @@ export function ChatPanel() {
   const { snapshot, streamingText, booting, setProvider, setPet, setCharacter, setVoiceSettings } = useAppStore();
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [petUpdating, setPetUpdating] = useState(false);
@@ -15,6 +16,8 @@ export function ChatPanel() {
   const [importingVrm, setImportingVrm] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceError, setVoiceError] = useState("");
+  const [toolBusy, setToolBusy] = useState(false);
+  const [toolError, setToolError] = useState("");
   const pttStart = useRef<Promise<void> | null>(null);
   const voicePermissionNotDetermined = snapshot.voice_permissions.microphone === "not_determined"
     || snapshot.voice_permissions.speech_recognition === "not_determined";
@@ -113,10 +116,31 @@ export function ChatPanel() {
     if (!text || submitting) return;
     setDraft("");
     setSubmitting(true);
+    setSubmitError("");
     try {
       await submitText(text);
+    } catch (reason) {
+      if (typeof reason === "string") setSubmitError(reason);
+      else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setSubmitError(reason.message);
+      else setSubmitError("发送消息失败。");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const decidePendingTool = async (approved: boolean) => {
+    const pending = snapshot.pending_tool_approval;
+    if (!pending || toolBusy || !isTauri()) return;
+    setToolBusy(true);
+    setToolError("");
+    try {
+      await decideTool(pending.tool_call_id, approved);
+    } catch (reason) {
+      if (typeof reason === "string") setToolError(reason);
+      else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setToolError(reason.message);
+      else setToolError("处理网页打开请求失败。");
+    } finally {
+      setToolBusy(false);
     }
   };
 
@@ -222,6 +246,26 @@ export function ChatPanel() {
 
       <div className={`asr-caption ${snapshot.asr_partial ? "" : "empty"}`}>{snapshot.asr_partial}</div>
 
+      {snapshot.pending_tool_approval && (
+        <section className="tool-approval" aria-label="工具确认">
+          <div className="tool-approval-heading">
+            <div>
+              <p className="eyebrow">ACTION REQUEST</p>
+              <h2>{snapshot.pending_tool_approval.display_name}</h2>
+            </div>
+            <span className="tool-risk-badge">需要确认</span>
+          </div>
+          <p className="tool-approval-summary">{snapshot.pending_tool_approval.summary}</p>
+          <code className="tool-url">{snapshot.pending_tool_approval.url}</code>
+          <p className="tool-host">目标域名：{snapshot.pending_tool_approval.host}</p>
+          <div className="tool-approval-actions">
+            <button type="button" className="secondary" disabled={toolBusy} onClick={() => void decidePendingTool(false)}>取消</button>
+            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : "允许打开"}</button>
+          </div>
+          {toolError && <p className="settings-error">{toolError}</p>}
+        </section>
+      )}
+
       <section className="conversation" aria-live="polite">
         {booting && <p className="empty-state">正在连接 Rust Core…</p>}
         {!booting && snapshot.messages.length === 0 && !streamingText && (
@@ -245,6 +289,7 @@ export function ChatPanel() {
       </section>
 
       {snapshot.last_error && <div className="error-banner">{snapshot.last_error.message}</div>}
+      {submitError && <div className="error-banner">{submitError}</div>}
 
       <form className="composer" onSubmit={submit}>
         <textarea

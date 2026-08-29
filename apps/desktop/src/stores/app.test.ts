@@ -45,10 +45,11 @@ const snapshot: AppSnapshot = {
     tts_enabled: false,
     revision: 0,
   },
-  asr_partial: "",
-  voice_input_route: "unknown",
-  mouth_level: 0,
-  last_error: null,
+    asr_partial: "",
+    voice_input_route: "unknown",
+    mouth_level: 0,
+    pending_tool_approval: null,
+    last_error: null,
 };
 
 describe("app store generation projection", () => {

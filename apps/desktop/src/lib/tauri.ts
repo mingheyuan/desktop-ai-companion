@@ -149,6 +149,16 @@ export async function stopPlayback(): Promise<void> {
   });
 }
 
+export async function decideTool(toolCallId: string, approved: boolean): Promise<void> {
+  await invoke("tool_decide", {
+    request: {
+      request_id: crypto.randomUUID(),
+      tool_call_id: toolCallId,
+      approved,
+    },
+  });
+}
+
 export async function updateVoiceSettings(current: VoiceSettings, ttsEnabled: boolean): Promise<VoiceSettings> {
   return invoke<VoiceSettings>("voice_update_settings", {
     request: {

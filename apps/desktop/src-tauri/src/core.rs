@@ -22,13 +22,13 @@ use crate::{
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, DataSummary, EventEnvelope,
         GenerationState, InputState, ListeningMode, MemoryItem, MouthLevelPayload, PetSettings,
-        PlaybackState, ProviderSettings, TextDeltaPayload, TurnEndedPayload, TurnState,
-        VoicePermissions, VoiceSettings,
+        PlaybackState, ProviderSettings, TextDeltaPayload, ToolApproval, TurnEndedPayload,
+        TurnState, VoicePermissions, VoiceSettings,
     },
     desktop::apply_pet_window_settings,
     provider::{create_provider, LlmEvent, LlmRequest},
     secret::SecretStore,
-    storage::Storage,
+    storage::{Storage, ToolRunInput},
 };
 
 struct RuntimeState {
@@ -48,6 +48,7 @@ struct RuntimeState {
     mouth_level: f64,
     active_voice_source: Option<String>,
     active_voice_capture_id: Option<String>,
+    pending_tool: Option<PendingTool>,
 }
 
 impl Default for RuntimeState {
@@ -69,6 +70,7 @@ impl Default for RuntimeState {
             mouth_level: 0.0,
             active_voice_source: None,
             active_voice_capture_id: None,
+            pending_tool: None,
         }
     }
 }
@@ -77,6 +79,13 @@ struct ActiveTurn {
     turn_id: String,
     generation: u64,
     cancel: CancellationToken,
+}
+
+#[derive(Clone)]
+struct PendingTool {
+    approval: ToolApproval,
+    turn_id: String,
+    generation: u64,
 }
 
 struct VoiceFinal {
@@ -199,6 +208,10 @@ impl AppCore {
             asr_partial: runtime.asr_partial.clone(),
             voice_input_route: runtime.voice_input_route.clone(),
             mouth_level: runtime.mouth_level,
+            pending_tool_approval: runtime
+                .pending_tool
+                .as_ref()
+                .map(|tool| tool.approval.clone()),
             last_error: runtime.last_error.clone(),
         })
     }
@@ -351,6 +364,7 @@ impl AppCore {
                 false,
             ));
         }
+        let open_url = parse_open_url_request(&text)?;
 
         let _interaction_guard = self.interaction_command.lock().await;
         self.interrupt_playback().await;
@@ -368,6 +382,34 @@ impl AppCore {
             )
             .map_err(storage_error)?;
 
+        let pending_tool = open_url.map(|request| PendingTool {
+            approval: ToolApproval {
+                tool_call_id: Uuid::now_v7().to_string(),
+                tool_name: "system.open_url".into(),
+                display_name: "打开网页".into(),
+                url: request.url.clone(),
+                host: request.host,
+                summary: "只会调用系统默认浏览器打开此网址，不会读取或修改网页内容。".into(),
+            },
+            turn_id: turn_id.clone(),
+            generation,
+        });
+        if let Some(tool) = pending_tool.as_ref() {
+            self.storage
+                .begin_tool_run(
+                    ToolRunInput {
+                        id: &tool.approval.tool_call_id,
+                        conversation_id: &self.conversation_id,
+                        turn_id: &turn_id,
+                        tool_name: &tool.approval.tool_name,
+                        arguments_json: &json!({ "url": tool.approval.url }).to_string(),
+                        origin: "user_explicit",
+                    },
+                    now_ms(),
+                )
+                .map_err(storage_error)?;
+        }
+
         let cancel = CancellationToken::new();
         *self.active_turn.lock().await = Some(ActiveTurn {
             turn_id: turn_id.clone(),
@@ -382,8 +424,13 @@ impl AppCore {
             runtime.active_turn_id = Some(turn_id.clone());
             runtime.generation = generation;
             runtime.last_error = None;
+            runtime.pending_tool = pending_tool.clone();
         }
         self.emit_snapshot(&app).await?;
+
+        if pending_tool.is_some() {
+            return Ok(());
+        }
 
         let core = Arc::clone(self);
         let task: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
@@ -775,6 +822,23 @@ impl AppCore {
                 now_ms(),
             )
             .map_err(storage_error)?;
+        let pending_tool = {
+            let mut runtime = self.runtime.write().await;
+            if runtime
+                .pending_tool
+                .as_ref()
+                .is_some_and(|tool| tool.turn_id == active.turn_id)
+            {
+                runtime.pending_tool.take()
+            } else {
+                None
+            }
+        };
+        if let Some(tool) = pending_tool {
+            self.storage
+                .finish_tool_run(&tool.approval.tool_call_id, "cancelled", reason, now_ms())
+                .map_err(storage_error)?;
+        }
         {
             let mut runtime = self.runtime.write().await;
             runtime.revision += 1;
@@ -794,6 +858,99 @@ impl AppCore {
             },
         )
         .await
+    }
+
+    pub async fn decide_tool(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        tool_call_id: &str,
+        approved: bool,
+    ) -> Result<(), AppError> {
+        let _interaction_guard = self.interaction_command.lock().await;
+        let pending = {
+            let mut runtime = self.runtime.write().await;
+            let Some(pending) = runtime.pending_tool.as_ref() else {
+                return Ok(());
+            };
+            if pending.approval.tool_call_id != tool_call_id {
+                return Err(AppError::new(
+                    "conflict",
+                    "网页打开请求已更新，请使用当前确认卡片。",
+                    true,
+                ));
+            }
+            let pending = runtime.pending_tool.take().expect("pending tool exists");
+            runtime.revision += 1;
+            runtime.turn_state = TurnState::Active;
+            runtime.generation_state = GenerationState::Finished;
+            runtime.last_error = None;
+            pending
+        };
+        self.emit_snapshot(app).await?;
+
+        if !approved {
+            self.storage
+                .finish_tool_run(
+                    &pending.approval.tool_call_id,
+                    "rejected",
+                    "用户取消了网页打开请求。",
+                    now_ms(),
+                )
+                .map_err(storage_error)?;
+            self.complete_turn(
+                app,
+                &pending.turn_id,
+                pending.generation,
+                &format!("好的，老师，已取消打开网页：{}", pending.approval.url),
+            )
+            .await;
+            return Ok(());
+        }
+
+        self.storage
+            .finish_tool_run(
+                &pending.approval.tool_call_id,
+                "approved",
+                "用户允许打开网页。",
+                now_ms(),
+            )
+            .map_err(storage_error)?;
+        let result = open_url_in_default_browser(&pending.approval.url).await;
+        match result {
+            Ok(()) => {
+                self.storage
+                    .finish_tool_run(
+                        &pending.approval.tool_call_id,
+                        "succeeded",
+                        "已交给系统默认浏览器打开。",
+                        now_ms(),
+                    )
+                    .map_err(storage_error)?;
+                self.complete_turn(
+                    app,
+                    &pending.turn_id,
+                    pending.generation,
+                    &format!("网页已打开，老师：{}", pending.approval.url),
+                )
+                .await;
+            }
+            Err(error) => {
+                let _ = self.storage.finish_tool_run(
+                    &pending.approval.tool_call_id,
+                    "failed",
+                    &error.message,
+                    now_ms(),
+                );
+                self.complete_turn(
+                    app,
+                    &pending.turn_id,
+                    pending.generation,
+                    &format!("没有成功打开网页：{}", error.message),
+                )
+                .await;
+            }
+        }
+        Ok(())
     }
 
     pub async fn update_provider(
@@ -1801,6 +1958,129 @@ fn validate_memory_content(value: &str) -> Result<String, AppError> {
     Ok(value.to_owned())
 }
 
+struct OpenUrlRequest {
+    url: String,
+    host: String,
+}
+
+fn parse_open_url_request(text: &str) -> Result<Option<OpenUrlRequest>, AppError> {
+    let has_open_intent = ["打开", "访问", "进入", "浏览"]
+        .iter()
+        .any(|verb| text.contains(verb));
+    if !has_open_intent || text.contains("不要打开") || text.contains("别打开") {
+        return Ok(None);
+    }
+
+    let candidate = text.split_whitespace().find_map(|token| {
+        let trimmed = token.trim_matches(|character: char| {
+            matches!(
+                character,
+                '，' | '。'
+                    | '！'
+                    | '？'
+                    | '；'
+                    | ','
+                    | '.'
+                    | '!'
+                    | '?'
+                    | ';'
+                    | ':'
+                    | '：'
+                    | '“'
+                    | '”'
+                    | '"'
+                    | '\''
+                    | '('
+                    | ')'
+                    | '（'
+                    | '）'
+                    | '['
+                    | ']'
+                    | '【'
+                    | '】'
+            )
+        });
+        let lower = trimmed.to_ascii_lowercase();
+        (lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("www.")
+            || (trimmed.contains('.') && !trimmed.contains(' ')))
+        .then_some(trimmed.to_owned())
+    });
+    let Some(candidate) = candidate else {
+        return Ok(None);
+    };
+    let normalized = if candidate.to_ascii_lowercase().starts_with("www.")
+        || (!candidate.contains("://") && candidate.contains('.'))
+    {
+        format!("https://{candidate}")
+    } else {
+        candidate
+    };
+    let parsed = reqwest::Url::parse(&normalized)
+        .map_err(|_| AppError::new("invalid_tool_arguments", "网页地址不是有效 URL。", false))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(AppError::new(
+            "invalid_tool_arguments",
+            "出于安全原因，只允许打开带域名的 HTTP 或 HTTPS 网页。",
+            false,
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(AppError::new(
+            "invalid_tool_arguments",
+            "网页地址不能包含用户名或密码。",
+            false,
+        ));
+    }
+    Ok(Some(OpenUrlRequest {
+        url: parsed.to_string(),
+        host: parsed.host_str().unwrap_or_default().to_owned(),
+    }))
+}
+
+async fn open_url_in_default_browser(url: &str) -> Result<(), AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::process::Command::new("/usr/bin/open")
+                .arg(url)
+                .status(),
+        )
+        .await
+        .map_err(|_| AppError::new("tool_execution_timeout", "打开网页超过 5 秒未完成。", true))?
+        .map_err(|error| {
+            AppError::new(
+                "tool_execution_failed",
+                format!("无法启动默认浏览器：{error}"),
+                true,
+            )
+        })?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(AppError::new(
+                "tool_execution_failed",
+                format!(
+                    "默认浏览器拒绝打开网页（退出码：{}）。",
+                    status.code().unwrap_or(-1)
+                ),
+                true,
+            ))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = url;
+        Err(AppError::new(
+            "tool_unavailable",
+            "当前版本的打开网页工具仅支持 macOS。",
+            false,
+        ))
+    }
+}
+
 fn memory_context_with_budget(memories: Vec<MemoryItem>, budget: usize) -> Vec<String> {
     let mut remaining = budget;
     memories
@@ -2014,6 +2294,30 @@ mod tests {
             ..PetSettings::default()
         })
         .is_err());
+    }
+
+    #[test]
+    fn parses_explicit_open_url_request() {
+        let request =
+            parse_open_url_request("老师，帮我打开 https://github.com/mingyuan.wang/demo。")
+                .unwrap()
+                .unwrap();
+        assert_eq!(request.url, "https://github.com/mingyuan.wang/demo");
+        assert_eq!(request.host, "github.com");
+
+        let bare_host = parse_open_url_request("访问 www.example.com")
+            .unwrap()
+            .unwrap();
+        assert_eq!(bare_host.url, "https://www.example.com/");
+    }
+
+    #[test]
+    fn rejects_unsafe_open_url_request() {
+        assert!(parse_open_url_request("打开 file:///tmp/secret.txt").is_err());
+        assert!(parse_open_url_request("打开 https://user:password@example.com").is_err());
+        assert!(parse_open_url_request("打开网页但没有提供网址")
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
