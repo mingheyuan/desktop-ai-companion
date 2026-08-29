@@ -172,6 +172,7 @@ impl AppCore {
         let secrets = SecretStore;
         let mut provider = storage.load_provider_settings().map_err(storage_error)?;
         provider.has_api_key = secrets.resolve_llm_api_key()?.is_some();
+        provider.vision.has_api_key = secrets.resolve_vision_api_key()?.is_some();
         let pet = storage.load_pet_settings().map_err(storage_error)?;
         let character = storage.load_character_settings().map_err(storage_error)?;
         let voice_settings = storage.load_voice_settings().map_err(storage_error)?;
@@ -1458,6 +1459,8 @@ impl AppCore {
         expected_revision: u64,
         api_key: Option<String>,
         clear_api_key: bool,
+        vision_api_key: Option<String>,
+        clear_vision_api_key: bool,
     ) -> Result<ProviderSettings, AppError> {
         let mut provider = self.provider.write().await;
         if provider.revision != expected_revision {
@@ -1470,6 +1473,7 @@ impl AppCore {
         validate_provider_settings(&value)?;
 
         let previous_secret = self.get_stored_llm_api_key().await?;
+        let previous_vision_secret = self.get_stored_vision_api_key().await?;
         if clear_api_key {
             self.delete_llm_api_key().await?;
         } else if let Some(secret) = api_key
@@ -1478,21 +1482,31 @@ impl AppCore {
         {
             self.set_llm_api_key(secret.to_owned()).await?;
         }
-        let has_api_key = self.resolve_llm_api_key().await?.is_some();
-        let updated = ProviderSettings {
-            revision: provider.revision + 1,
-            has_api_key,
-            ..value
-        };
-        if let Err(error) = self.storage.save_provider_settings(&updated, now_ms()) {
-            match previous_secret {
-                Some(secret) => {
-                    let _ = self.set_llm_api_key(secret).await;
-                }
-                None => {
-                    let _ = self.delete_llm_api_key().await;
-                }
+        if clear_vision_api_key {
+            if let Err(error) = self.delete_vision_api_key().await {
+                self.restore_secrets(previous_secret.clone(), previous_vision_secret.clone())
+                    .await;
+                return Err(error);
             }
+        } else if let Some(secret) = vision_api_key
+            .as_deref()
+            .filter(|secret| !secret.trim().is_empty())
+        {
+            if let Err(error) = self.set_vision_api_key(secret.to_owned()).await {
+                self.restore_secrets(previous_secret.clone(), previous_vision_secret.clone())
+                    .await;
+                return Err(error);
+            }
+        }
+        let has_api_key = self.resolve_llm_api_key().await?.is_some();
+        let has_vision_api_key = self.resolve_vision_api_key().await?.is_some();
+        let mut updated = value;
+        updated.revision = provider.revision + 1;
+        updated.has_api_key = has_api_key;
+        updated.vision.has_api_key = has_vision_api_key;
+        if let Err(error) = self.storage.save_provider_settings(&updated, now_ms()) {
+            self.restore_secrets(previous_secret, previous_vision_secret)
+                .await;
             return Err(storage_error(error));
         }
         *provider = updated.clone();
@@ -2314,6 +2328,53 @@ impl AppCore {
             .map_err(secret_task_error)?
     }
 
+    async fn resolve_vision_api_key(&self) -> Result<Option<String>, AppError> {
+        let secrets = self.secrets.clone();
+        tokio::task::spawn_blocking(move || secrets.resolve_vision_api_key())
+            .await
+            .map_err(secret_task_error)?
+    }
+
+    async fn get_stored_vision_api_key(&self) -> Result<Option<String>, AppError> {
+        let secrets = self.secrets.clone();
+        tokio::task::spawn_blocking(move || secrets.get_stored_vision_api_key())
+            .await
+            .map_err(secret_task_error)?
+    }
+
+    async fn set_vision_api_key(&self, value: String) -> Result<(), AppError> {
+        let secrets = self.secrets.clone();
+        tokio::task::spawn_blocking(move || secrets.set_vision_api_key(&value))
+            .await
+            .map_err(secret_task_error)?
+    }
+
+    async fn delete_vision_api_key(&self) -> Result<(), AppError> {
+        let secrets = self.secrets.clone();
+        tokio::task::spawn_blocking(move || secrets.delete_vision_api_key())
+            .await
+            .map_err(secret_task_error)?
+    }
+
+    async fn restore_secrets(&self, llm: Option<String>, vision: Option<String>) {
+        match llm {
+            Some(secret) => {
+                let _ = self.set_llm_api_key(secret).await;
+            }
+            None => {
+                let _ = self.delete_llm_api_key().await;
+            }
+        }
+        match vision {
+            Some(secret) => {
+                let _ = self.set_vision_api_key(secret).await;
+            }
+            None => {
+                let _ = self.delete_vision_api_key().await;
+            }
+        }
+    }
+
     async fn is_current(&self, turn_id: &str, generation: u64) -> bool {
         self.active_turn
             .lock()
@@ -2427,6 +2488,29 @@ fn validate_provider_settings(value: &ProviderSettings) -> Result<(), AppError> 
             return Err(AppError::new(
                 "invalid_request",
                 "模型名称不能为空。",
+                false,
+            ));
+        }
+    }
+    if value.vision.enabled {
+        let endpoint = reqwest::Url::parse(&value.vision.endpoint).map_err(|_| {
+            AppError::new(
+                "invalid_request",
+                "Vision Provider endpoint 不是有效 URL。",
+                false,
+            )
+        })?;
+        if !matches!(endpoint.scheme(), "http" | "https") {
+            return Err(AppError::new(
+                "invalid_request",
+                "Vision Provider endpoint 只允许 HTTP 或 HTTPS。",
+                false,
+            ));
+        }
+        if value.vision.model.trim().is_empty() {
+            return Err(AppError::new(
+                "invalid_request",
+                "Vision Provider 模型名称不能为空。",
                 false,
             ));
         }
@@ -3072,6 +3156,7 @@ mod tests {
             model: "model".into(),
             has_api_key: false,
             allow_memory_context: false,
+            vision: Default::default(),
             revision: 0,
         };
         assert!(validate_provider_settings(&valid).is_ok());
@@ -3087,6 +3172,25 @@ mod tests {
             ..valid
         };
         assert!(validate_provider_settings(&empty_model).is_err());
+
+        let vision_valid = ProviderSettings {
+            vision: crate::contracts::VisionProviderSettings {
+                enabled: true,
+                endpoint: "https://vision.example.com/v1".into(),
+                model: "vision-model".into(),
+                has_api_key: false,
+            },
+            ..ProviderSettings::default()
+        };
+        assert!(validate_provider_settings(&vision_valid).is_ok());
+        let vision_invalid = ProviderSettings {
+            vision: crate::contracts::VisionProviderSettings {
+                endpoint: "file:///tmp/vision".into(),
+                ..vision_valid.vision.clone()
+            },
+            ..vision_valid
+        };
+        assert!(validate_provider_settings(&vision_invalid).is_err());
     }
 
     #[test]

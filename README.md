@@ -92,6 +92,8 @@
 
 当前已实现 `system.open_url` 的显式网址试点、相对时间的一次性提醒（如“30 分钟后提醒我喝水”）和模型提出的 `memory.save` 草案；三者执行前都需要用户确认，并写入本地工具审计记录。提醒支持查看、取消、应用重启后的未完成任务恢复和到期 macOS 通知；绝对日期、重复提醒，以及应用完全退出时仍由系统独立投递通知暂不支持。
 
+视觉 Provider 的独立启用开关、endpoint、模型名和 Keychain API key 已可在设置中保存；当前不会自动采集或上传屏幕，真正的 `screen.observe` 数据出站仍需单独授权和实现。
+
 ### 语音
 
 语音交互会参考本人的 [realtime-ai-translation](https://github.com/mingheyuan/realtime-ai-translation) 项目，重点借鉴：
@@ -281,7 +283,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - 受控 Tool Runtime、风险策略和审计记录。
 - 打开网页与本地计时提醒。
 - 按需单帧屏幕观察。
-- 独立 Vision Provider 与 Keychain key。
+- 独立 Vision Provider 与 Keychain key（配置层已实现，图片请求仍待接入）。
 - 可选 Apple 提醒事项与本地 MCP 扩展。
 
 ### 阶段 5：角色表现与主动陪伴

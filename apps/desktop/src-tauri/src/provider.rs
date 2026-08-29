@@ -568,6 +568,7 @@ mod tests {
             model: "qwen3".into(),
             has_api_key: false,
             allow_memory_context: false,
+            vision: Default::default(),
             revision: 0,
         };
         assert!(create_provider(&settings, None).is_ok());
@@ -762,6 +763,7 @@ mod tests {
             model: "tool-test".into(),
             has_api_key: false,
             allow_memory_context: false,
+            vision: Default::default(),
             revision: 0,
         };
         let provider = create_provider(&settings, None).unwrap();

@@ -23,12 +23,20 @@ export interface ChatMessage {
   created_at_ms: number;
 }
 
+export interface VisionProviderSettings {
+  enabled: boolean;
+  endpoint: string;
+  model: string;
+  has_api_key: boolean;
+}
+
 export interface ProviderSettings {
   provider: "mock" | "openai_compatible";
   endpoint: string;
   model: string;
   has_api_key: boolean;
   allow_memory_context: boolean;
+  vision: VisionProviderSettings;
   revision: number;
 }
 

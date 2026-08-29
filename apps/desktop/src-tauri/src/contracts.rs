@@ -91,6 +91,37 @@ pub struct ChatMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VisionProviderSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_vision_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_vision_model")]
+    pub model: String,
+    #[serde(default)]
+    pub has_api_key: bool,
+}
+
+impl Default for VisionProviderSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_vision_endpoint(),
+            model: default_vision_model(),
+            has_api_key: std::env::var("DESKTOP_AI_VISION_API_KEY").is_ok(),
+        }
+    }
+}
+
+fn default_vision_endpoint() -> String {
+    "https://api.openai.com/v1".into()
+}
+
+fn default_vision_model() -> String {
+    "gpt-4.1-mini".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderSettings {
     pub provider: String,
     pub endpoint: String,
@@ -98,6 +129,8 @@ pub struct ProviderSettings {
     pub has_api_key: bool,
     #[serde(default)]
     pub allow_memory_context: bool,
+    #[serde(default)]
+    pub vision: VisionProviderSettings,
     pub revision: u64,
 }
 
@@ -109,6 +142,7 @@ impl Default for ProviderSettings {
             model: "gpt-4.1-mini".into(),
             has_api_key: std::env::var("DESKTOP_AI_LLM_API_KEY").is_ok(),
             allow_memory_context: false,
+            vision: VisionProviderSettings::default(),
             revision: 0,
         }
     }
@@ -324,6 +358,19 @@ pub struct TurnEndedPayload {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct UpdateVisionProviderRequest {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub model: String,
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub clear_api_key: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateProviderRequest {
     pub request_id: String,
@@ -335,6 +382,8 @@ pub struct UpdateProviderRequest {
     pub clear_api_key: bool,
     #[serde(default)]
     pub allow_memory_context: bool,
+    #[serde(default)]
+    pub vision: UpdateVisionProviderRequest,
     pub expected_revision: u64,
 }
 

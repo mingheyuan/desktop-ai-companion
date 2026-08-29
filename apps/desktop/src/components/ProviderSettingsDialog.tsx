@@ -15,6 +15,11 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
   const [apiKey, setApiKey] = useState("");
   const [clearApiKey, setClearApiKey] = useState(false);
   const [allowMemoryContext, setAllowMemoryContext] = useState(initial.allow_memory_context);
+  const [visionEnabled, setVisionEnabled] = useState(initial.vision.enabled);
+  const [visionEndpoint, setVisionEndpoint] = useState(initial.vision.endpoint);
+  const [visionModel, setVisionModel] = useState(initial.vision.model);
+  const [visionApiKey, setVisionApiKey] = useState("");
+  const [clearVisionApiKey, setClearVisionApiKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -30,6 +35,13 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
         api_key: apiKey.trim() || undefined,
         clear_api_key: clearApiKey,
         allow_memory_context: allowMemoryContext,
+        vision: {
+          enabled: visionEnabled,
+          endpoint: visionEndpoint.trim(),
+          model: visionModel.trim(),
+          api_key: visionApiKey.trim() || undefined,
+          clear_api_key: clearVisionApiKey,
+        },
         expected_revision: initial.revision,
       });
       onSaved(updated);
@@ -100,10 +112,47 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
           </>
         )}
 
+        <section className="settings-section" aria-label="视觉 Provider 配置">
+          <p className="eyebrow">VISION PROVIDER</p>
+          <h3>屏幕理解配置</h3>
+          <p className="settings-hint">这里只保存独立的视觉模型连接信息，不会自动采集或上传屏幕。真正启用屏幕观察前仍会单独确认数据出站。</p>
+          <label className="check-row">
+            <input type="checkbox" checked={visionEnabled} onChange={(event) => setVisionEnabled(event.target.checked)} />
+            启用视觉 Provider 配置
+          </label>
+          {visionEnabled && (
+            <>
+              <label>
+                Vision Endpoint
+                <input value={visionEndpoint} onChange={(event) => setVisionEndpoint(event.target.value)} placeholder="https://api.openai.com/v1" />
+              </label>
+              <label>
+                Vision Model
+                <input value={visionModel} onChange={(event) => setVisionModel(event.target.value)} placeholder="支持图片输入的模型名称" />
+              </label>
+              <label>
+                Vision API key
+                <input
+                  type="password"
+                  value={visionApiKey}
+                  onChange={(event) => setVisionApiKey(event.target.value)}
+                  placeholder={initial.vision.has_api_key ? "已保存在独立 Keychain 账户；留空则不修改" : "可选；本地兼容服务通常留空"}
+                  autoComplete="off"
+                  disabled={clearVisionApiKey}
+                />
+              </label>
+              <label className="check-row">
+                <input type="checkbox" checked={clearVisionApiKey} onChange={(event) => setClearVisionApiKey(event.target.checked)} />
+                删除当前 Vision Keychain API key
+              </label>
+            </>
+          )}
+        </section>
+
         {error && <p className="settings-error">{error}</p>}
         <footer>
           <button type="button" className="secondary" onClick={onClose}>取消</button>
-          <button type="submit" disabled={saving || (provider === "openai_compatible" && (!endpoint.trim() || !model.trim()))}>
+          <button type="submit" disabled={saving || (provider === "openai_compatible" && (!endpoint.trim() || !model.trim())) || (visionEnabled && (!visionEndpoint.trim() || !visionModel.trim()))}>
             {saving ? "保存中…" : "保存"}
           </button>
         </footer>

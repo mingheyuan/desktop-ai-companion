@@ -20,6 +20,12 @@ const snapshot: AppSnapshot = {
     model: "mock-aris",
     has_api_key: false,
     allow_memory_context: false,
+    vision: {
+      enabled: false,
+      endpoint: "https://api.openai.com/v1",
+      model: "gpt-4.1-mini",
+      has_api_key: false,
+    },
     revision: 0,
   },
   pet: {

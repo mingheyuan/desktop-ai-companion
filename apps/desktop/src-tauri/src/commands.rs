@@ -9,7 +9,7 @@ use crate::{
         CharacterSettings, CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryItem,
         PetSettings, ProviderSettings, SearchMemoriesRequest, SetListeningRequest,
         SubmitTextRequest, ToolDecisionRequest, UpdateMemoryRequest, UpdatePetSettingsRequest,
-        UpdateProviderRequest, UpdateVoiceSettingsRequest, VoiceSettings,
+        UpdateProviderRequest, UpdateVoiceSettingsRequest, VisionProviderSettings, VoiceSettings,
     },
     core::AppCore,
     desktop,
@@ -101,11 +101,19 @@ pub async fn settings_update_provider(
                 model: request.model,
                 has_api_key: false,
                 allow_memory_context: request.allow_memory_context,
+                vision: VisionProviderSettings {
+                    enabled: request.vision.enabled,
+                    endpoint: request.vision.endpoint,
+                    model: request.vision.model,
+                    has_api_key: false,
+                },
                 revision: request.expected_revision,
             },
             request.expected_revision,
             request.api_key,
             request.clear_api_key,
+            request.vision.api_key,
+            request.vision.clear_api_key,
         )
         .await
 }

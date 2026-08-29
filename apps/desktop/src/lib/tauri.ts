@@ -31,6 +31,13 @@ export interface UpdateProviderInput {
   api_key?: string;
   clear_api_key: boolean;
   allow_memory_context: boolean;
+  vision: {
+    enabled: boolean;
+    endpoint: string;
+    model: string;
+    api_key?: string;
+    clear_api_key: boolean;
+  };
   expected_revision: number;
 }
 

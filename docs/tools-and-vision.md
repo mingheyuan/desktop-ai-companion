@@ -2,7 +2,7 @@
 
 > 版本：v0.1 规划方案
 >
-> 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒和需确认的 `memory.save` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步），屏幕感知、多工具并行和其余 Tool MVP 尚未进入实现
+> 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒和需确认的 `memory.save` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步）；独立 Vision Provider 配置已落地，但屏幕感知、多工具并行和其余 Tool MVP 尚未进入实现
 >
 > 更新日期：2026-08-29
 
@@ -25,7 +25,7 @@
 4. 工具结果回到当前 `TurnActor`，由模型继续生成最终回复；当前每次模型响应只允许一个 ToolCall、每轮最多 3 步，工具不能自行修改对话状态。
 5. `memory.save` 是本地写入工具：模型只能提出草案，用户确认后才进入 SQLite；它不获得读取其他记忆或修改角色设定的权限。
 6. 屏幕观察默认按需、单帧、可见，不做后台连续录屏。
-7. Vision Provider 与聊天 LLM 分开配置，允许独立 endpoint、model 和 Keychain key。
+7. Vision Provider 与聊天 LLM 分开配置，允许独立 endpoint、model 和 Keychain key；当前已经落地配置保存，实际图片请求仍需单独接入。
 8. 网页内容、屏幕文字和工具输出一律视为不可信数据，不能替代用户授权。
 
 ## 3. 总体结构
@@ -244,18 +244,17 @@ ScreenCaptureKit 单帧
 设置中增加独立的 Vision Profile：
 
 ```text
-vision.provider
+vision.enabled
 vision.endpoint
 vision.model
-vision.key_ref
-vision.send_policy: never | ask_each_time | allow_for_session
+vision.api_key (Keychain account: vision.default)
 ```
 
 - 聊天 LLM 和视觉模型可以来自不同供应商，也可以指向 Ollama / LM Studio 等本地兼容服务。
-- `vision.key_ref` 指向 Keychain 独立条目，不复用或暴露聊天 Key；用户也可以主动选择同一凭据。
+- 当前配置使用独立的 `vision.default` Keychain 条目，不复用或暴露聊天 Key；设置页可以单独开启、修改 endpoint/model 和 Key。
 - Provider 必须声明 `image_input` 能力，不能只根据模型名称猜测。
 - 上传前显示采集范围、目标 Provider 和是否会离开本机。
-- `never` 模式只允许本地 OCR/本地视觉 Provider；没有可用能力时明确报错。
+- 当前只完成配置保存，尚未采集或上传图片；后续仍需增加 `never | ask_each_time | allow_for_session` 数据发送策略。
 - 原始截图默认不写入聊天记录、记忆或诊断日志；模型结果也不会自动成为长期记忆。
 
 ## 9. 与对话、桌宠和记忆的关系
@@ -297,7 +296,7 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 2. `system.open_url`、`timer.create` 和 `memory.save` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；仍需抽成独立 Registry/Policy 模块并补多工具循环。
 3. 完善 `timer.create/list/cancel`，接入系统级离线通知并验证休眠、重启、时区和重复触发。
 4. `screen.observe` 本地单帧，验证权限、窗口排除和临时文件清理。
-5. 独立 Vision Provider，先接一个云端兼容模型和一个本地兼容模型。
+5. 独立 Vision Provider 的实际图片请求，先接一个云端兼容模型和一个本地兼容模型；当前仅完成配置与 Keychain 隔离。
 6. EventKit 提醒事项。
 7. 可选本地 MCP Client。
 8. 浏览器或 GUI 自动化必须另行评审，不随 Tool MVP 自动获得授权。
