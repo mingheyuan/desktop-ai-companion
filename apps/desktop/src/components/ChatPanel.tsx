@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { cancelTimer, cancelTurn, clearScreenObservation, decideTool, finishPushToTalk, getScreenObservationPreview, importCharacterVrm, isTauri, openVoicePrivacySettings, requestVoicePermissions, setListening, startPushToTalk, stopPlayback, submitText, updatePetSettings, updateVoiceSettings } from "../lib/tauri";
+import { formatTimerRemaining } from "../lib/timerFormat";
 import { useAppStore } from "../stores/app";
 import { ProviderSettingsDialog } from "./ProviderSettingsDialog";
 import { MemoryPanel } from "./MemoryPanel";
@@ -24,6 +25,7 @@ export function ChatPanel() {
   const [screenPreviewUrl, setScreenPreviewUrl] = useState<string | null>(null);
   const [screenPreviewError, setScreenPreviewError] = useState("");
   const [screenPreviewBusy, setScreenPreviewBusy] = useState(false);
+  const [clockMs, setClockMs] = useState(() => Date.now());
   const pttStart = useRef<Promise<void> | null>(null);
   const voicePermissionNotDetermined = snapshot.voice_permissions.microphone === "not_determined"
     || snapshot.voice_permissions.speech_recognition === "not_determined";
@@ -52,6 +54,11 @@ export function ChatPanel() {
       cancelled = true;
     };
   }, [snapshot.screen_observation?.id]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClockMs(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const beginPtt = () => {
     if (pttStart.current || !isTauri()) return;
@@ -347,7 +354,7 @@ export function ChatPanel() {
             <article className="timer-item" key={timer.id}>
               <div>
                 <p>{timer.title}</p>
-                <span>{formatTimerDue(timer.due_at_ms)} · {timer.timezone}</span>
+                <span>{formatTimerDue(timer.due_at_ms)} · {formatTimerRemaining(timer.due_at_ms, clockMs)} · {timer.timezone}</span>
               </div>
               <button type="button" disabled={timerBusy || !isTauri()} onClick={() => void cancelScheduledTimer(timer.id)}>取消</button>
             </article>
