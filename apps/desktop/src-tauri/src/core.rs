@@ -464,6 +464,13 @@ impl AppCore {
         } else {
             None
         };
+        let memory_content = if open_url.is_none() && timer_request.is_none() {
+            parse_explicit_memory_request(&text)
+                .map(|content| validate_memory_content(&content))
+                .transpose()?
+        } else {
+            None
+        };
 
         let _interaction_guard = self.interaction_command.lock().await;
         self.interrupt_playback().await;
@@ -523,6 +530,29 @@ impl AppCore {
                             due_at_ms: request.due_at_ms,
                             original_request: request.original_request,
                         },
+                        origin: PendingToolOrigin::Explicit,
+                    }
+                })
+            })
+            .or_else(|| {
+                memory_content.map(|content| {
+                    let tool_call_id = Uuid::now_v7().to_string();
+                    PendingTool {
+                        approval: ToolApproval {
+                            tool_call_id,
+                            tool_name: "memory.save".into(),
+                            display_name: "保存记忆".into(),
+                            summary:
+                                "这段内容只会在你确认后保存到本地长期记忆，不会自动发送给模型。"
+                                    .into(),
+                            url: None,
+                            host: None,
+                            title: Some(content.clone()),
+                            due_at_ms: None,
+                        },
+                        turn_id: turn_id.clone(),
+                        generation,
+                        action: PendingToolAction::SaveMemory { content },
                         origin: PendingToolOrigin::Explicit,
                     }
                 })
@@ -2548,15 +2578,25 @@ struct OpenUrlRequest {
 }
 
 fn has_explicit_memory_intent(text: &str) -> bool {
+    parse_explicit_memory_request(text).is_some()
+}
+
+fn parse_explicit_memory_request(text: &str) -> Option<String> {
     if ["不要记住", "别记住", "不要保存", "别保存"]
         .iter()
         .any(|phrase| text.contains(phrase))
     {
-        return false;
+        return None;
     }
     ["记住", "记下", "别忘了", "不要忘记", "保存这条", "存进记忆"]
         .iter()
-        .any(|phrase| text.contains(phrase))
+        .find_map(|marker| text.find(marker).map(|start| start + marker.len()))
+        .and_then(|start| {
+            let content = text[start..].trim_matches(|character: char| {
+                matches!(character, '：' | ':' | '，' | ',' | '。' | '！' | '!')
+            });
+            (!content.is_empty()).then_some(content.to_owned())
+        })
 }
 
 struct ModelToolCandidate {
@@ -3317,6 +3357,11 @@ mod tests {
         assert!(has_explicit_memory_intent("别忘了我周五要开会"));
         assert!(!has_explicit_memory_intent("我喜欢蓝色"));
         assert!(!has_explicit_memory_intent("不要记住这句话"));
+        assert_eq!(
+            parse_explicit_memory_request("请记住：我喜欢蓝色。"),
+            Some("我喜欢蓝色".into())
+        );
+        assert_eq!(parse_explicit_memory_request("请记住"), None);
     }
 
     #[tokio::test]
