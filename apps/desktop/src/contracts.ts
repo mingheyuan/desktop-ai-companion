@@ -105,6 +105,15 @@ export interface TimerItem {
   created_at_ms: number;
 }
 
+export interface TimerHistoryItem {
+  id: string;
+  title: string;
+  due_at_ms: number;
+  status: "fired" | "cancelled" | string;
+  completed_at_ms: number | null;
+  created_at_ms: number;
+}
+
 export interface ScreenObservation {
   id: string;
   captured_at_ms: number;
@@ -133,6 +142,7 @@ export interface AppSnapshot {
   mouth_level: number;
   pending_tool_approval: ToolApproval | null;
   timers: TimerItem[];
+  timer_history: TimerHistoryItem[];
   screen_observation: ScreenObservation | null;
   last_error: AppError | null;
 }

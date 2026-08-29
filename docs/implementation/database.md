@@ -177,6 +177,8 @@ CREATE TABLE app_settings (
 
 `scope='user'` 与具体角色无关，`character_id` 必须为空；`scope='relationship'` 必须带角色 ID。该约束由 repository 校验并由测试覆盖。角色核心设定和资源许可证属于版本控制内的角色包，不写入记忆表。
 
+提醒事实保存在 `timers` 表中；主面板将 `pending` 投影为待处理列表，将 `fired`/`cancelled` 按完成时间投影为最近历史，不额外复制提醒状态，也不改变调度器的 claim 流程。
+
 ## 4. FTS5
 
 确认后的记忆建立外部内容 FTS：

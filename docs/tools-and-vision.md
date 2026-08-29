@@ -4,7 +4,7 @@
 >
 > 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete`、模型提议的 `timer.cancel` 和需确认的本地 `screen.observe` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步）；工具 schema 注册与模型参数策略已集中到 Rust `ToolRegistry`/`ToolPolicy`，独立 Vision Provider 配置已落地，但截图发送、视觉分析、多工具并行和其余 Tool MVP 尚未进入实现
 >
-> 更新日期：2026-08-29
+> 更新日期：2026-08-30
 
 ## 1. 功能愿景
 
@@ -171,7 +171,7 @@ timer.cancel
 - 可以直接询问“我有哪些提醒”“查看待处理提醒”等；`timer.list` 当前由 Rust 在本地处理，不作为模型工具暴露，避免把全部私人提醒内容发送给 Provider。
 - Rust 负责识别有限的中文相对时间、范围校验、生成 due time 和调度；同时支持模型通过 `timer.create` 提供 `title + delay_seconds` 候选，或通过 `timer.cancel` 提供用户当前请求中明确出现的 `title`，两者仍必须经过用户确认。
 - `timer.cancel` 会在本地待处理提醒中做唯一匹配；标题不存在或有歧义时拒绝模型候选，不会猜测或取消其他提醒。
-- 主面板提供待处理提醒列表和取消操作；`timer.create` 与 `timer.cancel` 也写入 `tool_runs` 审计记录。
+- 主面板提供待处理提醒列表、取消操作和最近已触发/已取消历史；历史是 SQLite 状态事实的只读投影，`timer.create` 与 `timer.cancel` 也写入 `tool_runs` 审计记录。
 - 应用运行期间由 Tauri notification plugin 发送 macOS 通知；同时为每条提醒登记本地用户级 `launchd` LaunchAgent，应用完全退出后仍可由独立任务投递。
 - 应用内调度器与 LaunchAgent 通过应用数据目录中的原子 claim 目录竞争一次性投递权；应用重启时从 SQLite 读取 pending 任务并重建任务，已被系统任务 claim 的到期提醒不会重复弹出。
 - 取消提醒会卸载对应 LaunchAgent、清理本地脚本和 claim；系统任务只调用 macOS 自带 `/usr/bin/osascript` 展示本地通知，不读取对话、记忆或屏幕内容，也不访问网络。

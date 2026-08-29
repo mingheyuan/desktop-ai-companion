@@ -259,6 +259,16 @@ pub struct TimerItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimerHistoryItem {
+    pub id: String,
+    pub title: String,
+    pub due_at_ms: i64,
+    pub status: String,
+    pub completed_at_ms: Option<i64>,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScreenObservation {
     pub id: String,
     pub captured_at_ms: i64,
@@ -322,6 +332,7 @@ pub struct AppSnapshot {
     pub mouth_level: f64,
     pub pending_tool_approval: Option<ToolApproval>,
     pub timers: Vec<TimerItem>,
+    pub timer_history: Vec<TimerHistoryItem>,
     pub screen_observation: Option<ScreenObservation>,
     pub last_error: Option<AppError>,
 }

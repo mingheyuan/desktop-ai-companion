@@ -302,6 +302,7 @@ impl AppCore {
             .storage
             .list_pending_timers(20)
             .map_err(storage_error)?;
+        let timer_history = self.storage.list_timer_history(20).map_err(storage_error)?;
         let screen_observation = self
             .screen_observation
             .read()
@@ -334,6 +335,7 @@ impl AppCore {
                 .as_ref()
                 .map(|tool| tool.approval.clone()),
             timers,
+            timer_history,
             screen_observation,
             last_error: runtime.last_error.clone(),
         })

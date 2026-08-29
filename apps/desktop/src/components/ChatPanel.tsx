@@ -215,6 +215,17 @@ export function ChatPanel() {
     minute: "2-digit",
   }).format(new Date(timestamp));
 
+  const formatTimerHistoryTime = (timestamp: number | null) => timestamp === null
+    ? "时间未知"
+    : new Intl.DateTimeFormat("zh-CN", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(timestamp));
+
+  const formatTimerHistoryStatus = (status: string) => status === "fired" ? "已触发" : "已取消";
+
   return (
     <main className="panel-shell">
       <header className="panel-header">
@@ -341,24 +352,45 @@ export function ChatPanel() {
       )}
 
       {timersOpen && (
-        <section className="timer-panel" aria-label="待处理提醒">
+        <section className="timer-panel" aria-label="提醒管理">
           <div className="timer-panel-heading">
             <div>
               <p className="eyebrow">LOCAL TIMERS</p>
-              <h2>待处理提醒</h2>
+              <h2>提醒管理</h2>
             </div>
             <button className="icon-button" type="button" onClick={() => setTimersOpen(false)} aria-label="关闭提醒列表">×</button>
           </div>
-          {snapshot.timers.length === 0 && <p className="timer-empty">还没有待处理的提醒。</p>}
-          {snapshot.timers.map((timer) => (
-            <article className="timer-item" key={timer.id}>
-              <div>
-                <p>{timer.title}</p>
-                <span>{formatTimerDue(timer.due_at_ms)} · {formatTimerRemaining(timer.due_at_ms, clockMs)} · {timer.timezone}</span>
-              </div>
-              <button type="button" disabled={timerBusy || !isTauri()} onClick={() => void cancelScheduledTimer(timer.id)}>取消</button>
-            </article>
-          ))}
+          {snapshot.timers.length > 0 && (
+            <div className="timer-section">
+              <p className="timer-section-label">待处理</p>
+              {snapshot.timers.map((timer) => (
+                <article className="timer-item" key={timer.id}>
+                  <div>
+                    <p>{timer.title}</p>
+                    <span>{formatTimerDue(timer.due_at_ms)} · {formatTimerRemaining(timer.due_at_ms, clockMs)} · {timer.timezone}</span>
+                  </div>
+                  <button type="button" disabled={timerBusy || !isTauri()} onClick={() => void cancelScheduledTimer(timer.id)}>取消</button>
+                </article>
+              ))}
+            </div>
+          )}
+          {snapshot.timer_history.length > 0 && (
+            <div className="timer-section timer-history">
+              <p className="timer-section-label">最近记录</p>
+              {snapshot.timer_history.map((history) => (
+                <article className="timer-item timer-history-item" key={history.id}>
+                  <div>
+                    <p>{history.title}</p>
+                    <span>计划 {formatTimerDue(history.due_at_ms)} · {formatTimerHistoryTime(history.completed_at_ms)}</span>
+                  </div>
+                  <span className={`timer-history-status ${history.status === "fired" ? "fired" : "cancelled"}`}>
+                    {formatTimerHistoryStatus(history.status)}
+                  </span>
+                </article>
+              ))}
+            </div>
+          )}
+          {snapshot.timers.length === 0 && snapshot.timer_history.length === 0 && <p className="timer-empty">还没有提醒记录。</p>}
           {timerError && <p className="settings-error">{timerError}</p>}
         </section>
       )}

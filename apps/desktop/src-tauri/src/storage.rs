@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::contracts::{
     CharacterSettings, ChatMessage, DataSummary, MemoryItem, MessageRole, MessageStatus,
-    PetSettings, ProviderSettings, TimerItem, VoiceSettings,
+    PetSettings, ProviderSettings, TimerHistoryItem, TimerItem, VoiceSettings,
 };
 
 pub struct Storage {
@@ -953,6 +953,24 @@ impl Storage {
         rows.collect()
     }
 
+    pub fn list_timer_history(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<TimerHistoryItem>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let mut statement = connection.prepare(
+            "SELECT id, title, due_at_ms, status,
+                    CASE WHEN status='fired' THEN fired_at_ms ELSE cancelled_at_ms END,
+                    created_at_ms
+             FROM timers
+             WHERE status IN ('fired', 'cancelled')
+             ORDER BY COALESCE(fired_at_ms, cancelled_at_ms, updated_at_ms) DESC
+             LIMIT ?1",
+        )?;
+        let rows = statement.query_map([limit.clamp(1, 50) as i64], map_timer_history_row)?;
+        rows.collect()
+    }
+
     pub fn next_pending_timer(&self) -> Result<Option<TimerItem>, rusqlite::Error> {
         let connection = self.connection.lock().expect("storage mutex poisoned");
         connection
@@ -1027,6 +1045,17 @@ fn map_timer_row(row: &rusqlite::Row<'_>) -> Result<TimerItem, rusqlite::Error> 
         original_request: row.get(4)?,
         status: row.get(5)?,
         created_at_ms: row.get(6)?,
+    })
+}
+
+fn map_timer_history_row(row: &rusqlite::Row<'_>) -> Result<TimerHistoryItem, rusqlite::Error> {
+    Ok(TimerHistoryItem {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        due_at_ms: row.get(2)?,
+        status: row.get(3)?,
+        completed_at_ms: row.get(4)?,
+        created_at_ms: row.get(5)?,
     })
 }
 
@@ -1426,5 +1455,14 @@ mod tests {
         assert!(storage.cancel_timer("timer-2", 6).unwrap());
         assert!(!storage.cancel_timer("timer-2", 7).unwrap());
         assert!(storage.list_pending_timers(20).unwrap().is_empty());
+
+        let history = storage.list_timer_history(20).unwrap();
+        assert_eq!(history.len(), 2);
+        let fired_history = history.iter().find(|item| item.id == "timer-1").unwrap();
+        assert_eq!(fired_history.status, "fired");
+        assert_eq!(fired_history.completed_at_ms, Some(100));
+        let cancelled_history = history.iter().find(|item| item.id == "timer-2").unwrap();
+        assert_eq!(cancelled_history.status, "cancelled");
+        assert_eq!(cancelled_history.completed_at_ms, Some(6));
     }
 }

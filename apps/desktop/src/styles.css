@@ -78,11 +78,18 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .timer-panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .timer-panel-heading h2 { margin: 0; font-size: 16px; }
 .timer-empty { margin: 14px 0 2px; color: #7386af; font-size: 11px; }
+.timer-section { margin-top: 12px; }
+.timer-section-label { margin: 0; color: #7896d9; font-size: 10px; letter-spacing: .12em; }
 .timer-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 10px; border-top: 1px solid rgba(127, 164, 238, .12); padding-top: 10px; }
 .timer-item p { margin: 0 0 4px; color: #dbe6ff; font-size: 12px; }
 .timer-item span { color: #7185b2; font-size: 10px; }
 .timer-item button { flex: 0 0 auto; border: 0; border-radius: 8px; padding: 6px 10px; color: #ffb2c2; background: rgba(119, 28, 55, .35); cursor: pointer; font-size: 10px; }
 .timer-item button:disabled { cursor: default; opacity: .5; }
+.timer-history { margin-top: 18px; }
+.timer-history-item { align-items: center; }
+.timer-history-status { flex: 0 0 auto; border-radius: 999px; padding: 5px 8px; font-size: 10px !important; }
+.timer-history-status.fired { color: #70e1c1 !important; background: rgba(51, 139, 112, .18); }
+.timer-history-status.cancelled { color: #ffb2c2 !important; background: rgba(119, 28, 55, .25); }
 .screen-preview { margin: 14px 32px 0; border: 1px solid rgba(103, 220, 187, .28); border-radius: 15px; padding: 14px 16px; background: rgba(13, 45, 53, .62); box-shadow: 0 12px 30px rgba(0, 0, 0, .14); }
 .screen-preview-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .screen-preview-heading h2 { margin: 0; font-size: 16px; }
