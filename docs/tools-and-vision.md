@@ -2,7 +2,7 @@
 
 > 版本：v0.1 规划方案
 >
-> 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、模型提议的 `timer.cancel` 和需确认的本地 `screen.observe` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步）；独立 Vision Provider 配置已落地，但截图发送、视觉分析、多工具并行和其余 Tool MVP 尚未进入实现
+> 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、模型提议的 `timer.cancel` 和需确认的本地 `screen.observe` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步）；工具 schema 注册与模型参数策略已集中到 Rust `ToolRegistry`/`ToolPolicy`，独立 Vision Provider 配置已落地，但截图发送、视觉分析、多工具并行和其余 Tool MVP 尚未进入实现
 >
 > 更新日期：2026-08-29
 
@@ -300,8 +300,8 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 
 这组能力建议作为核心对话 MVP 后的 **Tool MVP**：
 
-1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust Provider/Tool 分支实现，现有四种模型工具可做真实 ToolCall 循环。
-2. `system.open_url`、`timer.create`、`timer.cancel` 和 `memory.save` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；仍需抽成独立 Registry/Policy 模块并补多工具循环。
+1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust `tools.rs`、Provider 和 SQLite 审计实现，现有四种模型工具可做真实 ToolCall 循环。
+2. `system.open_url`、`timer.create`、`timer.cancel` 和 `memory.save` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；Registry/Policy 边界已抽出，仍需补多工具循环和更细的风险策略。
 3. 完善 `timer.create/list/cancel`，验证 LaunchAgent 在休眠、重启、时区变化、取消竞态和退出登录场景下的行为；后续再评估 UserNotifications/EventKit。
 4. `screen.observe` 本地单帧已完成最小切片；后续验证 ScreenCaptureKit 权限、窗口排除、显示器/区域选择和临时文件清理。
 5. 独立 Vision Provider 的实际图片请求，先接一个云端兼容模型和一个本地兼容模型；当前仅完成配置与 Keychain 隔离。

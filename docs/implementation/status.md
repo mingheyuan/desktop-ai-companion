@@ -43,7 +43,7 @@
 | 音频恢复 | socket 断线会在用户仍期望持续监听时做三次退避重启，主动关闭/权限错误会取消恢复；仍无 heartbeat、设备切换和睡眠恢复 | 完成 heartbeat 与 30 分钟/睡眠/外设验收 |
 | 角色表现 | 已有原创程序化爱丽丝预览、idle/listen/think/speak 姿态、眨眼、呼吸和近似口型；授权 VRM 加载后优先替换 | 授权 VRM + 正式 VRMA 动作验收 |
 | 记忆候选 | 用户可显式 CRUD；模型可提出 `memory.save` 草案，确认后写入本地长期记忆 | 候选表、自动提取和更完整的确认/拒绝 UI 仍待补齐 |
-| 模型工具循环 | OpenAI-compatible 请求已发送 `system.open_url`/`timer.create`/`timer.cancel`/`memory.save` schema；SSE 分片会还原单次 ToolCall，进入确认卡后执行结果回传模型继续生成，每轮最多 3 步；显式中文意图入口仍保留 | 已有本地 HTTP Provider、参数安全校验和 ToolCall 消息测试；屏幕数据出站授权、多工具并行、统一 ToolRegistry/Policy 模块化和更完整的端到端 UI 验收仍待补齐 |
+| 模型工具循环 | OpenAI-compatible 请求已通过 `ToolRegistry` 发送 `system.open_url`/`timer.create`/`timer.cancel`/`memory.save` schema；`ToolPolicy` 负责 JSON、URL、时间、标题和记忆输入校验；SSE 分片会还原单次 ToolCall，进入确认卡后执行结果回传模型继续生成，每轮最多 3 步；显式中文意图入口仍保留 | 已有本地 HTTP Provider、集中参数安全校验和 ToolCall 消息测试；屏幕数据出站授权、多工具并行、更细风险分级和完整端到端 UI 验收仍待补齐 |
 
 ## 当前验证命令
 

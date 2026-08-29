@@ -30,12 +30,16 @@ use crate::{
     },
     desktop::apply_pet_window_settings,
     notifications,
-    provider::{
-        companion_tool_definitions, create_provider, LlmEvent, LlmMessage, LlmRequest, ToolCall,
-    },
+    provider::{create_provider, LlmEvent, LlmMessage, LlmRequest, ToolCall},
     secret::SecretStore,
     storage::{Storage, TimerInput, ToolRunInput},
+    tools::{
+        normalize_open_url, validate_memory_content, OpenUrlRequest, ToolAction, ToolPolicy,
+        ToolRegistry,
+    },
 };
+
+type PendingToolAction = ToolAction;
 
 struct RuntimeState {
     revision: u64,
@@ -99,28 +103,6 @@ struct PendingTool {
     generation: u64,
     action: PendingToolAction,
     origin: PendingToolOrigin,
-}
-
-#[derive(Clone)]
-enum PendingToolAction {
-    OpenUrl {
-        url: String,
-    },
-    CreateTimer {
-        title: String,
-        due_at_ms: i64,
-        original_request: String,
-    },
-    SaveMemory {
-        content: String,
-    },
-    CancelTimer {
-        timer_id: String,
-        title: String,
-    },
-    ObserveScreen {
-        request: String,
-    },
 }
 
 #[derive(Clone)]
@@ -850,7 +832,7 @@ impl AppCore {
             LlmRequest {
                 messages,
                 memory_context,
-                tools: companion_tool_definitions(),
+                tools: ToolRegistry::definitions(),
                 tool_steps: 0,
             },
             cancel,
@@ -1069,7 +1051,7 @@ impl AppCore {
         context: ModelToolContext<'_>,
         call: ToolCall,
     ) -> Result<(), AppError> {
-        let mut candidate = model_tool_candidate(&call, now_ms())?;
+        let mut candidate = ToolPolicy::validate_model_call(&call, now_ms())?;
         if call.name == "memory.save" {
             let explicit_memory_intent =
                 context
@@ -1646,7 +1628,7 @@ impl AppCore {
                 LlmRequest {
                     messages,
                     memory_context,
-                    tools: companion_tool_definitions(),
+                    tools: ToolRegistry::definitions(),
                     tool_steps,
                 },
                 cancel,
@@ -2902,24 +2884,6 @@ fn validate_pet_settings(value: &PetSettings) -> Result<(), AppError> {
     Ok(())
 }
 
-fn validate_memory_content(value: &str) -> Result<String, AppError> {
-    let value = value.trim();
-    let length = value.chars().count();
-    if length == 0 || length > 1_000 {
-        return Err(AppError::new(
-            "invalid_request",
-            "记忆正文必须是 1 到 1000 个字符。",
-            false,
-        ));
-    }
-    Ok(value.to_owned())
-}
-
-struct OpenUrlRequest {
-    url: String,
-    host: String,
-}
-
 fn has_explicit_memory_intent(text: &str) -> bool {
     parse_explicit_memory_request(text).is_some()
 }
@@ -2940,17 +2904,6 @@ fn parse_explicit_memory_request(text: &str) -> Option<String> {
             });
             (!content.is_empty()).then_some(content.to_owned())
         })
-}
-
-struct ModelToolCandidate {
-    action: PendingToolAction,
-    display_name: String,
-    summary: String,
-    url: Option<String>,
-    host: Option<String>,
-    title: Option<String>,
-    due_at_ms: Option<i64>,
-    arguments_json: String,
 }
 
 fn parse_open_url_request(text: &str) -> Result<Option<OpenUrlRequest>, AppError> {
@@ -3001,235 +2954,6 @@ fn parse_open_url_request(text: &str) -> Result<Option<OpenUrlRequest>, AppError
         return Ok(None);
     };
     Ok(Some(normalize_open_url(&candidate)?))
-}
-
-fn normalize_open_url(candidate: &str) -> Result<OpenUrlRequest, AppError> {
-    let candidate = candidate.trim();
-    if candidate.is_empty() {
-        return Err(AppError::new(
-            "invalid_tool_arguments",
-            "网页地址不能为空。",
-            false,
-        ));
-    }
-    let normalized = if candidate.to_ascii_lowercase().starts_with("www.")
-        || (!candidate.contains("://") && candidate.contains('.'))
-    {
-        format!("https://{candidate}")
-    } else {
-        candidate.to_owned()
-    };
-    let parsed = reqwest::Url::parse(&normalized)
-        .map_err(|_| AppError::new("invalid_tool_arguments", "网页地址不是有效 URL。", false))?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
-        return Err(AppError::new(
-            "invalid_tool_arguments",
-            "出于安全原因，只允许打开带域名的 HTTP 或 HTTPS 网页。",
-            false,
-        ));
-    }
-    if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(AppError::new(
-            "invalid_tool_arguments",
-            "网页地址不能包含用户名或密码。",
-            false,
-        ));
-    }
-    Ok(OpenUrlRequest {
-        url: parsed.to_string(),
-        host: parsed.host_str().unwrap_or_default().to_owned(),
-    })
-}
-
-fn model_tool_candidate(call: &ToolCall, now_ms: i64) -> Result<ModelToolCandidate, AppError> {
-    let arguments: Value = serde_json::from_str(&call.arguments).map_err(|_| {
-        AppError::new(
-            "invalid_tool_arguments",
-            "模型返回的工具参数不是有效 JSON。",
-            false,
-        )
-    })?;
-    let object = arguments.as_object().ok_or_else(|| {
-        AppError::new(
-            "invalid_tool_arguments",
-            "模型工具参数必须是 JSON 对象。",
-            false,
-        )
-    })?;
-    match call.name.as_str() {
-        "system.open_url" => {
-            reject_unknown_tool_arguments(object, &["url"])?;
-            let url = object.get("url").and_then(Value::as_str).ok_or_else(|| {
-                AppError::new("invalid_tool_arguments", "打开网页需要 url 参数。", false)
-            })?;
-            let request = normalize_open_url(url)?;
-            Ok(ModelToolCandidate {
-                action: PendingToolAction::OpenUrl {
-                    url: request.url.clone(),
-                },
-                display_name: "打开网页".into(),
-                summary: "模型请求使用系统默认浏览器打开此网址；执行前需要你的确认。".into(),
-                url: Some(request.url.clone()),
-                host: Some(request.host),
-                title: None,
-                due_at_ms: None,
-                arguments_json: json!({ "url": request.url }).to_string(),
-            })
-        }
-        "timer.create" => {
-            reject_unknown_tool_arguments(object, &["title", "delay_seconds"])?;
-            let title = object
-                .get("title")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    AppError::new(
-                        "invalid_tool_arguments",
-                        "创建提醒需要非空 title 参数。",
-                        false,
-                    )
-                })?;
-            if title.chars().count() > 500 {
-                return Err(AppError::new(
-                    "invalid_tool_arguments",
-                    "提醒内容不能超过 500 个字符。",
-                    false,
-                ));
-            }
-            let delay_seconds = object
-                .get("delay_seconds")
-                .and_then(Value::as_i64)
-                .ok_or_else(|| {
-                    AppError::new(
-                        "invalid_tool_arguments",
-                        "创建提醒需要整数 delay_seconds 参数。",
-                        false,
-                    )
-                })?;
-            if !(1..=7 * 24 * 60 * 60).contains(&delay_seconds) {
-                return Err(AppError::new(
-                    "invalid_tool_arguments",
-                    "一次性提醒只支持 1 秒到 7 天后的时间。",
-                    false,
-                ));
-            }
-            let delay_ms = delay_seconds.checked_mul(1_000).ok_or_else(|| {
-                AppError::new(
-                    "invalid_tool_arguments",
-                    "提醒时间超出系统可支持范围。",
-                    false,
-                )
-            })?;
-            let due_at_ms = now_ms.checked_add(delay_ms).ok_or_else(|| {
-                AppError::new(
-                    "invalid_tool_arguments",
-                    "提醒时间超出系统可支持范围。",
-                    false,
-                )
-            })?;
-            Ok(ModelToolCandidate {
-                action: PendingToolAction::CreateTimer {
-                    title: title.to_owned(),
-                    due_at_ms,
-                    original_request: format!("模型请求创建提醒：{title}"),
-                },
-                display_name: "创建提醒".into(),
-                summary: "模型请求创建一次性本地提醒；执行前需要你的确认。".into(),
-                url: None,
-                host: None,
-                title: Some(title.to_owned()),
-                due_at_ms: Some(due_at_ms),
-                arguments_json: json!({
-                    "title": title,
-                    "delay_seconds": delay_seconds,
-                    "due_at_ms": due_at_ms,
-                    "timezone": "local"
-                })
-                .to_string(),
-            })
-        }
-        "timer.cancel" => {
-            reject_unknown_tool_arguments(object, &["title"])?;
-            let title = object
-                .get("title")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    AppError::new(
-                        "invalid_tool_arguments",
-                        "取消提醒需要非空 title 参数。",
-                        false,
-                    )
-                })?;
-            if title.chars().count() > 500 {
-                return Err(AppError::new(
-                    "invalid_tool_arguments",
-                    "提醒标题不能超过 500 个字符。",
-                    false,
-                ));
-            }
-            Ok(ModelToolCandidate {
-                action: PendingToolAction::CancelTimer {
-                    timer_id: String::new(),
-                    title: title.to_owned(),
-                },
-                display_name: "取消提醒".into(),
-                summary: "模型请求取消一条本地待处理提醒；执行前需要你的确认。".into(),
-                url: None,
-                host: None,
-                title: Some(title.to_owned()),
-                due_at_ms: None,
-                arguments_json: json!({ "title": title }).to_string(),
-            })
-        }
-        "memory.save" => {
-            reject_unknown_tool_arguments(object, &["content"])?;
-            let content = object
-                .get("content")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    AppError::new(
-                        "invalid_tool_arguments",
-                        "保存记忆需要 content 参数。",
-                        false,
-                    )
-                })?;
-            let content = validate_memory_content(content)?;
-            Ok(ModelToolCandidate {
-                action: PendingToolAction::SaveMemory {
-                    content: content.clone(),
-                },
-                display_name: "保存记忆".into(),
-                summary: "模型请求把这段内容保存到本地长期记忆；执行前需要你的确认。".into(),
-                url: None,
-                host: None,
-                title: Some(content.clone()),
-                due_at_ms: None,
-                arguments_json: json!({ "content": content }).to_string(),
-            })
-        }
-        other => Err(AppError::new(
-            "tool_not_supported",
-            format!("当前未启用模型工具：{other}"),
-            false,
-        )),
-    }
-}
-
-fn reject_unknown_tool_arguments(
-    arguments: &serde_json::Map<String, Value>,
-    allowed: &[&str],
-) -> Result<(), AppError> {
-    if arguments.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return Err(AppError::new(
-            "invalid_tool_arguments",
-            "模型工具参数包含未声明的字段。",
-            false,
-        ));
-    }
-    Ok(())
 }
 
 struct TimerRequest {
@@ -3917,7 +3641,7 @@ mod tests {
 
     #[test]
     fn validates_model_tool_candidates_before_approval() {
-        let url = model_tool_candidate(
+        let url = ToolPolicy::validate_model_call(
             &ToolCall {
                 id: "call-url".into(),
                 name: "system.open_url".into(),
@@ -3928,7 +3652,7 @@ mod tests {
         .unwrap();
         assert_eq!(url.host.as_deref(), Some("example.com"));
 
-        let timer = model_tool_candidate(
+        let timer = ToolPolicy::validate_model_call(
             &ToolCall {
                 id: "call-timer".into(),
                 name: "timer.create".into(),
@@ -3939,7 +3663,7 @@ mod tests {
         .unwrap();
         assert_eq!(timer.due_at_ms, Some(31_000));
 
-        let cancel_timer = model_tool_candidate(
+        let cancel_timer = ToolPolicy::validate_model_call(
             &ToolCall {
                 id: "call-timer-cancel".into(),
                 name: "timer.cancel".into(),
@@ -3949,7 +3673,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cancel_timer.title.as_deref(), Some("喝水"));
-        assert!(model_tool_candidate(
+        assert!(ToolPolicy::validate_model_call(
             &ToolCall {
                 id: "call-timer-cancel-invalid".into(),
                 name: "timer.cancel".into(),
@@ -3959,7 +3683,7 @@ mod tests {
         )
         .is_err());
 
-        let memory = model_tool_candidate(
+        let memory = ToolPolicy::validate_model_call(
             &ToolCall {
                 id: "call-memory".into(),
                 name: "memory.save".into(),
@@ -3970,7 +3694,7 @@ mod tests {
         .unwrap();
         assert_eq!(memory.title.as_deref(), Some("老师喜欢蓝色"));
 
-        assert!(model_tool_candidate(
+        assert!(ToolPolicy::validate_model_call(
             &ToolCall {
                 id: "call-unsafe".into(),
                 name: "system.open_url".into(),
@@ -3979,7 +3703,7 @@ mod tests {
             1_000,
         )
         .is_err());
-        assert!(model_tool_candidate(
+        assert!(ToolPolicy::validate_model_call(
             &ToolCall {
                 id: "call-unknown".into(),
                 name: "system.run_shell".into(),
@@ -4026,7 +3750,7 @@ mod tests {
                         content: "老师喜欢什么颜色？".into(),
                     }],
                     memory_context: memory_context_with_budget(matched, 2_400),
-                    tools: companion_tool_definitions(),
+                    tools: ToolRegistry::definitions(),
                     tool_steps: 0,
                 },
                 CancellationToken::new(),

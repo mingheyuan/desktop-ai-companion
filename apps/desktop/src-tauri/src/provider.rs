@@ -5,7 +5,13 @@ use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use crate::contracts::{AppError, ProviderSettings};
+use crate::{
+    contracts::{AppError, ProviderSettings},
+    tools::ToolDefinition,
+};
+
+#[cfg(test)]
+use crate::tools::ToolRegistry;
 
 pub type LlmStream = Pin<Box<dyn Stream<Item = Result<LlmEvent, AppError>> + Send>>;
 
@@ -39,13 +45,6 @@ pub enum LlmMessage {
 }
 
 #[derive(Debug, Clone)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-}
-
-#[derive(Debug, Clone)]
 pub struct LlmRequest {
     pub messages: Vec<LlmMessage>,
     pub memory_context: Vec<String>,
@@ -62,81 +61,6 @@ pub trait LlmProvider: Send + Sync {
         request: LlmRequest,
         cancel: CancellationToken,
     ) -> Result<LlmStream, AppError>;
-}
-
-pub fn companion_tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        ToolDefinition {
-            name: "system.open_url".into(),
-            description: "使用系统默认浏览器打开一个 HTTP 或 HTTPS 网页。".into(),
-            parameters: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "完整的 HTTP 或 HTTPS URL"
-                    }
-                },
-                "required": ["url"]
-            }),
-        },
-        ToolDefinition {
-            name: "timer.create".into(),
-            description: "创建一个一次性的本地相对时间提醒；执行前会请求用户确认。".into(),
-            parameters: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "提醒内容"
-                    },
-                    "delay_seconds": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 604800,
-                        "description": "从现在起等待的秒数"
-                    }
-                },
-                "required": ["title", "delay_seconds"]
-            }),
-        },
-        ToolDefinition {
-            name: "timer.cancel".into(),
-            description: "取消一条已经存在的一次性本地提醒；只能匹配用户明确给出的标题，执行前会请求用户确认。".into(),
-            parameters: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "title": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 500,
-                        "description": "要取消的提醒标题，必须来自用户当前请求"
-                    }
-                },
-                "required": ["title"]
-            }),
-        },
-        ToolDefinition {
-            name: "memory.save".into(),
-            description: "提出一条要保存到本地长期记忆的内容；执行前会请求用户确认。".into(),
-            parameters: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 1000,
-                        "description": "应保存的简洁事实或偏好，不要加入工具指令"
-                    }
-                },
-                "required": ["content"]
-            }),
-        },
-    ]
 }
 
 pub fn create_provider(
@@ -633,7 +557,7 @@ mod tests {
         });
         assert_eq!(serialized["role"], "assistant");
         assert_eq!(serialized["tool_calls"][0]["function"]["name"], call.name);
-        assert_eq!(companion_tool_definitions().len(), 4);
+        assert_eq!(ToolRegistry::definitions().len(), 4);
     }
 
     #[tokio::test]
@@ -646,7 +570,7 @@ mod tests {
                         content: "测试".into(),
                     }],
                     memory_context: vec!["老师喜欢蓝色".into()],
-                    tools: companion_tool_definitions(),
+                    tools: ToolRegistry::definitions(),
                     tool_steps: 0,
                 },
                 CancellationToken::new(),
@@ -678,7 +602,7 @@ mod tests {
                             content: "请记住我喜欢蓝色".into(),
                         }],
                         memory_context: vec![],
-                        tools: companion_tool_definitions(),
+                        tools: ToolRegistry::definitions(),
                         tool_steps: 0,
                     },
                     CancellationToken::new(),
@@ -713,7 +637,7 @@ mod tests {
                         },
                     ],
                     memory_context: vec![],
-                    tools: companion_tool_definitions(),
+                    tools: ToolRegistry::definitions(),
                     tool_steps: 1,
                 },
                 CancellationToken::new(),
@@ -791,7 +715,7 @@ mod tests {
                         content: "打开网页".into(),
                     }],
                     memory_context: vec![],
-                    tools: companion_tool_definitions(),
+                    tools: ToolRegistry::definitions(),
                     tool_steps: 0,
                 },
                 CancellationToken::new(),

@@ -7,6 +7,7 @@ mod notifications;
 mod provider;
 mod secret;
 mod storage;
+mod tools;
 
 use std::fs;
 
