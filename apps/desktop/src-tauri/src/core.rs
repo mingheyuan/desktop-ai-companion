@@ -8,6 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -23,8 +24,9 @@ use crate::{
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, DataSummary, EventEnvelope,
         GenerationState, InputState, ListeningMode, MemoryItem, MouthLevelPayload, PetSettings,
-        PlaybackState, ProviderSettings, TextDeltaPayload, TimerItem, ToolApproval,
-        TurnEndedPayload, TurnState, VoicePermissions, VoiceSettings,
+        PlaybackState, ProviderSettings, ScreenObservation, ScreenObservationPreview,
+        TextDeltaPayload, TimerItem, ToolApproval, TurnEndedPayload, TurnState, VoicePermissions,
+        VoiceSettings,
     },
     desktop::apply_pet_window_settings,
     provider::{
@@ -52,6 +54,11 @@ struct RuntimeState {
     active_voice_source: Option<String>,
     active_voice_capture_id: Option<String>,
     pending_tool: Option<PendingTool>,
+}
+
+struct ScreenObservationRecord {
+    metadata: ScreenObservation,
+    png: Vec<u8>,
 }
 
 impl Default for RuntimeState {
@@ -110,6 +117,9 @@ enum PendingToolAction {
         timer_id: String,
         title: String,
     },
+    ObserveScreen {
+        request: String,
+    },
 }
 
 #[derive(Clone)]
@@ -160,6 +170,7 @@ pub struct AppCore {
     audio_generation: AtomicU64,
     voice_final_tx: tokio::sync::mpsc::UnboundedSender<VoiceFinal>,
     audio_recovery_tx: tokio::sync::mpsc::UnboundedSender<AppHandle>,
+    screen_observation: RwLock<Option<ScreenObservationRecord>>,
     timer_notify: Arc<Notify>,
     timer_scheduler_started: AtomicBool,
     next_generation: AtomicU64,
@@ -202,6 +213,7 @@ impl AppCore {
             audio_generation: AtomicU64::new(0),
             voice_final_tx,
             audio_recovery_tx,
+            screen_observation: RwLock::new(None),
             timer_notify,
             timer_scheduler_started: AtomicBool::new(false),
             next_generation: AtomicU64::new(0),
@@ -284,6 +296,12 @@ impl AppCore {
             .storage
             .list_pending_timers(20)
             .map_err(storage_error)?;
+        let screen_observation = self
+            .screen_observation
+            .read()
+            .await
+            .as_ref()
+            .map(|record| record.metadata.clone());
         Ok(AppSnapshot {
             revision: runtime.revision,
             listening_mode: runtime.listening_mode,
@@ -310,6 +328,7 @@ impl AppCore {
                 .as_ref()
                 .map(|tool| tool.approval.clone()),
             timers,
+            screen_observation,
             last_error: runtime.last_error.clone(),
         })
     }
@@ -475,9 +494,19 @@ impl AppCore {
         } else {
             None
         };
+        let screen_request =
+            if open_url.is_none() && timer_request.is_none() && memory_content.is_none() {
+                parse_explicit_screen_observe_request(&text)
+            } else {
+                None
+            };
         let timer_cancel =
             if open_url.is_none() && timer_request.is_none() && memory_content.is_none() {
-                self.resolve_explicit_timer_cancel(&text)?
+                if screen_request.is_none() {
+                    self.resolve_explicit_timer_cancel(&text)?
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -590,6 +619,28 @@ impl AppCore {
                         origin: PendingToolOrigin::Explicit,
                     }
                 })
+            })
+            .or_else(|| {
+                screen_request.map(|request| {
+                    let tool_call_id = Uuid::now_v7().to_string();
+                    PendingTool {
+                        approval: ToolApproval {
+                            tool_call_id,
+                            tool_name: "screen.observe".into(),
+                            display_name: "读取当前屏幕".into(),
+                            summary: "只会在本机生成一次临时截图并显示预览；不会上传给任何模型。"
+                                .into(),
+                            url: None,
+                            host: None,
+                            title: None,
+                            due_at_ms: None,
+                        },
+                        turn_id: turn_id.clone(),
+                        generation,
+                        action: PendingToolAction::ObserveScreen { request },
+                        origin: PendingToolOrigin::Explicit,
+                    }
+                })
             });
         if let Some(tool) = pending_tool.as_ref() {
             let arguments_json = match &tool.action {
@@ -607,6 +658,9 @@ impl AppCore {
                 }
                 PendingToolAction::CancelTimer { timer_id, title } => {
                     json!({ "timer_id": timer_id, "title": title }).to_string()
+                }
+                PendingToolAction::ObserveScreen { request } => {
+                    json!({ "request": request, "send_to_provider": false }).to_string()
                 }
             };
             self.storage
@@ -1270,6 +1324,9 @@ impl AppCore {
                 PendingToolAction::CancelTimer { title, .. } => {
                     format!("好的，老师，已保留提醒：{title}")
                 }
+                PendingToolAction::ObserveScreen { .. } => {
+                    "好的，老师，已取消读取当前屏幕。".into()
+                }
             };
             self.storage
                 .finish_tool_run(
@@ -1371,6 +1428,14 @@ impl AppCore {
                     Err(error) => Err(storage_error(error)),
                 }
             }
+            PendingToolAction::ObserveScreen { .. } => {
+                self.capture_screen_observation(app).await.map(|observation| {
+                    format!(
+                        "已读取当前屏幕，并生成了本机临时预览（观察 ID：{}）。截图尚未发送给任何模型。",
+                        observation.id
+                    )
+                })
+            }
         };
         match execution {
             Ok(result) => {
@@ -1398,6 +1463,9 @@ impl AppCore {
                         }
                         PendingToolAction::CancelTimer { title, .. } => {
                             format!("已取消提醒：{title}")
+                        }
+                        PendingToolAction::ObserveScreen { .. } => {
+                            "已读取当前屏幕，老师可以在本地预览区查看截图。".into()
                         }
                     };
                     self.complete_turn(app, &pending.turn_id, pending.generation, &message)
@@ -1513,6 +1581,83 @@ impl AppCore {
                 false,
             )),
         }
+    }
+
+    async fn capture_screen_observation(
+        &self,
+        app: &AppHandle,
+    ) -> Result<ScreenObservation, AppError> {
+        let png = capture_screen_png().await?;
+        if png.len() > 32 * 1024 * 1024 {
+            return Err(AppError::new(
+                "screen_capture_too_large",
+                "当前屏幕截图超过 32 MB，未保存到本地预览。",
+                false,
+            ));
+        }
+        if png.get(..8) != Some(b"\x89PNG\r\n\x1a\n") {
+            return Err(AppError::new(
+                "screen_capture_invalid",
+                "macOS 返回的屏幕截图格式无法识别。",
+                false,
+            ));
+        }
+        let metadata = ScreenObservation {
+            id: Uuid::now_v7().to_string(),
+            captured_at_ms: now_ms(),
+        };
+        *self.screen_observation.write().await = Some(ScreenObservationRecord {
+            metadata: metadata.clone(),
+            png,
+        });
+        self.runtime.write().await.revision += 1;
+        if let Err(error) = self.emit_snapshot(app).await {
+            *self.screen_observation.write().await = None;
+            return Err(error);
+        }
+        Ok(metadata)
+    }
+
+    pub async fn get_screen_observation_preview(
+        &self,
+        observation_id: &str,
+    ) -> Result<ScreenObservationPreview, AppError> {
+        if observation_id.trim().is_empty() {
+            return Err(AppError::new(
+                "invalid_request",
+                "观察 ID 不能为空。",
+                false,
+            ));
+        }
+        let observation = self.screen_observation.read().await;
+        let Some(record) = observation.as_ref() else {
+            return Err(AppError::new(
+                "not_found",
+                "当前没有可预览的屏幕观察。",
+                false,
+            ));
+        };
+        if record.metadata.id != observation_id {
+            return Err(AppError::new(
+                "conflict",
+                "屏幕观察已更新，请重新打开当前预览。",
+                true,
+            ));
+        }
+        Ok(ScreenObservationPreview {
+            id: record.metadata.id.clone(),
+            captured_at_ms: record.metadata.captured_at_ms,
+            data_url: format!(
+                "data:image/png;base64,{}",
+                BASE64_STANDARD.encode(&record.png)
+            ),
+        })
+    }
+
+    pub async fn clear_screen_observation(&self, app: &AppHandle) -> Result<(), AppError> {
+        *self.screen_observation.write().await = None;
+        self.runtime.write().await.revision += 1;
+        self.emit_snapshot(app).await
     }
 
     pub async fn cancel_timer(&self, app: &AppHandle, timer_id: &str) -> Result<(), AppError> {
@@ -3025,6 +3170,31 @@ fn parse_timer_cancel_query(text: &str) -> Option<String> {
     )
 }
 
+fn parse_explicit_screen_observe_request(text: &str) -> Option<String> {
+    let has_screen_target = ["屏幕", "桌面", "画面"]
+        .iter()
+        .any(|keyword| text.contains(keyword));
+    let has_observe_intent = ["看", "查看", "观察", "分析", "识别", "读取", "截图", "截屏"]
+        .iter()
+        .any(|keyword| text.contains(keyword));
+    if !has_screen_target || !has_observe_intent {
+        return None;
+    }
+    if ["别看", "不要看", "不看"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        return None;
+    }
+    if ["取消屏幕", "停止观察", "不要读取", "不要截图", "不需要看"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        return None;
+    }
+    Some(text.trim().to_owned())
+}
+
 fn parse_relative_delay_ms(text: &str) -> Option<i64> {
     let common_phrases = [
         ("半小时", 30 * 60 * 1_000_i64),
@@ -3137,6 +3307,76 @@ async fn open_url_in_default_browser(url: &str) -> Result<(), AppError> {
         Err(AppError::new(
             "tool_unavailable",
             "当前版本的打开网页工具仅支持 macOS。",
+            false,
+        ))
+    }
+}
+
+async fn capture_screen_png() -> Result<Vec<u8>, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let capture_id = Uuid::now_v7().to_string();
+        let directory =
+            std::env::temp_dir().join(format!("desktop-ai-companion-screen-{capture_id}"));
+        std::fs::create_dir(&directory).map_err(|error| {
+            AppError::new(
+                "screen_capture_failed",
+                format!("无法创建屏幕截图临时目录：{error}"),
+                true,
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700));
+        }
+        let path = directory.join("capture.png");
+        let mut command = tokio::process::Command::new("/usr/sbin/screencapture");
+        command
+            .kill_on_drop(true)
+            .args(["-x", "-t", "png"])
+            .arg(&path);
+        let status = match tokio::time::timeout(Duration::from_secs(15), command.status()).await {
+            Ok(result) => result.map_err(|error| {
+                AppError::new(
+                    "screen_capture_failed",
+                    format!("无法启动 macOS 屏幕截图服务：{error}"),
+                    true,
+                )
+            }),
+            Err(_) => Err(AppError::new(
+                "screen_capture_timeout",
+                "读取当前屏幕超过 15 秒未完成。",
+                true,
+            )),
+        };
+        let bytes = match status {
+            Ok(status) if status.success() => tokio::fs::read(&path).await.map_err(|error| {
+                AppError::new(
+                    "screen_capture_failed",
+                    format!("无法读取本机临时屏幕截图：{error}"),
+                    true,
+                )
+            }),
+            Ok(status) => Err(AppError::new(
+                "screen_capture_permission",
+                format!(
+                    "macOS 没有允许读取屏幕（退出码：{}）。请在系统设置中授予屏幕录制权限。",
+                    status.code().unwrap_or(-1)
+                ),
+                false,
+            )),
+            Err(error) => Err(error),
+        };
+        let _ = tokio::fs::remove_file(&path).await;
+        let _ = tokio::fs::remove_dir(&directory).await;
+        bytes
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(AppError::new(
+            "tool_unavailable",
+            "当前版本的屏幕观察仅支持 macOS。",
             false,
         ))
     }
@@ -3433,6 +3673,17 @@ mod tests {
         );
         assert_eq!(parse_timer_cancel_query("取消提醒"), Some(String::new()));
         assert_eq!(parse_timer_cancel_query("请打开网页"), None);
+    }
+
+    #[test]
+    fn recognizes_explicit_screen_observe_request() {
+        assert_eq!(
+            parse_explicit_screen_observe_request("请帮我看一下当前屏幕"),
+            Some("请帮我看一下当前屏幕".into())
+        );
+        assert!(parse_explicit_screen_observe_request("不要看我的屏幕").is_none());
+        assert!(parse_explicit_screen_observe_request("取消屏幕观察").is_none());
+        assert!(parse_explicit_screen_observe_request("你好吗").is_none());
     }
 
     #[test]

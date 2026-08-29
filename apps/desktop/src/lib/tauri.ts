@@ -175,6 +175,27 @@ export async function cancelTimer(timerId: string): Promise<void> {
   });
 }
 
+export interface ScreenObservationPreview {
+  id: string;
+  captured_at_ms: number;
+  data_url: string;
+}
+
+export async function getScreenObservationPreview(observationId: string): Promise<ScreenObservationPreview> {
+  return invoke<ScreenObservationPreview>("screen_get_observation_preview", {
+    request: {
+      request_id: crypto.randomUUID(),
+      observation_id: observationId,
+    },
+  });
+}
+
+export async function clearScreenObservation(): Promise<void> {
+  await invoke("screen_clear_observation", {
+    request: { request_id: crypto.randomUUID() },
+  });
+}
+
 export async function updateVoiceSettings(current: VoiceSettings, ttsEnabled: boolean): Promise<VoiceSettings> {
   return invoke<VoiceSettings>("voice_update_settings", {
     request: {

@@ -10,7 +10,7 @@
 | VRM | `three-vrm` 加载、合法性/大小校验、应用数据目录托管、授权模型导入和 fallback 降级 | 前端构建和浏览器渲染检查；正式角色仍待授权 VRM 验收 |
 | 默认角色 | 天童爱丽丝的人格摘要进入 LLM system prompt；角色规则与不可信用户记忆分区 | Provider 单元测试、角色资料人工复核 |
 | 文字对话 | mock/OpenAI-compatible SSE、单活动 turn、generation + cancellation；API key 可选以支持 Ollama/LM Studio | Rust 单元测试、前端状态测试 |
-| 视觉 Provider 配置 | 独立启用开关、endpoint、model 和 Keychain API key 已保存；当前仅完成配置层，尚未采集或上传屏幕 | Provider 设置 UI、Rust 配置校验；`screen.observe` 数据出站仍待明确授权和实现 |
+| 视觉 Provider 配置 | 独立启用开关、endpoint、model 和 Keychain API key 已保存；`screen.observe` 已可在用户确认后生成进程内存中的一次性本地预览，但尚未采集后上传 | Provider 设置 UI、Rust 配置校验、本地截图预览清除；视觉模型数据出站仍待单独明确授权和实现 |
 | 本地数据 | SQLite migration、会话恢复、消息提交 | Rust repository 测试和真实数据库迁移 |
 | 显式记忆 | 创建、FTS 搜索、中文二字片段回退、编辑、物理删除、审计、可选上下文注入 | SQLite 事务/FTS 测试、保存→自然改写检索→Provider 使用→删除闭环测试、UI 检查 |
 | 受控网页工具 | 用户明确输入“打开/访问 + HTTP(S) 网址”后，展示确认卡片；允许后调用 macOS 默认浏览器，拒绝或取消不执行；每次请求写入 `tool_runs` 审计表 | URL 解析/危险 scheme/凭据测试、工具审计测试、前端构建；真实默认浏览器打开仍需手工验收 |

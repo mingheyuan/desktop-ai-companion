@@ -78,6 +78,8 @@ pub fn run() {
             commands::turn_cancel,
             commands::tool_decide,
             commands::timer_cancel,
+            commands::screen_get_observation_preview,
+            commands::screen_clear_observation,
             commands::settings_update_provider,
             commands::pet_open_panel,
             commands::pet_update_settings,

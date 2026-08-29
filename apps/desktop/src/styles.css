@@ -83,6 +83,11 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .timer-item span { color: #7185b2; font-size: 10px; }
 .timer-item button { flex: 0 0 auto; border: 0; border-radius: 8px; padding: 6px 10px; color: #ffb2c2; background: rgba(119, 28, 55, .35); cursor: pointer; font-size: 10px; }
 .timer-item button:disabled { cursor: default; opacity: .5; }
+.screen-preview { margin: 14px 32px 0; border: 1px solid rgba(103, 220, 187, .28); border-radius: 15px; padding: 14px 16px; background: rgba(13, 45, 53, .62); box-shadow: 0 12px 30px rgba(0, 0, 0, .14); }
+.screen-preview-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.screen-preview-heading h2 { margin: 0; font-size: 16px; }
+.screen-preview-image { display: block; width: 100%; max-height: 360px; margin-top: 12px; border: 1px solid rgba(165, 238, 222, .22); border-radius: 10px; object-fit: contain; background: #07121a; }
+.screen-preview-note { margin: 9px 0 0; color: #9accc2; font-size: 10px; line-height: 1.5; }
 
 .conversation { overflow-y: auto; padding: 26px 32px; }
 .empty-state { height: 100%; display: grid; place-content: center; text-align: center; color: #8fa1c7; }

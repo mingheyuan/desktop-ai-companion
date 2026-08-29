@@ -258,6 +258,19 @@ pub struct TimerItem {
     pub created_at_ms: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScreenObservation {
+    pub id: String,
+    pub captured_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScreenObservationPreview {
+    pub id: String,
+    pub captured_at_ms: i64,
+    pub data_url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppError {
     pub code: String,
@@ -309,6 +322,7 @@ pub struct AppSnapshot {
     pub mouth_level: f64,
     pub pending_tool_approval: Option<ToolApproval>,
     pub timers: Vec<TimerItem>,
+    pub screen_observation: Option<ScreenObservation>,
     pub last_error: Option<AppError>,
 }
 
@@ -446,6 +460,12 @@ pub struct ToolDecisionRequest {
 pub struct CancelTimerRequest {
     pub request_id: String,
     pub timer_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScreenObservationRequest {
+    pub request_id: String,
+    pub observation_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

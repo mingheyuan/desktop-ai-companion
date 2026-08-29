@@ -7,9 +7,10 @@ use crate::{
     contracts::{
         ActionRequest, AppError, AppSnapshot, CancelTimerRequest, CancelTurnRequest,
         CharacterSettings, CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryItem,
-        PetSettings, ProviderSettings, SearchMemoriesRequest, SetListeningRequest,
-        SubmitTextRequest, ToolDecisionRequest, UpdateMemoryRequest, UpdatePetSettingsRequest,
-        UpdateProviderRequest, UpdateVoiceSettingsRequest, VisionProviderSettings, VoiceSettings,
+        PetSettings, ProviderSettings, ScreenObservationPreview, ScreenObservationRequest,
+        SearchMemoriesRequest, SetListeningRequest, SubmitTextRequest, ToolDecisionRequest,
+        UpdateMemoryRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
+        UpdateVoiceSettingsRequest, VisionProviderSettings, VoiceSettings,
     },
     core::AppCore,
     desktop,
@@ -78,6 +79,28 @@ pub async fn timer_cancel(
 ) -> Result<(), AppError> {
     validate_request_id(&request.request_id)?;
     state.0.cancel_timer(&app, &request.timer_id).await
+}
+
+#[tauri::command]
+pub async fn screen_get_observation_preview(
+    state: State<'_, CoreState>,
+    request: ScreenObservationRequest,
+) -> Result<ScreenObservationPreview, AppError> {
+    validate_request_id(&request.request_id)?;
+    state
+        .0
+        .get_screen_observation_preview(&request.observation_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn screen_clear_observation(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: ActionRequest,
+) -> Result<(), AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.clear_screen_observation(&app).await
 }
 
 #[tauri::command]

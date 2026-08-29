@@ -56,6 +56,7 @@ const snapshot: AppSnapshot = {
     mouth_level: 0,
     pending_tool_approval: null,
     timers: [],
+    screen_observation: null,
     last_error: null,
 };
 

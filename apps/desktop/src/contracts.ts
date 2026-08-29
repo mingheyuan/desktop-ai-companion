@@ -105,6 +105,11 @@ export interface TimerItem {
   created_at_ms: number;
 }
 
+export interface ScreenObservation {
+  id: string;
+  captured_at_ms: number;
+}
+
 export interface AppSnapshot {
   revision: number;
   listening_mode: ListeningMode;
@@ -128,6 +133,7 @@ export interface AppSnapshot {
   mouth_level: number;
   pending_tool_approval: ToolApproval | null;
   timers: TimerItem[];
+  screen_observation: ScreenObservation | null;
   last_error: AppError | null;
 }
 

@@ -1,5 +1,5 @@
-import { FormEvent, useRef, useState } from "react";
-import { cancelTimer, cancelTurn, decideTool, finishPushToTalk, importCharacterVrm, isTauri, openVoicePrivacySettings, requestVoicePermissions, setListening, startPushToTalk, stopPlayback, submitText, updatePetSettings, updateVoiceSettings } from "../lib/tauri";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { cancelTimer, cancelTurn, clearScreenObservation, decideTool, finishPushToTalk, getScreenObservationPreview, importCharacterVrm, isTauri, openVoicePrivacySettings, requestVoicePermissions, setListening, startPushToTalk, stopPlayback, submitText, updatePetSettings, updateVoiceSettings } from "../lib/tauri";
 import { useAppStore } from "../stores/app";
 import { ProviderSettingsDialog } from "./ProviderSettingsDialog";
 import { MemoryPanel } from "./MemoryPanel";
@@ -21,6 +21,9 @@ export function ChatPanel() {
   const [toolError, setToolError] = useState("");
   const [timerBusy, setTimerBusy] = useState(false);
   const [timerError, setTimerError] = useState("");
+  const [screenPreviewUrl, setScreenPreviewUrl] = useState<string | null>(null);
+  const [screenPreviewError, setScreenPreviewError] = useState("");
+  const [screenPreviewBusy, setScreenPreviewBusy] = useState(false);
   const pttStart = useRef<Promise<void> | null>(null);
   const voicePermissionNotDetermined = snapshot.voice_permissions.microphone === "not_determined"
     || snapshot.voice_permissions.speech_recognition === "not_determined";
@@ -28,6 +31,27 @@ export function ChatPanel() {
     || snapshot.voice_permissions.speech_recognition === "denied";
   const voicePermissionRestricted = snapshot.voice_permissions.microphone === "restricted"
     || snapshot.voice_permissions.speech_recognition === "restricted";
+
+  useEffect(() => {
+    const observation = snapshot.screen_observation;
+    setScreenPreviewError("");
+    setScreenPreviewUrl(null);
+    if (!observation || !isTauri()) return undefined;
+    let cancelled = false;
+    void getScreenObservationPreview(observation.id)
+      .then((preview) => {
+        if (!cancelled) setScreenPreviewUrl(preview.data_url);
+      })
+      .catch((reason) => {
+        if (cancelled) return;
+        if (typeof reason === "string") setScreenPreviewError(reason);
+        else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setScreenPreviewError(reason.message);
+        else setScreenPreviewError("读取本地屏幕预览失败。");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshot.screen_observation?.id]);
 
   const beginPtt = () => {
     if (pttStart.current || !isTauri()) return;
@@ -162,6 +186,21 @@ export function ChatPanel() {
     }
   };
 
+  const clearScreenPreview = async () => {
+    if (screenPreviewBusy || !isTauri()) return;
+    setScreenPreviewBusy(true);
+    setScreenPreviewError("");
+    try {
+      await clearScreenObservation();
+    } catch (reason) {
+      if (typeof reason === "string") setScreenPreviewError(reason);
+      else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setScreenPreviewError(reason.message);
+      else setScreenPreviewError("清除本地屏幕预览失败。");
+    } finally {
+      setScreenPreviewBusy(false);
+    }
+  };
+
   const formatTimerDue = (timestamp: number) => new Intl.DateTimeFormat("zh-CN", {
     month: "numeric",
     day: "numeric",
@@ -288,7 +327,7 @@ export function ChatPanel() {
           {snapshot.pending_tool_approval.due_at_ms && <p className="tool-host">提醒时间：{formatTimerDue(snapshot.pending_tool_approval.due_at_ms)}</p>}
           <div className="tool-approval-actions">
             <button type="button" className="secondary" disabled={toolBusy} onClick={() => void decidePendingTool(false)}>取消</button>
-            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : snapshot.pending_tool_approval.tool_name === "timer.create" ? "设置提醒" : snapshot.pending_tool_approval.tool_name === "timer.cancel" ? "取消提醒" : snapshot.pending_tool_approval.tool_name === "memory.save" ? "保存记忆" : "允许打开"}</button>
+            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : snapshot.pending_tool_approval.tool_name === "timer.create" ? "设置提醒" : snapshot.pending_tool_approval.tool_name === "timer.cancel" ? "取消提醒" : snapshot.pending_tool_approval.tool_name === "memory.save" ? "保存记忆" : snapshot.pending_tool_approval.tool_name === "screen.observe" ? "读取屏幕" : "允许打开"}</button>
           </div>
           {toolError && <p className="settings-error">{toolError}</p>}
         </section>
@@ -314,6 +353,21 @@ export function ChatPanel() {
             </article>
           ))}
           {timerError && <p className="settings-error">{timerError}</p>}
+        </section>
+      )}
+
+      {snapshot.screen_observation && (
+        <section className="screen-preview" aria-label="本地屏幕预览">
+          <div className="screen-preview-heading">
+            <div>
+              <p className="eyebrow">LOCAL ONLY</p>
+              <h2>本地屏幕预览</h2>
+            </div>
+            <button className="icon-button" type="button" disabled={screenPreviewBusy} onClick={() => void clearScreenPreview()} aria-label="清除屏幕预览">×</button>
+          </div>
+          {screenPreviewUrl ? <img className="screen-preview-image" src={screenPreviewUrl} alt="当前屏幕的本地临时预览" /> : <p className="timer-empty">正在准备本地预览…</p>}
+          <p className="screen-preview-note">截图只保存在当前应用进程内存中，未发送给聊天或视觉模型。关闭或清除预览后会释放它。</p>
+          {screenPreviewError && <p className="settings-error">{screenPreviewError}</p>}
         </section>
       )}
 
