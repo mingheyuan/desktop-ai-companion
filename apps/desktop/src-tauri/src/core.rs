@@ -533,6 +533,12 @@ impl AppCore {
             } else {
                 None
             };
+        let timer_list_request = open_url.is_none()
+            && timer_request.is_none()
+            && memory_content.is_none()
+            && screen_request.is_none()
+            && timer_cancel.is_none()
+            && parse_explicit_timer_list_request(&text);
 
         let _interaction_guard = self.interaction_command.lock().await;
         self.interrupt_playback().await;
@@ -724,12 +730,49 @@ impl AppCore {
         }
 
         let core = Arc::clone(self);
-        let task: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
-            core.run_text_turn(app, turn_id, generation, text, cancel)
-                .await;
-        });
+        let task: Pin<Box<dyn Future<Output = ()> + Send>> = if timer_list_request {
+            Box::pin(async move {
+                core.run_local_timer_list_turn(app, turn_id, generation, cancel)
+                    .await;
+            })
+        } else {
+            Box::pin(async move {
+                core.run_text_turn(app, turn_id, generation, text, cancel)
+                    .await;
+            })
+        };
         tauri::async_runtime::spawn(task);
         Ok(())
+    }
+
+    async fn run_local_timer_list_turn(
+        self: Arc<Self>,
+        app: AppHandle,
+        turn_id: String,
+        generation: u64,
+        cancel: CancellationToken,
+    ) {
+        if cancel.is_cancelled() || !self.is_current(&turn_id, generation).await {
+            return;
+        }
+        let timers = match self.storage.list_all_pending_timers() {
+            Ok(timers) => timers,
+            Err(error) => {
+                self.fail_turn(
+                    &app,
+                    &turn_id,
+                    generation,
+                    "storage_error",
+                    storage_error(error),
+                    "",
+                )
+                .await;
+                return;
+            }
+        };
+        let response = format_pending_timer_list(&timers, now_ms());
+        self.complete_turn(&app, &turn_id, generation, &response)
+            .await;
     }
 
     async fn run_text_turn(
@@ -3274,6 +3317,37 @@ fn parse_timer_cancel_query(text: &str) -> Option<String> {
     )
 }
 
+fn parse_explicit_timer_list_request(text: &str) -> bool {
+    let compact = text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    if !compact.contains("提醒") && !compact.contains("闹钟") && !compact.contains("定时") {
+        return false;
+    }
+    if [
+        "取消", "撤销", "设置", "创建", "添加", "删除", "不要", "别", "不用", "无需",
+    ]
+    .iter()
+    .any(|keyword| compact.contains(keyword))
+    {
+        return false;
+    }
+    [
+        "有哪些提醒",
+        "查看提醒",
+        "看看提醒",
+        "显示提醒",
+        "列出提醒",
+        "提醒列表",
+        "待处理提醒",
+        "目前有几条提醒",
+        "还剩几条提醒",
+    ]
+    .iter()
+    .any(|keyword| compact.contains(keyword))
+}
+
 fn parse_explicit_screen_observe_request(text: &str) -> Option<String> {
     let has_screen_target = ["屏幕", "桌面", "画面"]
         .iter()
@@ -3372,6 +3446,26 @@ fn format_timer_delay(delay_ms: i64) -> String {
     } else {
         format!("{days}天{remaining_hours}小时")
     }
+}
+
+fn format_pending_timer_list(timers: &[TimerItem], now_ms: i64) -> String {
+    if timers.is_empty() {
+        return "老师，目前没有待处理的提醒。".into();
+    }
+    let details = timers
+        .iter()
+        .enumerate()
+        .map(|(index, timer)| {
+            format!(
+                "{}. {}（约{}后）",
+                index + 1,
+                timer.title,
+                format_timer_delay(timer.due_at_ms.saturating_sub(now_ms))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("老师，目前有 {} 条待处理提醒：\n{details}", timers.len())
 }
 
 async fn open_url_in_default_browser(url: &str) -> Result<(), AppError> {
@@ -3777,6 +3871,37 @@ mod tests {
         );
         assert_eq!(parse_timer_cancel_query("取消提醒"), Some(String::new()));
         assert_eq!(parse_timer_cancel_query("请打开网页"), None);
+    }
+
+    #[test]
+    fn recognizes_only_read_only_timer_list_requests() {
+        assert!(parse_explicit_timer_list_request("老师，我有哪些提醒？"));
+        assert!(parse_explicit_timer_list_request("查看一下待处理提醒"));
+        assert!(parse_explicit_timer_list_request("显示提醒列表"));
+        assert!(!parse_explicit_timer_list_request("请取消提醒：喝水"));
+        assert!(!parse_explicit_timer_list_request("半小时后提醒我喝水"));
+        assert!(!parse_explicit_timer_list_request("不要查看提醒"));
+    }
+
+    #[test]
+    fn formats_local_timer_list_without_provider_context() {
+        let timers = vec![TimerItem {
+            id: "timer-1".into(),
+            title: "喝水".into(),
+            due_at_ms: 61_000,
+            timezone: "local".into(),
+            original_request: "一分钟后提醒我喝水".into(),
+            status: "pending".into(),
+            created_at_ms: 1_000,
+        }];
+        let response = format_pending_timer_list(&timers, 1_000);
+        assert!(response.contains("目前有 1 条待处理提醒"));
+        assert!(response.contains("喝水"));
+        assert!(response.contains("1分钟后"));
+        assert_eq!(
+            format_pending_timer_list(&[], 1_000),
+            "老师，目前没有待处理的提醒。"
+        );
     }
 
     #[test]
