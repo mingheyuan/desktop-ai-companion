@@ -139,7 +139,7 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .memory-dialog > header { display: flex; align-items: start; justify-content: space-between; }
 .memory-dialog h2 { margin: 0; }
 .memory-privacy { margin: 14px 0; color: #7f92bc; font-size: 11px; line-height: 1.5; }
-.memory-search, .memory-create textarea, .memory-card textarea { width: 100%; border: 1px solid rgba(129, 161, 224, .24); border-radius: 10px; outline: none; padding: 10px 12px; color: #eef4ff; background: #0d152c; resize: vertical; }
+.memory-search, .memory-create textarea, .memory-card textarea, .memory-candidate-card textarea { width: 100%; border: 1px solid rgba(129, 161, 224, .24); border-radius: 10px; outline: none; padding: 10px 12px; color: #eef4ff; background: #0d152c; resize: vertical; }
 .memory-create { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 9px; margin: 12px 0; }
 .memory-create button, .memory-card button { border: 0; border-radius: 9px; padding: 8px 12px; color: #eaf2ff; background: #3979dd; cursor: pointer; }
 .memory-create button:disabled, .memory-card button:disabled { cursor: default; opacity: .5; }

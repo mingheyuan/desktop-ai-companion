@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import type { DataSummary, MemoryCandidate, MemoryItem } from "../contracts";
-import { clearConversationData, clearMemoryData, createMemory, deleteMemory, getDataSummary, isTauri, listMemoryCandidates, reviewMemoryCandidate, searchMemories, updateMemory } from "../lib/tauri";
+import { clearConversationData, clearMemoryData, createMemory, deleteMemory, getDataSummary, isTauri, listMemoryCandidates, reviewMemoryCandidate, searchMemories, updateMemory, updateMemoryCandidate } from "../lib/tauri";
 
 function errorMessage(reason: unknown, fallback: string) {
   if (typeof reason === "string") return reason;
@@ -14,6 +14,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [candidates, setCandidates] = useState<MemoryCandidate[]>([]);
+  const [editingCandidate, setEditingCandidate] = useState<{ id: string; content: string } | null>(null);
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState<{ id: string; content: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -116,6 +117,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
     setError("");
     try {
       await reviewMemoryCandidate(candidate.id, approved);
+      if (editingCandidate?.id === candidate.id) setEditingCandidate(null);
       setCandidates((current) => current.filter((item) => item.id !== candidate.id));
       await loadSummary();
       if (approved) {
@@ -124,6 +126,22 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
       }
     } catch (reason) {
       setError(errorMessage(reason, approved ? "保存记忆候选失败。" : "拒绝记忆候选失败。"));
+      await loadCandidates();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveCandidateEdit = async (candidate: MemoryCandidate) => {
+    if (!editingCandidate || editingCandidate.id !== candidate.id || !editingCandidate.content.trim() || busy || !isTauri()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const updated = await updateMemoryCandidate(candidate.id, editingCandidate.content);
+      setCandidates((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setEditingCandidate(null);
+    } catch (reason) {
+      setError(errorMessage(reason, "编辑记忆候选失败。"));
       await loadCandidates();
     } finally {
       setBusy(false);
@@ -140,6 +158,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
       setConfirming(null);
       if (scope === "memories") {
         setEditing(null);
+        setEditingCandidate(null);
         await refresh("");
         setQuery("");
       }
@@ -183,12 +202,26 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
               <p className="memory-candidate-hint">这些内容只会在你点击“保存到记忆”后进入长期记忆。</p>
               {candidates.map((candidate) => (
                 <article className="memory-candidate-card" key={candidate.id}>
-                  <p>{candidate.content}</p>
+                  {editingCandidate?.id === candidate.id ? (
+                    <textarea value={editingCandidate.content} maxLength={1000} rows={3} onChange={(event) => setEditingCandidate({ id: candidate.id, content: event.target.value })} />
+                  ) : (
+                    <p>{candidate.content}</p>
+                  )}
                   <footer>
                     <span>置信度 {Math.round(candidate.confidence * 100)}% · {new Date(candidate.created_at_ms).toLocaleDateString()}</span>
                     <div>
-                      <button type="button" className="danger" disabled={busy} onClick={() => void reviewCandidate(candidate, false)}>拒绝</button>
-                      <button type="button" disabled={busy} onClick={() => void reviewCandidate(candidate, true)}>保存到记忆</button>
+                      {editingCandidate?.id === candidate.id ? (
+                        <>
+                          <button type="button" onClick={() => setEditingCandidate(null)}>取消</button>
+                          <button type="button" disabled={busy || !editingCandidate.content.trim()} onClick={() => void saveCandidateEdit(candidate)}>保存候选</button>
+                        </>
+                      ) : (
+                        <>
+                          <button type="button" disabled={busy} onClick={() => setEditingCandidate({ id: candidate.id, content: candidate.content })}>编辑</button>
+                          <button type="button" className="danger" disabled={busy} onClick={() => void reviewCandidate(candidate, false)}>拒绝</button>
+                          <button type="button" disabled={busy} onClick={() => void reviewCandidate(candidate, true)}>保存到记忆</button>
+                        </>
+                      )}
                     </div>
                   </footer>
                 </article>

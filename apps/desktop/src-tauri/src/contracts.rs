@@ -471,6 +471,13 @@ pub struct ReviewMemoryCandidateRequest {
     pub approved: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateMemoryCandidateRequest {
+    pub request_id: String,
+    pub candidate_id: String,
+    pub content: String,
+}
+
 fn default_memory_limit() -> usize {
     20
 }

@@ -91,6 +91,16 @@ export async function reviewMemoryCandidate(candidateId: string, approved: boole
   });
 }
 
+export async function updateMemoryCandidate(candidateId: string, content: string): Promise<MemoryCandidate> {
+  return invoke<MemoryCandidate>("memory_update_candidate", {
+    request: {
+      request_id: crypto.randomUUID(),
+      candidate_id: candidateId,
+      content,
+    },
+  });
+}
+
 export async function createMemory(content: string): Promise<MemoryItem> {
   return invoke<MemoryItem>("memory_create", {
     request: { request_id: crypto.randomUUID(), content },

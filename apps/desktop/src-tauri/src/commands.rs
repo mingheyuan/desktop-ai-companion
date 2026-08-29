@@ -9,9 +9,9 @@ use crate::{
         CharacterSettings, CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryCandidate,
         MemoryItem, PetSettings, ProviderSettings, ReviewMemoryCandidateRequest,
         ScreenObservationPreview, ScreenObservationRequest, SearchMemoriesRequest,
-        SetListeningRequest, SubmitTextRequest, ToolDecisionRequest, UpdateMemoryRequest,
-        UpdatePetSettingsRequest, UpdateProviderRequest, UpdateVoiceSettingsRequest,
-        VisionProviderSettings, VoiceSettings,
+        SetListeningRequest, SubmitTextRequest, ToolDecisionRequest, UpdateMemoryCandidateRequest,
+        UpdateMemoryRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
+        UpdateVoiceSettingsRequest, VisionProviderSettings, VoiceSettings,
     },
     core::AppCore,
     desktop,
@@ -226,6 +226,18 @@ pub async fn memory_review_candidate(
     state
         .0
         .review_memory_candidate(&request.candidate_id, request.approved)
+        .await
+}
+
+#[tauri::command]
+pub async fn memory_update_candidate(
+    state: State<'_, CoreState>,
+    request: UpdateMemoryCandidateRequest,
+) -> Result<MemoryCandidate, AppError> {
+    validate_request_id(&request.request_id)?;
+    state
+        .0
+        .update_memory_candidate(&request.candidate_id, &request.content)
         .await
 }
 

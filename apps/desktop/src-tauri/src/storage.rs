@@ -918,6 +918,33 @@ impl Storage {
         rows.collect()
     }
 
+    pub fn update_memory_candidate(
+        &self,
+        candidate_id: &str,
+        content: &str,
+    ) -> Result<Option<MemoryCandidate>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let normalized_key = normalize_memory_text(content);
+        let changed = connection.execute(
+            "UPDATE memory_candidates
+             SET content=?1, normalized_key=?2
+             WHERE id=?3 AND status='pending'",
+            params![content, normalized_key, candidate_id],
+        )?;
+        if changed != 1 {
+            return Ok(None);
+        }
+        connection
+            .query_row(
+                "SELECT id, scope, kind, content, confidence, sensitivity, status,
+                        created_at_ms, reviewed_at_ms
+                 FROM memory_candidates WHERE id=?1",
+                [candidate_id],
+                map_memory_candidate_row,
+            )
+            .optional()
+    }
+
     pub fn confirm_memory_candidate(
         &self,
         candidate_id: &str,
@@ -1468,19 +1495,29 @@ mod tests {
             vec![candidate]
         );
 
+        let edited = storage
+            .update_memory_candidate("candidate-1", "老师喜欢青色")
+            .unwrap()
+            .unwrap();
+        assert_eq!(edited.content, "老师喜欢青色");
+
         let memory = storage
             .confirm_memory_candidate("candidate-1", 4)
             .unwrap()
             .unwrap();
-        assert_eq!(memory.content, "老师喜欢蓝色");
+        assert_eq!(memory.content, "老师喜欢青色");
         assert!(storage
             .list_pending_memory_candidates(20)
             .unwrap()
             .is_empty());
         assert_eq!(
-            storage.search_memories("喜欢蓝色", "aris", 8).unwrap()[0].id,
+            storage.search_memories("喜欢青色", "aris", 8).unwrap()[0].id,
             memory.id
         );
+        assert!(storage
+            .update_memory_candidate("candidate-1", "不应再次编辑")
+            .unwrap()
+            .is_none());
 
         let connection = storage.connection.lock().unwrap();
         let status: String = connection

@@ -42,7 +42,7 @@
 | TTS 口型 | 发音区间 pulse 已经由轻量事件驱动 VRM `aa`，但不是音频振幅 | buffer 合成或可靠 PCM/RMS 回调替换近似 level |
 | 音频恢复 | socket 断线会在用户仍期望持续监听时做三次退避重启，主动关闭/权限错误会取消恢复；仍无 heartbeat、设备切换和睡眠恢复 | 完成 heartbeat 与 30 分钟/睡眠/外设验收 |
 | 角色表现 | 已有原创程序化爱丽丝预览、idle/listen/think/speak 姿态、眨眼、呼吸和近似口型；授权 VRM 加载后优先替换 | 授权 VRM + 正式 VRMA 动作验收 |
-| 记忆候选 | 用户可显式 CRUD；模型或明确保存请求会先创建 `pending` 候选；记忆面板可在应用重启后继续审核，确认通过以事务方式写入长期记忆、FTS 和审计，拒绝只标记候选状态 | 更主动的自动提取、`relationship` scope 候选和候选编辑/去重仍待补齐 |
+| 记忆候选 | 用户可显式 CRUD；模型或明确保存请求会先创建 `pending` 候选；记忆面板可编辑候选正文并在应用重启后继续审核，确认通过以事务方式写入长期记忆、FTS 和审计，拒绝只标记候选状态 | 更主动的自动提取、`relationship` scope 候选和候选去重仍待补齐 |
 | 模型工具循环 | OpenAI-compatible 请求已通过 `ToolRegistry` 发送 `system.open_url`/`timer.create`/`timer.cancel`/`memory.save` schema；`ToolPolicy` 负责 JSON、URL、时间、标题和记忆输入校验；SSE 分片会还原单次 ToolCall，进入确认卡后执行结果回传模型继续生成，每轮最多 3 步；显式中文意图入口仍保留，`memory.delete` 仅允许用户显式触发，不暴露给模型 | 已有本地 HTTP Provider、集中参数安全校验和 ToolCall 消息测试；屏幕数据出站授权、多工具并行、更细风险分级和完整端到端 UI 验收仍待补齐 |
 
 ## 当前验证命令

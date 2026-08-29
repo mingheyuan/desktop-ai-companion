@@ -2082,6 +2082,40 @@ impl AppCore {
         }
     }
 
+    pub async fn update_memory_candidate(
+        &self,
+        candidate_id: &str,
+        content: &str,
+    ) -> Result<MemoryCandidate, AppError> {
+        if candidate_id.trim().is_empty() {
+            return Err(AppError::new(
+                "invalid_request",
+                "记忆候选 ID 不能为空。",
+                false,
+            ));
+        }
+        let content = validate_memory_content(content)?;
+        let _interaction_guard = self.interaction_command.lock().await;
+        if self
+            .runtime
+            .read()
+            .await
+            .pending_tool
+            .as_ref()
+            .is_some_and(|tool| tool.approval.tool_call_id == candidate_id)
+        {
+            return Err(AppError::new(
+                "conflict",
+                "请先处理上方的工具确认卡片，再编辑这条候选。",
+                true,
+            ));
+        }
+        self.storage
+            .update_memory_candidate(candidate_id, &content)
+            .map_err(storage_error)?
+            .ok_or_else(|| AppError::new("conflict", "这条记忆候选已被处理，请刷新后重试。", true))
+    }
+
     pub fn create_memory(&self, content: &str) -> Result<MemoryItem, AppError> {
         let content = validate_memory_content(content)?;
         self.storage
