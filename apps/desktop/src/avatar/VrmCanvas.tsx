@@ -38,7 +38,10 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
 
     const avatarMode = new URLSearchParams(window.location.search).get("avatar");
     const showReferenceWeapon = new URLSearchParams(window.location.search).get("weapon") !== "off";
-    const useReferencePreview = avatarMode === "block" || avatarMode === "figura" || avatarMode === "reference";
+    // Tauri windows do not carry the browser-only `avatar=block` query parameter.
+    // Keep the reference BBModel as the default desktop fallback; the older
+    // procedural study remains available explicitly through `avatar=procedural`.
+    const useReferencePreview = avatarMode == null || avatarMode === "block" || avatarMode === "figura" || avatarMode === "reference";
     const useBlockPreview = avatarMode === "procedural";
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
