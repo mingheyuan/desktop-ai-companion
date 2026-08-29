@@ -50,7 +50,9 @@ type BbModel = {
 const PIXELS_PER_UNIT = 16;
 const sourceModel = modelData as unknown as BbModel;
 const sourceGunModel = gunData as unknown as BbModel;
-const faceOrder = ["east", "west", "up", "down", "south", "north"] as const;
+// bbVector mirrors Blockbench's Z axis so the model faces the Three.js camera
+// at +Z; consequently the front `north` face occupies BoxGeometry's +Z slot.
+const faceOrder = ["east", "west", "up", "down", "north", "south"] as const;
 
 function bbVector(values: number[]) {
   return new THREE.Vector3(

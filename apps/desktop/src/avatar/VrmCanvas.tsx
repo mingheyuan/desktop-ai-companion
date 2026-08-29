@@ -44,27 +44,75 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
     const useReferencePreview = avatarMode == null || avatarMode === "block" || avatarMode === "figura" || avatarMode === "reference";
     const useBlockPreview = avatarMode === "procedural";
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 20);
-    camera.position.set(0, 0.95, 3.45);
-    camera.lookAt(0, useReferencePreview ? 0.8 : useBlockPreview ? 0.72 : 0.9, 0);
+    const camera = new THREE.PerspectiveCamera(useReferencePreview ? 28 : 30, 1, 0.1, 20);
+    camera.position.set(0, useReferencePreview ? 1.02 : 0.95, useReferencePreview ? 3.8 : 3.45);
+    camera.lookAt(0, useReferencePreview ? 0.88 : useBlockPreview ? 0.72 : 0.9, 0);
 
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.12;
+    renderer.toneMappingExposure = useReferencePreview ? 1.0 : 1.12;
     renderer.domElement.style.width = "100%";
     renderer.domElement.style.height = "100%";
     renderer.domElement.style.display = "block";
     host.appendChild(renderer.domElement);
 
-    scene.add(new THREE.HemisphereLight(0xdcecff, 0x18213c, 2.4));
-    const key = new THREE.DirectionalLight(0xffffff, 2.2);
-    key.position.set(1.5, 2.5, 2);
+    scene.add(new THREE.HemisphereLight(0xdcecff, 0x18213c, useReferencePreview ? 1.7 : 2.4));
+    const key = new THREE.DirectionalLight(0xffffff, useReferencePreview ? 1.7 : 2.2);
+    key.position.set(1.7, 2.8, 3);
     scene.add(key);
-    const rim = new THREE.PointLight(0x66dfff, 1.8, 4.5);
-    rim.position.set(-1.2, 1.8, 1.4);
+    if (useReferencePreview) {
+      const fill = new THREE.DirectionalLight(0x96c8ff, 0.7);
+      fill.position.set(-2.2, 1.4, 2.4);
+      scene.add(fill);
+    }
+    const rim = new THREE.PointLight(0x66dfff, useReferencePreview ? 1.1 : 1.8, 4.5);
+    rim.position.set(-1.4, 1.9, 1.6);
     scene.add(rim);
+
+    const stageDecor = new THREE.Group();
+    let glowTexture: THREE.Texture | undefined;
+    if (useReferencePreview) {
+      const glowCanvas = document.createElement("canvas");
+      glowCanvas.width = glowCanvas.height = 256;
+      const glowContext = glowCanvas.getContext("2d");
+      if (glowContext) {
+        const gradient = glowContext.createRadialGradient(128, 128, 0, 128, 128, 128);
+        gradient.addColorStop(0, "rgba(111, 214, 255, 0.22)");
+        gradient.addColorStop(0.52, "rgba(92, 151, 255, 0.09)");
+        gradient.addColorStop(1, "rgba(52, 83, 180, 0)");
+        glowContext.fillStyle = gradient;
+        glowContext.fillRect(0, 0, 256, 256);
+        glowTexture = new THREE.CanvasTexture(glowCanvas);
+        glowTexture.colorSpace = THREE.SRGBColorSpace;
+        const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: glowTexture,
+          transparent: true,
+          depthWrite: false,
+          opacity: 0.82,
+          blending: THREE.AdditiveBlending,
+        }));
+        glow.position.set(0, 1.08, -0.58);
+        glow.scale.set(2.55, 2.55, 1);
+        stageDecor.add(glow);
+      }
+      const shadow = new THREE.Mesh(
+        new THREE.CircleGeometry(0.58, 48),
+        new THREE.MeshBasicMaterial({
+          color: 0x14213f,
+          transparent: true,
+          opacity: 0.18,
+          depthWrite: false,
+        }),
+      );
+      shadow.rotation.x = -Math.PI / 2;
+      shadow.position.set(0, -0.018, 0.08);
+      shadow.scale.set(1.35, 0.42, 1);
+      shadow.renderOrder = -1;
+      stageDecor.add(shadow);
+      scene.add(stageDecor);
+    }
 
     const preview = useReferencePreview
       ? createArisBbmodelPreview()
@@ -110,6 +158,7 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
         vrmHeadBase = vrmHead?.rotation.clone() ?? null;
         vrmSpineBase = vrmSpine?.rotation.clone() ?? null;
         fallback.visible = false;
+        stageDecor.visible = false;
         scene.add(loaded.scene);
       }, undefined, () => {
         fallback.visible = true;
@@ -154,13 +203,13 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
       const breath = Math.sin(elapsed * (sleepingWeight ? 0.8 : 1.55));
       preview.accentMaterial.color.setHex(stateColors[semantic]);
       preview.haloMaterial.color.setHex(stateColors[semantic] === stateColors.error ? 0xff93a9 : stateColors[semantic]);
-      fallback.position.y = Math.sin(elapsed * (semantic === "speaking" ? 4 : 1.5)) * 0.025;
-      fallback.rotation.y = (useReferencePreview ? 0.16 : 0) + Math.sin(elapsed * 0.55) * 0.08;
+      fallback.position.y = Math.sin(elapsed * (semantic === "speaking" ? 4 : 1.5)) * (useReferencePreview ? 0.018 : 0.025);
+      fallback.rotation.y = (useReferencePreview ? 0.1 : 0) + Math.sin(elapsed * 0.55) * (useReferencePreview ? 0.035 : 0.08);
       preview.head.rotation.set(headPitch, headYaw, headRoll);
       preview.body.scale.y = 1 + breath * 0.012;
       preview.leftEye.scale.y = preview.rightEye.scale.y = Math.max(0.08, 1 - blink);
       preview.mouth.scale.y = 0.15 * (1 + smoothedMouth * 5);
-      preview.halo.rotation.y = Math.sin(elapsed * 0.45) * 0.06;
+      preview.halo.rotation.y = Math.sin(elapsed * 0.45) * (useReferencePreview ? 0.04 : 0.06);
       if (vrm) {
         vrm.expressionManager?.setValue("happy", semantic === "ready" ? 0.55 : 0);
         vrm.expressionManager?.setValue("surprised", semantic === "needs_input" ? 0.35 : 0);
@@ -192,6 +241,13 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
         if (Array.isArray(object.material)) object.material.forEach((surface) => surface.dispose());
         else object.material.dispose();
       });
+      stageDecor.traverse((object) => {
+        if (!(object instanceof THREE.Mesh || object instanceof THREE.Sprite)) return;
+        object.geometry?.dispose();
+        if (Array.isArray(object.material)) object.material.forEach((surface) => surface.dispose());
+        else object.material.dispose();
+      });
+      glowTexture?.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };
