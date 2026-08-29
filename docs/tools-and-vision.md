@@ -2,7 +2,7 @@
 
 > 版本：v0.1 规划方案
 >
-> 状态：已完成参考项目调研；`system.open_url` 和一次性本地计时提醒已支持显式意图与 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步），屏幕感知、多工具并行和其余 Tool MVP 尚未进入实现
+> 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒和需确认的 `memory.save` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步），屏幕感知、多工具并行和其余 Tool MVP 尚未进入实现
 >
 > 更新日期：2026-08-29
 
@@ -23,9 +23,10 @@
 2. 内置工具使用 JSON Schema 描述输入输出；MCP 只作为后续扩展协议，不强迫简单工具运行在外部进程中。
 3. 所有工具请求先经过参数校验、权限策略和用户授权判断，再进入执行器。
 4. 工具结果回到当前 `TurnActor`，由模型继续生成最终回复；当前每次模型响应只允许一个 ToolCall、每轮最多 3 步，工具不能自行修改对话状态。
-5. 屏幕观察默认按需、单帧、可见，不做后台连续录屏。
-6. Vision Provider 与聊天 LLM 分开配置，允许独立 endpoint、model 和 Keychain key。
-7. 网页内容、屏幕文字和工具输出一律视为不可信数据，不能替代用户授权。
+5. `memory.save` 是本地写入工具：模型只能提出草案，用户确认后才进入 SQLite；它不获得读取其他记忆或修改角色设定的权限。
+6. 屏幕观察默认按需、单帧、可见，不做后台连续录屏。
+7. Vision Provider 与聊天 LLM 分开配置，允许独立 endpoint、model 和 Keychain key。
+8. 网页内容、屏幕文字和工具输出一律视为不可信数据，不能替代用户授权。
 
 ## 3. 总体结构
 
@@ -170,6 +171,17 @@ timer.cancel
 - 应用运行期间由 Tauri notification plugin 发送 macOS 通知；应用重启后会重新读取 pending 任务，并对已到期任务只触发一次。
 - 应用完全退出时不会由系统独立投递通知；要覆盖该场景，需要后续接入 macOS 原生 UserNotifications 日历/时间间隔 trigger，并增加休眠、时区和桌宠动作验证。
 - 当前不支持绝对日期、重复提醒、贪睡和 Apple 提醒事项同步。
+
+### 7.3 本地记忆提议
+
+```text
+memory.save
+  content: string
+```
+
+- 当用户明确表达“记住”意图时，模型可以提出一条经长度校验的记忆草案。
+- 主面板确认卡显示待保存内容；确认后由 Rust 调用本地记忆仓库写入 SQLite，并保留 `tool_runs` 审计记录。
+- 拒绝、取消、对话失败和工具循环中断都不会写入长期记忆。
 - 目标规格仍要求：LLM 只负责把自然语言提出为候选时间；Rust 使用系统时区、当前时间和 DST 规则验证并生成标准时间。
 - “明天上午”“待会儿”等无法唯一确定的表达必须追问，不能猜测后直接创建。
 - SQLite 是计时任务事实来源，保存 `timer_id`、标题、触发时间、时区、状态和原始用户请求。
@@ -281,8 +293,8 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 
 这组能力建议作为核心对话 MVP 后的 **Tool MVP**：
 
-1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust Provider/Tool 分支实现，现有两工具可做真实 ToolCall 循环。
-2. `system.open_url` 的模型 ToolCall 接入、URL 安全策略和授权 UI 已完成；仍需抽成独立 Registry/Policy 模块并补多工具循环。
+1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust Provider/Tool 分支实现，现有三种工具可做真实 ToolCall 循环。
+2. `system.open_url`、`timer.create` 和 `memory.save` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；仍需抽成独立 Registry/Policy 模块并补多工具循环。
 3. 完善 `timer.create/list/cancel`，接入系统级离线通知并验证休眠、重启、时区和重复触发。
 4. `screen.observe` 本地单帧，验证权限、窗口排除和临时文件清理。
 5. 独立 Vision Provider，先接一个云端兼容模型和一个本地兼容模型。

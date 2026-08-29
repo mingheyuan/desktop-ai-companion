@@ -103,6 +103,9 @@ enum PendingToolAction {
         due_at_ms: i64,
         original_request: String,
     },
+    SaveMemory {
+        content: String,
+    },
 }
 
 #[derive(Clone)]
@@ -534,6 +537,9 @@ impl AppCore {
                     "timezone": "local"
                 })
                 .to_string(),
+                PendingToolAction::SaveMemory { content } => {
+                    json!({ "content": content }).to_string()
+                }
             };
             self.storage
                 .begin_tool_run(
@@ -876,6 +882,25 @@ impl AppCore {
         call: ToolCall,
     ) -> Result<(), AppError> {
         let mut candidate = model_tool_candidate(&call, now_ms())?;
+        if call.name == "memory.save" {
+            let explicit_memory_intent =
+                context
+                    .messages
+                    .iter()
+                    .rev()
+                    .find_map(|message| match message {
+                        LlmMessage::User { content } => Some(has_explicit_memory_intent(content)),
+                        _ => None,
+                    })
+                    == Some(true);
+            if !explicit_memory_intent {
+                return Err(AppError::new(
+                    "memory_confirmation_required",
+                    "只有用户明确要求记住或保存信息时，模型才能提出记忆草案。",
+                    false,
+                ));
+            }
+        }
         if let PendingToolAction::CreateTimer {
             original_request, ..
         } = &mut candidate.action
@@ -1171,6 +1196,9 @@ impl AppCore {
                 PendingToolAction::CreateTimer { title, .. } => {
                     format!("好的，老师，已取消提醒：{title}")
                 }
+                PendingToolAction::SaveMemory { content } => {
+                    format!("好的，老师，已取消保存这条记忆：{content}")
+                }
             };
             self.storage
                 .finish_tool_run(
@@ -1242,6 +1270,22 @@ impl AppCore {
                     )),
                 }
             }
+            PendingToolAction::SaveMemory { content } => self
+                .storage
+                .create_user_memory(&content, now_ms())
+                .map(|memory| {
+                    format!(
+                        "已保存本地长期记忆：{}（记忆 ID：{}）",
+                        memory.content, memory.id
+                    )
+                })
+                .map_err(|error| {
+                    AppError::new(
+                        "tool_execution_failed",
+                        format!("本地记忆保存失败：{error}"),
+                        true,
+                    )
+                }),
         };
         match execution {
             Ok(result) => {
@@ -1264,6 +1308,9 @@ impl AppCore {
                             "已设置提醒：{title}（约{}后提醒）",
                             format_timer_delay(*due_at_ms - now_ms())
                         ),
+                        PendingToolAction::SaveMemory { content } => {
+                            format!("已保存记忆：{content}")
+                        }
                     };
                     self.complete_turn(app, &pending.turn_id, pending.generation, &message)
                         .await;
@@ -2416,6 +2463,18 @@ struct OpenUrlRequest {
     host: String,
 }
 
+fn has_explicit_memory_intent(text: &str) -> bool {
+    if ["不要记住", "别记住", "不要保存", "别保存"]
+        .iter()
+        .any(|phrase| text.contains(phrase))
+    {
+        return false;
+    }
+    ["记住", "记下", "别忘了", "不要忘记", "保存这条", "存进记忆"]
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
 struct ModelToolCandidate {
     action: PendingToolAction,
     display_name: String,
@@ -2621,6 +2680,32 @@ fn model_tool_candidate(call: &ToolCall, now_ms: i64) -> Result<ModelToolCandida
                     "timezone": "local"
                 })
                 .to_string(),
+            })
+        }
+        "memory.save" => {
+            reject_unknown_tool_arguments(object, &["content"])?;
+            let content = object
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    AppError::new(
+                        "invalid_tool_arguments",
+                        "保存记忆需要 content 参数。",
+                        false,
+                    )
+                })?;
+            let content = validate_memory_content(content)?;
+            Ok(ModelToolCandidate {
+                action: PendingToolAction::SaveMemory {
+                    content: content.clone(),
+                },
+                display_name: "保存记忆".into(),
+                summary: "模型请求把这段内容保存到本地长期记忆；执行前需要你的确认。".into(),
+                url: None,
+                host: None,
+                title: Some(content.clone()),
+                due_at_ms: None,
+                arguments_json: json!({ "content": content }).to_string(),
             })
         }
         other => Err(AppError::new(
@@ -3091,6 +3176,17 @@ mod tests {
         .unwrap();
         assert_eq!(timer.due_at_ms, Some(31_000));
 
+        let memory = model_tool_candidate(
+            &ToolCall {
+                id: "call-memory".into(),
+                name: "memory.save".into(),
+                arguments: r#"{"content":"老师喜欢蓝色"}"#.into(),
+            },
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(memory.title.as_deref(), Some("老师喜欢蓝色"));
+
         assert!(model_tool_candidate(
             &ToolCall {
                 id: "call-unsafe".into(),
@@ -3109,6 +3205,14 @@ mod tests {
             1_000,
         )
         .is_err());
+    }
+
+    #[test]
+    fn recognizes_only_explicit_memory_intent() {
+        assert!(has_explicit_memory_intent("请记住我喜欢蓝色"));
+        assert!(has_explicit_memory_intent("别忘了我周五要开会"));
+        assert!(!has_explicit_memory_intent("我喜欢蓝色"));
+        assert!(!has_explicit_memory_intent("不要记住这句话"));
     }
 
     #[tokio::test]

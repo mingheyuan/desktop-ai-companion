@@ -74,7 +74,7 @@ enum LlmEvent {
 }
 ```
 
-当前已支持首个模型工具循环子集：OpenAI-compatible Provider 在请求中发送严格 schema，聚合 SSE 中的 ToolCall 分片；Rust 只接受已注册的 `system.open_url` 和 `timer.create`，先进入用户确认，再将工具结果作为 `tool` 消息回传模型。每次模型响应暂只允许一个 ToolCall，每轮最多连续 3 步；未知工具、非法 JSON 或危险参数会被拒绝，不能把参数当作普通文本或 Shell 指令执行。
+当前已支持首个模型工具循环子集：OpenAI-compatible Provider 在请求中发送严格 schema，聚合 SSE 中的 ToolCall 分片；Rust 只接受已注册的 `system.open_url`、`timer.create` 和 `memory.save`，先进入用户确认，再将工具结果作为 `tool` 消息回传模型。每次模型响应暂只允许一个 ToolCall，每轮最多连续 3 步；未知工具、非法 JSON 或危险参数会被拒绝，不能把参数当作普通文本或 Shell 指令执行。`memory.save` 只写入本地 SQLite，确认前不会落库。
 
 ### 上下文装配顺序
 
