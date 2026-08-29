@@ -170,12 +170,47 @@ impl LlmProvider for MockProvider {
                 _ => None,
             })
             .unwrap_or("");
+        let has_tool_result = request
+            .messages
+            .iter()
+            .any(|message| matches!(message, LlmMessage::Tool { .. }));
+        let can_save_memory = request.tools.iter().any(|tool| tool.name == "memory.save");
+        if !has_tool_result && can_save_memory {
+            if let Some(content) = mock_memory_content(user_text) {
+                return Ok(Box::pin(async_stream::stream! {
+                    tokio::select! {
+                        _ = cancel.cancelled() => {
+                            yield Err(AppError::new("cancelled", "对话已取消。", false));
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(45)) => {
+                            yield Ok(LlmEvent::ToolCalls(vec![ToolCall {
+                                id: "mock-memory-call".into(),
+                                name: "memory.save".into(),
+                                arguments: json!({"content": content}).to_string(),
+                            }]));
+                        }
+                    }
+                }));
+            }
+        }
         let remembered = request
             .memory_context
             .first()
             .map(|memory| format!("爱丽丝记得：{memory}"))
             .unwrap_or_else(|| "这轮没有使用长期记忆。".into());
-        let reply = format!("任务确认，老师！爱丽丝收到了“{}”。{remembered}", user_text);
+        let tool_result = request
+            .messages
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                LlmMessage::Tool { content, .. } => Some(content.as_str()),
+                _ => None,
+            });
+        let reply = if let Some(tool_result) = tool_result {
+            format!("任务完成，老师！{tool_result}")
+        } else {
+            format!("任务确认，老师！爱丽丝收到了“{}”。{remembered}", user_text)
+        };
         Ok(Box::pin(async_stream::stream! {
             for chunk in split_for_streaming(&reply) {
                 tokio::select! {
@@ -191,6 +226,24 @@ impl LlmProvider for MockProvider {
             yield Ok(LlmEvent::Completed);
         }))
     }
+}
+
+fn mock_memory_content(text: &str) -> Option<String> {
+    if ["不要记住", "别记住", "不要保存", "别保存"]
+        .iter()
+        .any(|phrase| text.contains(phrase))
+    {
+        return None;
+    }
+    ["记住", "记下", "别忘了", "不要忘记"]
+        .iter()
+        .find_map(|marker| text.find(marker).map(|start| start + marker.len()))
+        .and_then(|start| {
+            let content = text[start..].trim_matches(|character: char| {
+                matches!(character, '：' | ':' | '，' | ',' | '。' | '！' | '!')
+            });
+            (!content.is_empty()).then_some(content.to_owned())
+        })
 }
 
 struct OpenAiCompatibleProvider {
@@ -594,6 +647,68 @@ mod tests {
         assert!(completed);
         assert!(text.contains("测试"));
         assert!(text.contains("老师喜欢蓝色"));
+    }
+
+    #[tokio::test]
+    async fn mock_provider_proposes_memory_tool_and_finishes_after_result() {
+        let provider = MockProvider;
+        let call = {
+            let mut stream = provider
+                .start(
+                    LlmRequest {
+                        messages: vec![LlmMessage::User {
+                            content: "请记住我喜欢蓝色".into(),
+                        }],
+                        memory_context: vec![],
+                        tools: companion_tool_definitions(),
+                        tool_steps: 0,
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap();
+            match stream.next().await.unwrap().unwrap() {
+                LlmEvent::ToolCalls(mut calls) => calls.pop().unwrap(),
+                other => panic!("expected mock memory tool call, got {other:?}"),
+            }
+        };
+        assert_eq!(call.name, "memory.save");
+        assert_eq!(
+            serde_json::from_str::<Value>(&call.arguments).unwrap()["content"],
+            "我喜欢蓝色"
+        );
+
+        let mut stream = provider
+            .start(
+                LlmRequest {
+                    messages: vec![
+                        LlmMessage::User {
+                            content: "请记住我喜欢蓝色".into(),
+                        },
+                        LlmMessage::Assistant {
+                            content: None,
+                            tool_calls: vec![call.clone()],
+                        },
+                        LlmMessage::Tool {
+                            tool_call_id: call.id,
+                            content: "已保存本地长期记忆".into(),
+                        },
+                    ],
+                    memory_context: vec![],
+                    tools: companion_tool_definitions(),
+                    tool_steps: 1,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        let mut text = String::new();
+        while let Some(event) = stream.next().await {
+            if let LlmEvent::TextDelta(delta) = event.unwrap() {
+                text.push_str(&delta);
+            }
+        }
+        assert!(text.contains("已保存本地长期记忆"));
     }
 
     #[tokio::test]
