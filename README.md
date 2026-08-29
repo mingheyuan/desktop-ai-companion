@@ -283,7 +283,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - 受控 Tool Runtime、风险策略和审计记录。
 - 打开网页与本地计时提醒。
 - 按需单帧屏幕观察。
-- 独立 Vision Provider 与 Keychain key（配置层已实现，图片请求仍待接入）。
+- 独立 Vision Provider 与 Keychain key（配置层和本地屏幕预览已实现，图片请求仍待接入）。
 - 可选 Apple 提醒事项与本地 MCP 扩展。
 
 ### 阶段 5：角色表现与主动陪伴

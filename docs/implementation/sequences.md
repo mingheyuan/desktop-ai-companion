@@ -67,7 +67,7 @@ TTS 失败只使语音降级；已有 LLM 文本仍可完成。LLM 失败则 tur
 
 ## 3. 模型 ToolCall、确认与恢复
 
-当前实现每次模型响应只允许一个已注册的 `system.open_url`、`timer.create` 或 `memory.save` 调用，每轮最多连续 3 步；显式中文意图仍可直接进入同一确认/执行边界。
+当前实现每次模型响应只允许一个已注册的 `system.open_url`、`timer.create`、`timer.cancel` 或 `memory.save` 调用，每轮最多连续 3 步；显式中文意图仍可直接进入同一确认/执行边界。
 
 ```mermaid
 sequenceDiagram

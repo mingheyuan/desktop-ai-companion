@@ -1040,6 +1040,36 @@ impl AppCore {
                 *original_request = user_request.to_owned();
             }
         }
+        if let PendingToolAction::CancelTimer { title, .. } = &candidate.action {
+            let user_request = context
+                .messages
+                .iter()
+                .rev()
+                .find_map(|message| match message {
+                    LlmMessage::User { content } => Some(content.as_str()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if !user_request.contains(title) {
+                return Err(AppError::new(
+                    "timer_confirmation_required",
+                    "模型只能取消用户当前请求中明确提到标题的提醒。",
+                    false,
+                ));
+            }
+            let timer = self.resolve_pending_timer(title)?;
+            candidate.action = PendingToolAction::CancelTimer {
+                timer_id: timer.id.clone(),
+                title: timer.title.clone(),
+            };
+            candidate.title = Some(timer.title.clone());
+            candidate.due_at_ms = Some(timer.due_at_ms);
+            candidate.arguments_json = json!({
+                "timer_id": timer.id,
+                "title": timer.title,
+            })
+            .to_string();
+        }
         let tool_call_id = Uuid::now_v7().to_string();
         self.storage
             .begin_tool_run(
@@ -1558,15 +1588,18 @@ impl AppCore {
         let Some(query) = parse_timer_cancel_query(text) else {
             return Ok(None);
         };
+        self.resolve_pending_timer(&query).map(Some)
+    }
+
+    fn resolve_pending_timer(&self, query: &str) -> Result<TimerItem, AppError> {
         let timers = self
             .storage
             .list_pending_timers(50)
             .map_err(storage_error)?;
+        let query = query.trim();
         let matches = timers
             .into_iter()
-            .filter(|timer| {
-                query.is_empty() || timer.title == query || timer.title.contains(&query)
-            })
+            .filter(|timer| query.is_empty() || timer.title == query || timer.title.contains(query))
             .collect::<Vec<_>>();
         match matches.len() {
             0 => Err(AppError::new(
@@ -1574,7 +1607,7 @@ impl AppCore {
                 "没有找到能唯一匹配的待处理提醒，请在提醒列表中选择。",
                 false,
             )),
-            1 => Ok(matches.into_iter().next()),
+            1 => Ok(matches.into_iter().next().expect("one timer match")),
             _ => Err(AppError::new(
                 "timer_ambiguous",
                 "有多条提醒可能匹配，请在提醒列表中选择要取消的那一条。",
@@ -3037,6 +3070,41 @@ fn model_tool_candidate(call: &ToolCall, now_ms: i64) -> Result<ModelToolCandida
                 .to_string(),
             })
         }
+        "timer.cancel" => {
+            reject_unknown_tool_arguments(object, &["title"])?;
+            let title = object
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    AppError::new(
+                        "invalid_tool_arguments",
+                        "取消提醒需要非空 title 参数。",
+                        false,
+                    )
+                })?;
+            if title.chars().count() > 500 {
+                return Err(AppError::new(
+                    "invalid_tool_arguments",
+                    "提醒标题不能超过 500 个字符。",
+                    false,
+                ));
+            }
+            Ok(ModelToolCandidate {
+                action: PendingToolAction::CancelTimer {
+                    timer_id: String::new(),
+                    title: title.to_owned(),
+                },
+                display_name: "取消提醒".into(),
+                summary: "模型请求取消一条本地待处理提醒；执行前需要你的确认。".into(),
+                url: None,
+                host: None,
+                title: Some(title.to_owned()),
+                due_at_ms: None,
+                arguments_json: json!({ "title": title }).to_string(),
+            })
+        }
         "memory.save" => {
             reject_unknown_tool_arguments(object, &["content"])?;
             let content = object
@@ -3709,6 +3777,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(timer.due_at_ms, Some(31_000));
+
+        let cancel_timer = model_tool_candidate(
+            &ToolCall {
+                id: "call-timer-cancel".into(),
+                name: "timer.cancel".into(),
+                arguments: r#"{"title":"喝水"}"#.into(),
+            },
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(cancel_timer.title.as_deref(), Some("喝水"));
+        assert!(model_tool_candidate(
+            &ToolCall {
+                id: "call-timer-cancel-invalid".into(),
+                name: "timer.cancel".into(),
+                arguments: r#"{}"#.into(),
+            },
+            1_000,
+        )
+        .is_err());
 
         let memory = model_tool_candidate(
             &ToolCall {
