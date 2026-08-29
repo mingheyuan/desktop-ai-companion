@@ -180,8 +180,10 @@ function buildBbmodelPreview(model: BbModel, rootName: string) {
   for (const texture of model.textures) {
     const loaded = texture.source ? textureLoader.load(texture.source) : new THREE.Texture();
     loaded.colorSpace = THREE.SRGBColorSpace;
-    // BBModel UVs use pixel coordinates from the top-left of the image.
-    loaded.flipY = false;
+    // BBModel UVs use pixel coordinates from the top-left of the image. The
+    // regular Three.js image upload path must flip the source so those V
+    // coordinates render upright on BoxGeometry faces.
+    loaded.flipY = true;
     loaded.magFilter = THREE.NearestFilter;
     loaded.minFilter = THREE.NearestFilter;
     loaded.wrapS = THREE.ClampToEdgeWrapping;
