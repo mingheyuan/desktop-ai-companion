@@ -29,6 +29,7 @@ use crate::{
         VoiceSettings,
     },
     desktop::apply_pet_window_settings,
+    notifications,
     provider::{
         companion_tool_definitions, create_provider, LlmEvent, LlmMessage, LlmRequest, ToolCall,
     },
@@ -248,6 +249,28 @@ impl AppCore {
         }
         let core = Arc::clone(self);
         let notify = Arc::clone(&self.timer_notify);
+        let reconcile_core = Arc::clone(self);
+        let reconcile_app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let timers = match reconcile_core.storage.list_all_pending_timers() {
+                Ok(timers) => timers,
+                Err(error) => {
+                    let mut runtime = reconcile_core.runtime.write().await;
+                    runtime.revision += 1;
+                    runtime.last_error = Some(storage_error(error));
+                    drop(runtime);
+                    let _ = reconcile_core.emit_snapshot(&reconcile_app).await;
+                    return;
+                }
+            };
+            if let Err(error) = notifications::reconcile(&reconcile_app, &timers).await {
+                let mut runtime = reconcile_core.runtime.write().await;
+                runtime.revision += 1;
+                runtime.last_error = Some(error);
+                drop(runtime);
+                let _ = reconcile_core.emit_snapshot(&reconcile_app).await;
+            }
+        });
         tauri::async_runtime::spawn(async move {
             loop {
                 let next = core.storage.next_pending_timer();
@@ -1414,7 +1437,12 @@ impl AppCore {
                     },
                     now_ms(),
                 ) {
-                    Ok(_) => {
+                    Ok(timer) => {
+                        if let Err(error) = notifications::schedule_timer(app, &timer).await {
+                            let _ = self.storage.cancel_timer(&timer.id, now_ms());
+                            self.timer_notify.notify_one();
+                            return Err(error);
+                        }
                         self.timer_notify.notify_one();
                         Ok(format!(
                             "已创建一次性提醒：{title}，约{}后触发。",
@@ -1447,6 +1475,7 @@ impl AppCore {
             PendingToolAction::CancelTimer { timer_id, title } => {
                 match self.storage.cancel_timer(&timer_id, now_ms()) {
                     Ok(true) => {
+                        notifications::cancel_timer(app, &timer_id).await?;
                         self.timer_notify.notify_one();
                         Ok(format!("已取消本地提醒：{title}"))
                     }
@@ -1712,6 +1741,7 @@ impl AppCore {
                 false,
             ));
         }
+        notifications::cancel_timer(app, timer_id).await?;
         self.timer_notify.notify_one();
         self.emit_snapshot(app).await
     }
@@ -1719,20 +1749,26 @@ impl AppCore {
     async fn fire_due_timer(&self, app: &AppHandle, timer_id: &str) {
         match self.storage.claim_due_timer(timer_id, now_ms()) {
             Ok(Some(timer)) => {
-                let notification = app
-                    .notification()
-                    .builder()
-                    .title("爱丽丝的提醒")
-                    .body(&timer.title)
-                    .show();
-                if let Err(error) = notification {
-                    let mut runtime = self.runtime.write().await;
-                    runtime.revision += 1;
-                    runtime.last_error = Some(AppError::new(
-                        "notification_failed",
-                        format!("提醒已到期，但 macOS 通知发送失败：{error}"),
-                        true,
-                    ));
+                let should_notify = notifications::claim_notification(app, &timer.id)
+                    .await
+                    .unwrap_or(true);
+                let _ = notifications::cleanup_fired_job(app, &timer.id).await;
+                if should_notify {
+                    let notification = app
+                        .notification()
+                        .builder()
+                        .title("爱丽丝的提醒")
+                        .body(&timer.title)
+                        .show();
+                    if let Err(error) = notification {
+                        let mut runtime = self.runtime.write().await;
+                        runtime.revision += 1;
+                        runtime.last_error = Some(AppError::new(
+                            "notification_failed",
+                            format!("提醒已到期，但 macOS 通知发送失败：{error}"),
+                            true,
+                        ));
+                    }
                 }
                 let _ = self.emit_snapshot(app).await;
             }

@@ -3,6 +3,7 @@ mod commands;
 mod contracts;
 mod core;
 mod desktop;
+mod notifications;
 mod provider;
 mod secret;
 mod storage;

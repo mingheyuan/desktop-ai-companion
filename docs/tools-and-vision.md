@@ -170,8 +170,9 @@ timer.cancel
 - Rust 负责识别有限的中文相对时间、范围校验、生成 due time 和调度；同时支持模型通过 `timer.create` 提供 `title + delay_seconds` 候选，或通过 `timer.cancel` 提供用户当前请求中明确出现的 `title`，两者仍必须经过用户确认。
 - `timer.cancel` 会在本地待处理提醒中做唯一匹配；标题不存在或有歧义时拒绝模型候选，不会猜测或取消其他提醒。
 - 主面板提供待处理提醒列表和取消操作；`timer.create` 与 `timer.cancel` 也写入 `tool_runs` 审计记录。
-- 应用运行期间由 Tauri notification plugin 发送 macOS 通知；应用重启后会重新读取 pending 任务，并对已到期任务只触发一次。
-- 应用完全退出时不会由系统独立投递通知；要覆盖该场景，需要后续接入 macOS 原生 UserNotifications 日历/时间间隔 trigger，并增加休眠、时区和桌宠动作验证。
+- 应用运行期间由 Tauri notification plugin 发送 macOS 通知；同时为每条提醒登记本地用户级 `launchd` LaunchAgent，应用完全退出后仍可由独立任务投递。
+- 应用内调度器与 LaunchAgent 通过应用数据目录中的原子 claim 目录竞争一次性投递权；应用重启时从 SQLite 读取 pending 任务并重建任务，已被系统任务 claim 的到期提醒不会重复弹出。
+- 取消提醒会卸载对应 LaunchAgent、清理本地脚本和 claim；系统任务只调用 macOS 自带 `/usr/bin/osascript` 展示本地通知，不读取对话、记忆或屏幕内容，也不访问网络。
 - 当前不支持绝对日期、重复提醒、贪睡和 Apple 提醒事项同步。
 
 ### 7.3 本地记忆提议
@@ -188,7 +189,7 @@ memory.save
 - 目标规格仍要求：LLM 只负责把自然语言提出为候选时间；Rust 使用系统时区、当前时间和 DST 规则验证并生成标准时间。
 - “明天上午”“待会儿”等无法唯一确定的表达必须追问，不能猜测后直接创建。
 - SQLite 是计时任务事实来源，保存 `timer_id`、标题、触发时间、时区、状态和原始用户请求。
-- 完整版本应使用 UserNotifications 的日历或时间间隔 trigger 注册本地通知；应用运行时同时触发桌宠动作、声音和 TTS。
+- 完整版本仍可评估 UserNotifications 的日历或时间间隔 trigger；当前首版使用用户级 LaunchAgent 兼顾应用退出后的投递，应用运行时另外触发桌宠动作、声音和 TTS。
 - 系统休眠或应用重启后重新核对任务；过期任务按策略立即提醒一次或标记错过，不能重复触发。
 - 首版只做一次性计时；重复、贪睡和复杂日历规则后续增加。
 
@@ -300,7 +301,7 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 
 1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust Provider/Tool 分支实现，现有四种模型工具可做真实 ToolCall 循环。
 2. `system.open_url`、`timer.create`、`timer.cancel` 和 `memory.save` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；仍需抽成独立 Registry/Policy 模块并补多工具循环。
-3. 完善 `timer.create/list/cancel`，接入系统级离线通知并验证休眠、重启、时区和重复触发。
+3. 完善 `timer.create/list/cancel`，验证 LaunchAgent 在休眠、重启、时区变化、取消竞态和退出登录场景下的行为；后续再评估 UserNotifications/EventKit。
 4. `screen.observe` 本地单帧已完成最小切片；后续验证 ScreenCaptureKit 权限、窗口排除、显示器/区域选择和临时文件清理。
 5. 独立 Vision Provider 的实际图片请求，先接一个云端兼容模型和一个本地兼容模型；当前仅完成配置与 Keychain 隔离。
 6. EventKit 提醒事项。

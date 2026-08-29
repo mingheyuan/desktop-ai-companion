@@ -10,7 +10,7 @@
 
 本文定义 MVP 内部各组件的职责、进程边界、通信方式、状态管理、语音链路、记忆流程和桌宠交互组织方式，并为后续工具调用与按需屏幕感知保留受控扩展点。
 
-这份文档解决的是“各技术如何协作”。可执行细节见 [`implementation/README.md`](implementation/README.md)；屏幕采集、系统级离线通知等高风险能力仍需完成对应评审与 Spike 后再接入。
+这份文档解决的是“各技术如何协作”。可执行细节见 [`implementation/README.md`](implementation/README.md)；屏幕数据出站、细粒度采集和系统通知的实机行为仍需完成对应评审与 Spike。
 
 ### MVP 架构目标
 

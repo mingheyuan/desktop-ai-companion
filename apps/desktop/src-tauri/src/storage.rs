@@ -943,6 +943,16 @@ impl Storage {
         rows.collect()
     }
 
+    pub fn list_all_pending_timers(&self) -> Result<Vec<TimerItem>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let mut statement = connection.prepare(
+            "SELECT id, title, due_at_ms, timezone, original_request, status, created_at_ms
+             FROM timers WHERE status='pending' ORDER BY due_at_ms ASC",
+        )?;
+        let rows = statement.query_map([], map_timer_row)?;
+        rows.collect()
+    }
+
     pub fn next_pending_timer(&self) -> Result<Option<TimerItem>, rusqlite::Error> {
         let connection = self.connection.lock().expect("storage mutex poisoned");
         connection
