@@ -839,6 +839,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "base64 0.22.1",
+ "chrono",
  "futures-util",
  "keyring",
  "rand 0.9.5",

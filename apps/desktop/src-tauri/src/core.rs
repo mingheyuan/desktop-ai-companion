@@ -9,6 +9,7 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use chrono::{Datelike, Duration as ChronoDuration, Local, LocalResult, TimeZone};
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -3199,9 +3200,40 @@ fn parse_timer_request(text: &str, now_ms: i64) -> Result<Option<TimerRequest>, 
     {
         return Ok(None);
     }
-    let Some(delay_ms) = parse_relative_delay_ms(text) else {
-        return Ok(None);
+    if ["每天", "每日", "每周", "每星期", "每月", "工作日", "重复"]
+        .iter()
+        .any(|marker| text.contains(marker))
+    {
+        return Err(AppError::new(
+            "unsupported_timer_schedule",
+            "当前只支持一次性提醒，暂不支持每天、每周或其他重复规则。",
+            false,
+        ));
+    }
+    let due_at_ms = if let Some(delay_ms) = parse_relative_delay_ms(text) {
+        validate_timer_delay_ms(delay_ms)?;
+        now_ms.checked_add(delay_ms).ok_or_else(|| {
+            AppError::new(
+                "invalid_tool_arguments",
+                "提醒时间超出系统可支持范围。",
+                false,
+            )
+        })?
+    } else {
+        let Some(due_at_ms) = parse_absolute_due_at_ms(text, now_ms)? else {
+            return Ok(None);
+        };
+        validate_timer_delay_ms(due_at_ms.saturating_sub(now_ms))?;
+        due_at_ms
     };
+    Ok(Some(TimerRequest {
+        title: text.trim().to_owned(),
+        due_at_ms,
+        original_request: text.trim().to_owned(),
+    }))
+}
+
+fn validate_timer_delay_ms(delay_ms: i64) -> Result<(), AppError> {
     if !(1_000..=7 * 24 * 60 * 60 * 1_000).contains(&delay_ms) {
         return Err(AppError::new(
             "invalid_tool_arguments",
@@ -3209,18 +3241,341 @@ fn parse_timer_request(text: &str, now_ms: i64) -> Result<Option<TimerRequest>, 
             false,
         ));
     }
-    let due_at_ms = now_ms.checked_add(delay_ms).ok_or_else(|| {
+    Ok(())
+}
+
+fn parse_absolute_due_at_ms(text: &str, now_ms: i64) -> Result<Option<i64>, AppError> {
+    let now = Local.timestamp_millis_opt(now_ms).single().ok_or_else(|| {
         AppError::new(
             "invalid_tool_arguments",
-            "提醒时间超出系统可支持范围。",
+            "无法根据当前系统时区解析提醒时间。",
             false,
         )
     })?;
-    Ok(Some(TimerRequest {
-        title: text.trim().to_owned(),
-        due_at_ms,
-        original_request: text.trim().to_owned(),
-    }))
+    let (date, has_date_marker) = parse_absolute_date(text, now.date_naive())?;
+    let Some((hour, minute)) = parse_absolute_clock(text)? else {
+        if has_date_marker {
+            return Err(AppError::new(
+                "invalid_tool_arguments",
+                "请提供明确的提醒时刻，例如“明天 10 点”或“8 月 30 日 10:30”。",
+                false,
+            ));
+        }
+        return Ok(None);
+    };
+    let date = date.unwrap_or_else(|| now.date_naive());
+    let naive = date.and_hms_opt(hour, minute, 0).ok_or_else(|| {
+        AppError::new(
+            "invalid_tool_arguments",
+            "提醒时间不是有效的日期或时刻。",
+            false,
+        )
+    })?;
+    let local = match Local.from_local_datetime(&naive) {
+        LocalResult::Single(value) => value,
+        LocalResult::Ambiguous(_, _) => {
+            return Err(AppError::new(
+                "invalid_tool_arguments",
+                "该时刻在本地时区存在歧义，请改用其他时间。",
+                false,
+            ));
+        }
+        LocalResult::None => {
+            return Err(AppError::new(
+                "invalid_tool_arguments",
+                "该时刻在本地时区不存在，请改用其他时间。",
+                false,
+            ));
+        }
+    };
+    let due_at_ms = local.timestamp_millis();
+    if due_at_ms <= now_ms {
+        return Err(AppError::new(
+            "invalid_tool_arguments",
+            "提醒时间必须在未来，请改用更晚的日期或时刻。",
+            false,
+        ));
+    }
+    Ok(Some(due_at_ms))
+}
+
+fn parse_absolute_date(
+    text: &str,
+    today: chrono::NaiveDate,
+) -> Result<(Option<chrono::NaiveDate>, bool), AppError> {
+    if text.contains("后天") {
+        return Ok((today.checked_add_signed(ChronoDuration::days(2)), true));
+    }
+    if text.contains("明天") {
+        return Ok((today.checked_add_signed(ChronoDuration::days(1)), true));
+    }
+    if text.contains("今天") {
+        return Ok((Some(today), true));
+    }
+
+    if let Some((year, month, day)) = parse_numeric_date_parts(text) {
+        let date = chrono::NaiveDate::from_ymd_opt(year, month, day).ok_or_else(|| {
+            AppError::new(
+                "invalid_tool_arguments",
+                "提醒日期不是有效的年月日。",
+                false,
+            )
+        })?;
+        return Ok((Some(date), true));
+    }
+
+    let Some(month_start) = text.find('月') else {
+        let has_date_marker = text.contains('年');
+        return Ok((None, has_date_marker));
+    };
+    let day_start = text[month_start + '月'.len_utf8()..]
+        .char_indices()
+        .find_map(|(offset, character)| {
+            matches!(character, '日' | '号').then_some(month_start + '月'.len_utf8() + offset)
+        });
+    let Some(day_start) = day_start else {
+        return Err(AppError::new(
+            "invalid_tool_arguments",
+            "请提供完整的提醒日期，例如“8 月 30 日 10 点”。",
+            false,
+        ));
+    };
+    let month = parse_number_before_marker(text, month_start).ok_or_else(|| {
+        AppError::new(
+            "invalid_tool_arguments",
+            "提醒日期中的月份无法识别。",
+            false,
+        )
+    })?;
+    let day = parse_number_before_marker(text, day_start).ok_or_else(|| {
+        AppError::new(
+            "invalid_tool_arguments",
+            "提醒日期中的日期无法识别。",
+            false,
+        )
+    })?;
+    let year = text[..month_start]
+        .rfind('年')
+        .and_then(|year_marker| parse_number_before_marker(text, year_marker))
+        .map(|value| value as i32)
+        .unwrap_or_else(|| today.year());
+    let date = chrono::NaiveDate::from_ymd_opt(year, month, day).ok_or_else(|| {
+        AppError::new(
+            "invalid_tool_arguments",
+            "提醒日期不是有效的年月日。",
+            false,
+        )
+    })?;
+    Ok((Some(date), true))
+}
+
+fn parse_absolute_clock(text: &str) -> Result<Option<(u32, u32)>, AppError> {
+    for (colon_start, character) in text.char_indices() {
+        if character != ':' {
+            continue;
+        }
+        let Some(hour) = trailing_ascii_number(&text[..colon_start]) else {
+            continue;
+        };
+        let minute_start = colon_start + character.len_utf8();
+        let Some(minute) = leading_ascii_number(&text[minute_start..]) else {
+            continue;
+        };
+        return validate_clock(hour, minute);
+    }
+
+    let Some((marker_start, marker_length)) =
+        text.char_indices().find_map(|(offset, character)| {
+            matches!(character, '点' | '时').then_some((offset, character.len_utf8()))
+        })
+    else {
+        return Ok(None);
+    };
+    let Some(mut hour) = parse_number_before_marker(text, marker_start) else {
+        return Ok(None);
+    };
+    let after = text[marker_start + marker_length..].trim_start();
+    let minute = if after.starts_with('半') {
+        30
+    } else if let Some((value, consumed)) = parse_number_prefix(after) {
+        let rest = after[consumed..].trim_start();
+        if rest.starts_with('分') {
+            value
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    let is_pm = ["下午", "晚上", "傍晚", "夜里", "夜间"]
+        .iter()
+        .any(|marker| text.contains(marker));
+    let is_noon = text.contains("中午") && hour < 11;
+    if (is_pm || is_noon) && hour < 12 {
+        hour += 12;
+    } else if text.contains("凌晨") && hour == 12 {
+        hour = 0;
+    }
+    validate_clock(hour, minute)
+}
+
+fn validate_clock(hour: u32, minute: u32) -> Result<Option<(u32, u32)>, AppError> {
+    if hour > 23 || minute > 59 {
+        return Err(AppError::new(
+            "invalid_tool_arguments",
+            "提醒时刻不是有效的 24 小时时间。",
+            false,
+        ));
+    }
+    Ok(Some((hour, minute)))
+}
+
+fn parse_numeric_date_parts(text: &str) -> Option<(i32, u32, u32)> {
+    let bytes = text.as_bytes();
+    for start in 0..bytes.len() {
+        if !bytes[start].is_ascii_digit() {
+            continue;
+        }
+        let mut year_end = start;
+        while year_end < bytes.len() && bytes[year_end].is_ascii_digit() {
+            year_end += 1;
+        }
+        if year_end - start != 4
+            || year_end >= bytes.len()
+            || !matches!(bytes[year_end], b'-' | b'/')
+        {
+            continue;
+        }
+        let month_start = year_end + 1;
+        let mut month_end = month_start;
+        while month_end < bytes.len() && bytes[month_end].is_ascii_digit() {
+            month_end += 1;
+        }
+        if month_end == month_start
+            || month_end >= bytes.len()
+            || !matches!(bytes[month_end], b'-' | b'/')
+        {
+            continue;
+        }
+        let day_start = month_end + 1;
+        let mut day_end = day_start;
+        while day_end < bytes.len() && bytes[day_end].is_ascii_digit() {
+            day_end += 1;
+        }
+        if day_end == day_start {
+            continue;
+        }
+        return Some((
+            text[start..year_end].parse().ok()?,
+            text[month_start..month_end].parse().ok()?,
+            text[day_start..day_end].parse().ok()?,
+        ));
+    }
+    None
+}
+
+fn parse_number_before_marker(text: &str, marker_start: usize) -> Option<u32> {
+    let before = text[..marker_start].trim_end();
+    let mut number_start = before.len();
+    while let Some((offset, character)) = before[..number_start].char_indices().next_back() {
+        if is_number_character(character) {
+            number_start = offset;
+        } else {
+            break;
+        }
+    }
+    (number_start < before.len()).then(|| parse_number_token(&before[number_start..]))?
+}
+
+fn parse_number_prefix(text: &str) -> Option<(u32, usize)> {
+    let mut end = 0;
+    for (offset, character) in text.char_indices() {
+        if is_number_character(character) {
+            end = offset + character.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > 0)
+        .then(|| Some((parse_number_token(&text[..end])?, end)))
+        .flatten()
+}
+
+fn parse_number_token(token: &str) -> Option<u32> {
+    if token.chars().all(|character| character.is_ascii_digit()) {
+        return token.parse().ok();
+    }
+    if token
+        .chars()
+        .all(|character| chinese_digit(character).is_some())
+    {
+        let mut value = 0_u32;
+        for character in token.chars() {
+            value = value
+                .saturating_mul(10)
+                .saturating_add(chinese_digit(character)?);
+        }
+        return Some(value);
+    }
+    let mut total = 0_u32;
+    let mut current = 0_u32;
+    for character in token.chars() {
+        if let Some(value) = chinese_digit(character) {
+            current = value;
+        } else {
+            let unit = match character {
+                '十' => 10,
+                '百' => 100,
+                '千' => 1_000,
+                _ => return None,
+            };
+            total = total.saturating_add(if current == 0 { unit } else { current * unit });
+            current = 0;
+        }
+    }
+    Some(total.saturating_add(current))
+}
+
+fn is_number_character(character: char) -> bool {
+    character.is_ascii_digit()
+        || chinese_digit(character).is_some()
+        || matches!(character, '十' | '百' | '千')
+}
+
+fn chinese_digit(character: char) -> Option<u32> {
+    match character {
+        '零' | '〇' | '○' => Some(0),
+        '一' => Some(1),
+        '二' | '两' => Some(2),
+        '三' => Some(3),
+        '四' => Some(4),
+        '五' => Some(5),
+        '六' => Some(6),
+        '七' => Some(7),
+        '八' => Some(8),
+        '九' => Some(9),
+        _ => None,
+    }
+}
+
+fn trailing_ascii_number(text: &str) -> Option<u32> {
+    let bytes = text.as_bytes();
+    let mut start = bytes.len();
+    while start > 0 && bytes[start - 1].is_ascii_digit() {
+        start -= 1;
+    }
+    (start < bytes.len())
+        .then(|| text[start..].parse().ok())
+        .flatten()
+}
+
+fn leading_ascii_number(text: &str) -> Option<u32> {
+    let bytes = text.as_bytes();
+    let mut end = 0;
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    (end > 0).then(|| text[..end].parse().ok()).flatten()
 }
 
 fn parse_timer_cancel_query(text: &str) -> Option<String> {
@@ -3803,13 +4158,81 @@ mod tests {
     }
 
     #[test]
-    fn ignores_non_relative_timer_request() {
-        assert!(parse_timer_request("明天下午提醒我开会", 1_000)
+    fn parses_absolute_timer_request_in_local_timezone() {
+        let now = Local
+            .with_ymd_and_hms(2026, 8, 30, 9, 0, 0)
+            .single()
+            .unwrap();
+        let now_ms = now.timestamp_millis();
+
+        let timer = parse_timer_request("明天下午三点半提醒我开会", now_ms)
             .unwrap()
-            .is_none());
+            .unwrap();
+        let expected = Local
+            .with_ymd_and_hms(2026, 8, 31, 15, 30, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(timer.due_at_ms, expected);
+
+        let timer = parse_timer_request("2026-08-31 16:05 提醒我提交报告", now_ms)
+            .unwrap()
+            .unwrap();
+        let expected = Local
+            .with_ymd_and_hms(2026, 8, 31, 16, 5, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(timer.due_at_ms, expected);
+
+        let timer = parse_timer_request("8月30日 10:15提醒我喝水", now_ms)
+            .unwrap()
+            .unwrap();
+        let expected = Local
+            .with_ymd_and_hms(2026, 8, 30, 10, 15, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(timer.due_at_ms, expected);
+
+        let timer = parse_timer_request("二〇二六年八月三十一日晚上八点提醒我回家", now_ms)
+            .unwrap()
+            .unwrap();
+        let expected = Local
+            .with_ymd_and_hms(2026, 8, 31, 20, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(timer.due_at_ms, expected);
+    }
+
+    #[test]
+    fn ignores_non_relative_timer_request() {
+        let now = Local
+            .with_ymd_and_hms(2026, 8, 30, 9, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert!(parse_timer_request("明天下午提醒我开会", now).is_err());
         assert!(parse_timer_request("取消 30 分钟后的提醒", 1_000)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_past_absolute_timer_requests() {
+        let now = Local
+            .with_ymd_and_hms(2026, 8, 30, 9, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        assert!(parse_timer_request("今天八点提醒我吃药", now).is_err());
+        assert!(parse_timer_request("2026-08-30 10:00 提醒我开会", now)
+            .unwrap()
+            .is_some());
+        assert!(parse_timer_request("2026-09-10 10:00 提醒我开会", now).is_err());
+        assert!(parse_timer_request("明天 25 点提醒我开会", now).is_err());
+        assert!(parse_timer_request("每天 10 点提醒我吃药", now).is_err());
     }
 
     #[test]
