@@ -9,7 +9,7 @@ mod secret;
 mod storage;
 mod tools;
 
-use std::fs;
+use std::{fs, path::Path};
 
 use commands::CoreState;
 use core::AppCore;
@@ -19,6 +19,7 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    load_local_environment();
     let shortcut_plugin = tauri_plugin_global_shortcut::Builder::new()
         .with_shortcuts([
             "CommandOrControl+Shift+Space",
@@ -108,3 +109,18 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running desktop AI companion");
 }
+
+#[cfg(debug_assertions)]
+fn load_local_environment() {
+    let manifest_directory = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for directory in manifest_directory.ancestors() {
+        let environment_path = directory.join(".env");
+        if environment_path.is_file() {
+            let _ = dotenvy::from_path(environment_path);
+            break;
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn load_local_environment() {}

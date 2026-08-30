@@ -6,7 +6,7 @@
 
 MVP 基线：
 
-- LLM：一个 OpenAI-compatible SSE provider，支持自定义 base URL、model 和 Keychain credential ref。
+- LLM：一个 OpenAI-compatible SSE provider，支持自定义 base URL、model 和 Keychain credential ref；开发模式也支持被 Git 忽略的 `.env` 环境变量。
 - ASR：Apple Speech（经 AudioHost）为 macOS 默认；离线实现保留注册位，不阻塞 MVP。
 - TTS：Apple AVSpeechSynthesizer（经 AudioHost）为默认；云端 TTS 作为后续实现。
 - KWS/VAD：属于音频管线，不伪装成 ASR Provider。
