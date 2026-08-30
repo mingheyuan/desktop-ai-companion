@@ -184,6 +184,9 @@ impl AppCore {
             .recover_interrupted_turns(now)
             .map_err(storage_error)?;
         let conversation_id = storage.ensure_conversation(now).map_err(storage_error)?;
+        let latest_turn_generation = storage
+            .latest_turn_generation(&conversation_id)
+            .map_err(storage_error)?;
         let secrets = SecretStore;
         let mut provider = storage.load_provider_settings().map_err(storage_error)?;
         provider.has_api_key = secrets.resolve_llm_api_key()?.is_some();
@@ -218,7 +221,7 @@ impl AppCore {
             screen_observation: RwLock::new(None),
             timer_notify,
             timer_scheduler_started: AtomicBool::new(false),
-            next_generation: AtomicU64::new(0),
+            next_generation: AtomicU64::new(latest_turn_generation),
             event_sequence: AtomicU64::new(0),
         });
         let weak_core = Arc::downgrade(&core);

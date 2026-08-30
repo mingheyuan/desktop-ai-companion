@@ -394,6 +394,16 @@ impl Storage {
         Ok(())
     }
 
+    pub fn latest_turn_generation(&self, conversation_id: &str) -> Result<u64, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        connection.query_row(
+            "SELECT COALESCE(MAX(generation), 0) FROM turns WHERE conversation_id=?1",
+            [conversation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|generation| generation.max(0) as u64)
+    }
+
     pub fn begin_turn(
         &self,
         conversation_id: &str,
@@ -1607,9 +1617,11 @@ mod tests {
     fn conversation_and_turn_round_trip() {
         let storage = Storage::open_in_memory().unwrap();
         let conversation = storage.ensure_conversation(1).unwrap();
+        assert_eq!(storage.latest_turn_generation(&conversation).unwrap(), 0);
         storage
             .begin_turn(&conversation, "turn-1", 1, "text", "你好", 2)
             .unwrap();
+        assert_eq!(storage.latest_turn_generation(&conversation).unwrap(), 1);
         storage.mark_turn_active("turn-1").unwrap();
         storage
             .complete_turn(&conversation, "aris", "turn-1", "老师，爱丽丝已就绪。", 3)

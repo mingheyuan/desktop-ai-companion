@@ -175,6 +175,8 @@ CREATE TABLE app_settings (
 );
 ```
 
+`generation` 是当前会话内单调递增的取消代次，同时受 `UNIQUE(conversation_id, generation)` 约束。应用启动时先从该会话读取已有最大代次，再继续分配新代次，避免重启后从 1 重新开始造成唯一键冲突。
+
 `scope='user'` 与具体角色无关，`character_id` 必须为空；`scope='relationship'` 必须带角色 ID。该约束由 repository 校验并由测试覆盖。角色核心设定和资源许可证属于版本控制内的角色包，不写入记忆表。
 
 当前 MVP 只在助手回复成功提交时更新 `relationship_state`：`interaction_count` 加 1，`familiarity` 以固定 0.02 步长增加并封顶为 1；取消、失败和应用中断不会计入。`affinity` 与 `summary` 暂不自动推断，避免把模型猜测当成关系事实；清空全部长期记忆时关系状态也会随之清空。
