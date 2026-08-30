@@ -326,7 +326,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml \
   audio::tests::launches_audio_host_and_completes_handshake -- --ignored
 ```
 
-应用默认使用 `mock` Provider，因此无需 API key 即可验证文字流式对话。点击聊天面板右上角设置可切换 OpenAI-compatible endpoint/model，并将 API key 保存到 macOS Keychain；开发期也可使用环境变量 `DESKTOP_AI_LLM_API_KEY` 作为回退。
+应用默认使用 `mock` Provider，因此无需 API key 即可验证文字流式对话。点击聊天面板右上角设置可切换 OpenAI-compatible endpoint/model，并将 API key 保存到 macOS Keychain；设置页的“测试已保存配置”只发送固定测试文本，不携带聊天记录、记忆或屏幕图片；开发期也可使用环境变量 `DESKTOP_AI_LLM_API_KEY` 作为回退。
 
 ## 目录约定
 

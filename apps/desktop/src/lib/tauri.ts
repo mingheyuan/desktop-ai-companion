@@ -47,6 +47,12 @@ export async function updateProvider(input: UpdateProviderInput): Promise<Provid
   });
 }
 
+export async function testProvider(): Promise<string> {
+  return invoke<string>("settings_test_provider", {
+    request: { request_id: crypto.randomUUID() },
+  });
+}
+
 export interface UpdatePetSettingsInput {
   visible: boolean;
   click_through: boolean;

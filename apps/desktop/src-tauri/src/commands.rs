@@ -143,6 +143,15 @@ pub async fn settings_update_provider(
 }
 
 #[tauri::command]
+pub async fn settings_test_provider(
+    state: State<'_, CoreState>,
+    request: ActionRequest,
+) -> Result<String, AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.test_provider().await
+}
+
+#[tauri::command]
 pub fn pet_open_panel(app: AppHandle) -> Result<(), AppError> {
     desktop::show_main_window(&app)
 }

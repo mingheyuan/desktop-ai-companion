@@ -145,6 +145,7 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .settings-section { margin-top: 18px; border-top: 1px solid rgba(127, 164, 238, .14); padding-top: 16px; }
 .settings-section h3 { margin: 2px 0 8px; color: #dbe6ff; font-size: 14px; }
 .settings-error { color: #ff9db1; font-size: 12px; }
+.settings-success { color: #70e1c1; font-size: 12px; }
 .settings-dialog footer { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
 .settings-dialog footer button { border: 0; border-radius: 10px; padding: 9px 17px; background: #3979dd; cursor: pointer; }
 .settings-dialog footer button.secondary { background: #283858; }

@@ -2076,6 +2076,71 @@ impl AppCore {
         Ok(updated)
     }
 
+    pub async fn test_provider(&self) -> Result<String, AppError> {
+        let settings = self.provider.read().await.clone();
+        let api_key = self.resolve_llm_api_key().await?;
+        let provider = create_provider(&settings, api_key)?;
+        let mut stream = match tokio::time::timeout(
+            Duration::from_secs(15),
+            provider.start(
+                LlmRequest {
+                    messages: vec![LlmMessage::User {
+                        content: "请只回复：连接正常".into(),
+                    }],
+                    memory_context: Vec::new(),
+                    tools: Vec::new(),
+                    tool_steps: 0,
+                },
+                CancellationToken::new(),
+            ),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(error)) => return Err(error),
+            Err(_) => {
+                return Err(AppError::new(
+                    "provider_test_timeout",
+                    "Provider 在 15 秒内没有建立连接。",
+                    true,
+                ));
+            }
+        };
+        let response = tokio::time::timeout(Duration::from_secs(30), async {
+            let mut response = String::new();
+            while let Some(event) = stream.next().await {
+                match event? {
+                    LlmEvent::TextDelta(delta) => response.push_str(&delta),
+                    LlmEvent::Completed => break,
+                    LlmEvent::ToolCalls(_) => {
+                        return Err(AppError::new(
+                            "provider_test_failed",
+                            "连接测试收到工具调用，而不是文本响应。",
+                            false,
+                        ));
+                    }
+                }
+            }
+            Ok::<String, AppError>(response)
+        })
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "provider_test_timeout",
+                "Provider 连接测试超过 30 秒未完成。",
+                true,
+            )
+        })??;
+        if response.trim().is_empty() {
+            return Err(AppError::new(
+                "provider_test_failed",
+                "Provider 没有返回可显示的文本。",
+                true,
+            ));
+        }
+        Ok(response.chars().take(1_000).collect())
+    }
+
     pub async fn search_memories(
         &self,
         query: &str,

@@ -83,6 +83,7 @@ pub fn run() {
             commands::screen_get_observation_preview,
             commands::screen_clear_observation,
             commands::settings_update_provider,
+            commands::settings_test_provider,
             commands::pet_open_panel,
             commands::pet_update_settings,
             commands::character_import_vrm,

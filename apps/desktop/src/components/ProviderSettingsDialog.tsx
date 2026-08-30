@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import type { ProviderSettings } from "../contracts";
-import { updateProvider } from "../lib/tauri";
+import { testProvider, updateProvider } from "../lib/tauri";
 
 interface ProviderSettingsDialogProps {
   initial: ProviderSettings;
@@ -21,6 +21,8 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
   const [visionApiKey, setVisionApiKey] = useState("");
   const [clearVisionApiKey, setClearVisionApiKey] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState("");
   const [error, setError] = useState("");
 
   const submit = async (event: FormEvent) => {
@@ -56,6 +58,22 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
       }
     } finally {
       setSaving(false);
+    }
+  };
+
+  const runProviderTest = async () => {
+    if (testing || saving) return;
+    setTesting(true);
+    setError("");
+    setTestResult("");
+    try {
+      setTestResult(await testProvider());
+    } catch (reason) {
+      if (typeof reason === "string") setError(reason);
+      else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setError(reason.message);
+      else setError("Provider 连接测试失败。");
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -149,8 +167,11 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
           )}
         </section>
 
+        <p className="settings-hint">连接测试只发送固定测试文本，不携带聊天记录、记忆或屏幕图片；如果刚修改了表单，请先保存后再测试。</p>
+        {testResult && <p className="settings-success" role="status">连接测试成功：{testResult}</p>}
         {error && <p className="settings-error">{error}</p>}
         <footer>
+          <button type="button" className="secondary" disabled={saving || testing} onClick={() => void runProviderTest()}>{testing ? "测试中…" : "测试已保存配置"}</button>
           <button type="button" className="secondary" onClick={onClose}>取消</button>
           <button type="submit" disabled={saving || (provider === "openai_compatible" && (!endpoint.trim() || !model.trim())) || (visionEnabled && (!visionEndpoint.trim() || !visionModel.trim()))}>
             {saving ? "保存中…" : "保存"}
