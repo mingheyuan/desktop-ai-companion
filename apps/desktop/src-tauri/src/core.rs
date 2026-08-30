@@ -1573,13 +1573,14 @@ impl AppCore {
                         if let Err(error) = notifications::schedule_timer(app, &timer).await {
                             let _ = self.storage.cancel_timer(&timer.id, now_ms());
                             self.timer_notify.notify_one();
-                            return Err(error);
+                            Err(error)
+                        } else {
+                            self.timer_notify.notify_one();
+                            Ok(format!(
+                                "已创建一次性提醒：{title}，约{}后触发。",
+                                format_timer_delay(due_at_ms - now_ms())
+                            ))
                         }
-                        self.timer_notify.notify_one();
-                        Ok(format!(
-                            "已创建一次性提醒：{title}，约{}后触发。",
-                            format_timer_delay(due_at_ms - now_ms())
-                        ))
                     }
                     Err(error) => Err(AppError::new(
                         "tool_execution_failed",
@@ -1629,9 +1630,13 @@ impl AppCore {
             PendingToolAction::CancelTimer { timer_id, title } => {
                 match self.storage.cancel_timer(&timer_id, now_ms()) {
                     Ok(true) => {
-                        notifications::cancel_timer(app, &timer_id).await?;
-                        self.timer_notify.notify_one();
-                        Ok(format!("已取消本地提醒：{title}"))
+                        match notifications::cancel_timer(app, &timer_id).await {
+                            Ok(()) => {
+                                self.timer_notify.notify_one();
+                                Ok(format!("已取消本地提醒：{title}"))
+                            }
+                            Err(error) => Err(error),
+                        }
                     }
                     Ok(false) => Err(AppError::new(
                         "not_found",
