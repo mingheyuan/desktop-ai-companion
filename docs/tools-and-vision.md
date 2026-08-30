@@ -2,7 +2,7 @@
 
 > 版本：v0.1 规划方案
 >
-> 状态：已完成参考项目调研；`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete`、模型提议的 `timer.cancel` 和需确认的本地 `screen.observe` 已支持显式意图或 OpenAI-compatible 单次单个模型 ToolCall（每轮最多 3 步）；`memory.save` 候选已持久化并可在记忆面板审核；工具审计摘要已投影到主面板；工具 schema 注册与模型参数策略已集中到 Rust `ToolRegistry`/`ToolPolicy`，独立 Vision Provider 配置和本地 macOS Vision OCR 已落地，但截图发送、视觉模型分析、多工具并行和其余 Tool MVP 尚未进入实现
+> 状态：已完成参考项目调研；为优先保证自然对话，普通聊天暂不向模型发送工具 schema。`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete` 和需确认的本地 `screen.observe` 已支持显式意图；模型 ToolCall 的 Registry、Policy、SSE 解析和确认回传实现保留，待对话质量稳定后再开启。`memory.save` 候选已持久化并可在记忆面板审核；工具审计摘要已投影到主面板；独立 Vision Provider 配置和本地 macOS Vision OCR 已落地，但截图发送、视觉模型分析、多工具并行和其余 Tool MVP 尚未进入实现
 >
 > 更新日期：2026-08-30
 

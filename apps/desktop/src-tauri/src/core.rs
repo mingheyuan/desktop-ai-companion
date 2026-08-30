@@ -142,6 +142,9 @@ struct ExplicitScreenObserveRequest {
 }
 
 const MAX_TOOL_STEPS: u8 = 3;
+// 普通对话先不向模型暴露工具 schema。显式中文工具请求仍由 start_input_turn
+// 在本地完成确认和执行；待自然对话稳定后，再单独恢复模型主动提议工具。
+const MODEL_TOOL_CALLS_ENABLED: bool = false;
 const SCREEN_OBSERVATION_TTL_MS: i64 = 5 * 60 * 1_000;
 const TOOL_APPROVAL_TIMEOUT_MS: i64 = 2 * 60 * 1_000;
 const TOOL_APPROVAL_TIMEOUT: Duration = Duration::from_millis(TOOL_APPROVAL_TIMEOUT_MS as u64);
@@ -974,7 +977,11 @@ impl AppCore {
             LlmRequest {
                 messages,
                 memory_context,
-                tools: ToolRegistry::definitions(),
+                tools: if MODEL_TOOL_CALLS_ENABLED {
+                    ToolRegistry::definitions()
+                } else {
+                    Vec::new()
+                },
                 tool_steps: 0,
             },
             cancel,

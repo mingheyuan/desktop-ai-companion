@@ -74,7 +74,7 @@ enum LlmEvent {
 }
 ```
 
-当前已支持首个模型工具循环子集：OpenAI-compatible Provider 在请求中发送严格 schema，聚合 SSE 中的 ToolCall 分片；Rust 只接受已注册的 `system.open_url`、`timer.create`、`timer.cancel`、`memory.save` 和本地 `screen.observe`，先进入用户确认，再将工具结果作为 `tool` 消息回传模型。每次模型响应暂只允许一个 ToolCall，每轮最多连续 3 步；未知工具、非法 JSON 或危险参数会被拒绝，不能把参数当作普通文本或 Shell 指令执行。`timer.cancel` 只允许匹配用户当前请求中明确出现的提醒标题，`memory.save` 只写入本地 SQLite，`screen.observe` 只生成本机临时预览；这些工具在确认前都不会执行。
+模型主动 ToolCall 的首个循环实现已经保留，但当前默认关闭：普通对话请求不发送工具 schema，避免工具决策干扰自然交流。显式中文工具请求仍由 Rust 本地解析、确认和执行；后续重新开启模型 ToolCall 时，OpenAI-compatible Provider 才会发送严格 schema，并将确认后的工具结果作为 `tool` 消息回传模型。已有校验仍拒绝未知工具、非法 JSON 或危险参数，不能把参数当作普通文本或 Shell 指令执行。
 确认卡片默认有 2 分钟生命周期。超时由 Core 负责清理并将对应 `tool_run` 记为 `cancelled`；`memory.save` 的 pending 候选同时标记为 `rejected`。超时路径不调用工具执行器、不产生外部副作用；模型 ToolCall 会收到未执行结果，显式用户请求则结束当前回合。确认、取消、超时三条路径通过同一交互锁串行化，并以工具调用 ID、回合 ID 和 generation 防止旧任务误伤新请求。
 
 ### 上下文装配顺序
