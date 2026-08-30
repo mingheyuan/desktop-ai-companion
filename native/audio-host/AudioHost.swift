@@ -28,6 +28,34 @@ private func fail(_ code: String, _ message: String) -> Never {
     exit(1)
 }
 
+private struct WakeWordMatch {
+    let phrase: String
+    let range: Range<String.Index>
+}
+
+private enum WakeWordMatcher {
+    static let canonical = "爱丽丝"
+
+    // Keep this list intentionally small. These are local recognition variants,
+    // not user-configurable phrases, so a false wake-up does not broaden silently.
+    static let phrases = ["天童爱丽丝", "爱丽丝", "艾丽丝", "爱丽思", "爱丽斯", "阿丽丝"]
+
+    static func match(in text: String) -> WakeWordMatch? {
+        for phrase in phrases {
+            if let range = text.range(of: phrase, options: [.caseInsensitive]) {
+                return WakeWordMatch(phrase: phrase, range: range)
+            }
+        }
+        return nil
+    }
+
+    static func textAfterWakeWord(in text: String) -> String {
+        guard let match = match(in: text) else { return text }
+        return String(text[match.range.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+}
+
 private func connectControlSocket(at path: String) -> Bool {
     let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
     guard descriptor >= 0 else { return false }
@@ -130,7 +158,7 @@ private final class VoiceController {
     private let queue = DispatchQueue(label: "desktop-ai.audio-host.voice", qos: .userInteractive)
     private let requestLock = NSLock()
     private let locale = Locale(identifier: "zh-CN")
-    private let wakeWord = "爱丽丝"
+    private let wakeWord = WakeWordMatcher.canonical
     private var engine: AVAudioEngine?
     private var input: AVAudioInputNode?
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -210,7 +238,7 @@ private final class VoiceController {
         let nextRequest = SFSpeechAudioBufferRecognitionRequest()
         nextRequest.shouldReportPartialResults = true
         nextRequest.taskHint = .dictation
-        nextRequest.contextualStrings = [wakeWord, "天童爱丽丝"]
+        nextRequest.contextualStrings = WakeWordMatcher.phrases
         if #available(macOS 13.0, *) { nextRequest.addsPunctuation = true }
         if recognizer.supportsOnDeviceRecognition { nextRequest.requiresOnDeviceRecognition = true }
 
@@ -254,7 +282,7 @@ private final class VoiceController {
         if let result {
             wakeErrorCount = 0
             latestText = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
-            if mode == .wake && !wakeDetected, latestText.localizedCaseInsensitiveContains(wakeWord) {
+            if mode == .wake && !wakeDetected, WakeWordMatcher.match(in: latestText) != nil {
                 wakeDetected = true
                 emit(["type": "wake.detected", "capture_id": captureID, "generation": generation, "wake_word": wakeWord])
                 scheduleEndpoint(after: 5)
@@ -291,8 +319,8 @@ private final class VoiceController {
     }
 
     private func textAfterWakeWord(_ text: String) -> String {
-        guard mode == .wake, let range = text.range(of: wakeWord, options: [.caseInsensitive]) else { return text }
-        return String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        guard mode == .wake else { return text }
+        return WakeWordMatcher.textAfterWakeWord(in: text)
     }
 
     private func scheduleEndpoint(after delay: TimeInterval = 1.1) {
@@ -451,6 +479,28 @@ private final class SpeechController: NSObject, @unchecked Sendable, AVSpeechSyn
         lastLevelEmittedAt = now
         emit(["type": "tts.level", "turn_id": turnID, "generation": generation, "level": level])
     }
+}
+
+private func runWakeWordSelfTest() -> Never {
+    let cases: [(Bool, String)] = [
+        (WakeWordMatcher.match(in: "爱丽丝你好")?.phrase == "爱丽丝", "canonical phrase"),
+        (WakeWordMatcher.match(in: "天童爱丽丝，打开浏览器")?.phrase == "天童爱丽丝", "full name"),
+        (WakeWordMatcher.match(in: "艾丽丝提醒我开会")?.phrase == "艾丽丝", "homophone"),
+        (WakeWordMatcher.match(in: "爱丽思，今天天气怎么样")?.phrase == "爱丽思", "recognition variant"),
+        (WakeWordMatcher.textAfterWakeWord(in: "天童爱丽丝，打开浏览器") == "打开浏览器", "command extraction"),
+        (WakeWordMatcher.textAfterWakeWord(in: "阿丽丝   设一个提醒") == "设一个提醒", "trimmed command extraction"),
+        (WakeWordMatcher.match(in: "今天想聊聊") == nil, "non-wake speech"),
+        (WakeWordMatcher.textAfterWakeWord(in: "今天想聊聊") == "今天想聊聊", "unchanged non-wake text")
+    ]
+    if let failure = cases.first(where: { !$0.0 }) {
+        fail("wake_self_test_failed", "唤醒词自测失败：\(failure.1)")
+    }
+    print("WakeWordMatcher tests passed")
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--self-test-wake") {
+    runWakeWordSelfTest()
 }
 
 guard let socketPath = argument(named: "--socket"),

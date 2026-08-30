@@ -17,7 +17,7 @@
 | 一次性本地提醒 | 支持“半小时后提醒我喝水”以及“明天下午三点提醒我开会”等明确绝对日期/时间；确认后写入 SQLite，应用内调度器和 macOS 用户级 `launchd` LaunchAgent 共享本地 claim 去重；主面板可查看、实时显示剩余时间、取消并查看最近已触发/已取消历史，聊天可查询待处理提醒，也可对唯一匹配的提醒发起确认后取消；重启会恢复未完成任务，应用完全退出后仍可由系统投递 | Rust 本地时区解析/迁移/状态转换、提醒历史查询、只读本地查询与 LaunchAgent 脚本生成测试、前端倒计时测试和构建；绝对时间仅限明确且未来 7 天内的一次性提醒，重复规则、贪睡和退出登录期间的投递仍未实现；真实通知中心行为仍需 macOS 实机验收 |
 | 桌宠控制 | 角色本体可拖动、单击打开聊天；支持显示、缩放、点击穿透、托盘、窗口恢复和全局快捷键；托盘与 `⌘/Ctrl + Shift + L` 可控制持续监听 | Tauri capability 编译、Rust 编译和手工 UI 检查 |
 | 语音基础 | 独立 AudioHost、权限、PTT、partial/final、系统 TTS、停止/新输入打断；持续监听断线后限三次退避恢复 | Swift 编译、UDS 真实握手测试 |
-| 持续监听 | Apple Speech 设备端识别检测“爱丽丝”；有命令时 1.1 秒 endpoint，只唤醒无命令时 5 秒返回待机 | 代码保护已验证；仍需首次授权和长时间实机测试 |
+| 持续监听 | Apple Speech 设备端识别检测“爱丽丝”及少量中文同音变体；有命令时 1.1 秒 endpoint，只唤醒无命令时 5 秒返回待机 | 代码保护已验证；仍需首次授权和长时间实机测试 |
 | 语音数据路径 | `capture.started.on_device` 投影为“本机识别/系统语音服务”；wake 只允许本机 | Rust/React 类型检查；仍需两类设备能力实机检查 |
 | macOS 打包 | Tauri resources 内嵌 `AudioHost.app`；稳定 identity 优先、ad-hoc fallback | debug app bundle 构建、`codesign --verify --deep --strict` |
 | 数据清理 | 本地范围摘要；聊天/记忆独立清理；二次确认；保留 Provider/角色/桌宠设置 | SQLite 范围隔离、candidate cascade、FTS rebuild 测试和 UI 检查 |

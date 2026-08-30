@@ -10,12 +10,12 @@
 - Rust 先 bind、AudioHost 后连接的 UDS JSONL 通道，以及 protocol major、256-bit token、launch nonce 握手；
 - 麦克风与 Speech Recognition 权限状态查询和仅由用户点击触发的授权请求；
 - PTT、Apple Speech partial/final、45 秒 recognition task 滚动和 capture/epoch/generation guard；
-- 使用 Apple Speech 设备端识别检测“爱丽丝”的持续监听 fallback；不支持设备端识别时直接关闭持续监听，不把环境音降级到在线识别；
+- 使用 Apple Speech 设备端识别检测“爱丽丝”及少量中文同音变体（“艾丽丝”“爱丽思”“爱丽斯”“阿丽丝”）的持续监听 fallback；不支持设备端识别时直接关闭持续监听，不把环境音降级到在线识别；
 - `AVSpeechSynthesizer` 本地朗读、停止、PTT/文字新输入打断、旧 utterance 回调过滤，以及基于 `willSpeakRange` 的近似口型 level；
 - Rust 侧 turn/input/playback 状态投影、Tauri 命令、UI 控件和 `Cmd/Ctrl + Shift + M` PTT 快捷键；
 - 不请求语音权限的真实 `.app` 启动、握手和退出测试。
 
-尚未落地的目标项包括：二进制 PCM media socket、Sherpa KWS、独立 VAD、pre-roll、真实 RMS 口型、设备切换、安静时段，以及 30 分钟/睡眠恢复实机验收。当前已对 control socket 接入 heartbeat：Rust 每 2 秒发送 ping，6 秒未收到当前连接 pong 即走已有三次退避重启；仍需实机验证 AudioHost 内部音频线程失效、睡眠和外设切换场景。当前 fallback 在检测到命令文本后使用 1.1 秒静音计时，只说唤醒词而没有后续命令时 5 秒返回待机；口型 level 只表示发音区间活动而非真实响度；PTT 在设备端识别不可用时可能使用 Apple Speech 系统在线服务，UI 会根据 `capture.started.on_device` 显示“本机识别”或“系统语音服务”。
+尚未落地的目标项包括：二进制 PCM media socket、Sherpa KWS、独立 VAD、pre-roll、真实 RMS 口型、设备切换、安静时段，以及 30 分钟/睡眠恢复实机验收。当前已对 control socket 接入 heartbeat：Rust 每 2 秒发送 ping，6 秒未收到当前连接 pong 即走已有三次退避重启；仍需实机验证 AudioHost 内部音频线程失效、睡眠和外设切换场景。当前 fallback 在检测到命令文本后使用 1.1 秒静音计时，只说唤醒词而没有后续命令时 5 秒返回待机；唤醒匹配器接受固定的“爱丽丝”“天童爱丽丝”以及少量中文同音变体，匹配和命令截断都在 AudioHost 本地完成；口型 level 只表示发音区间活动而非真实响度；PTT 在设备端识别不可用时可能使用 Apple Speech 系统在线服务，UI 会根据 `capture.started.on_device` 显示“本机识别”或“系统语音服务”。
 
 ## 1. 职责
 

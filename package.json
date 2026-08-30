@@ -7,6 +7,7 @@
     "dev": "pnpm --filter @desktop-ai/desktop dev",
     "build": "pnpm --filter @desktop-ai/desktop build",
     "test": "pnpm --filter @desktop-ai/desktop test",
+    "test:audio-host:wake": "./scripts/test-audio-host-wake.sh",
     "tauri": "pnpm --filter @desktop-ai/desktop tauri",
     "package:macos": "./scripts/build-macos-app.sh --bundles app",
     "check:rust": "cargo test --workspace"
