@@ -523,13 +523,20 @@ impl AppCore {
         } else {
             None
         };
-        let memory_content = if open_url.is_none() && timer_request.is_none() {
-            parse_explicit_memory_request(&text)
-                .map(|content| validate_memory_content(&content))
+        let memory_intent = if open_url.is_none() && timer_request.is_none() {
+            parse_explicit_memory_intent(&text)
+                .map(|intent| {
+                    Ok(ExplicitMemoryIntent {
+                        content: validate_memory_content(&intent.content)?,
+                        scope: intent.scope,
+                        kind: intent.kind,
+                    })
+                })
                 .transpose()?
         } else {
             None
         };
+        let memory_content = memory_intent.as_ref().map(|intent| intent.content.as_str());
         let memory_delete =
             if open_url.is_none() && timer_request.is_none() && memory_content.is_none() {
                 self.resolve_explicit_memory_delete(&text).await?
@@ -631,25 +638,30 @@ impl AppCore {
                 })
             })
             .or_else(|| {
-                memory_content.map(|content| {
+                memory_intent.clone().map(|intent| {
                     let tool_call_id = Uuid::now_v7().to_string();
                     PendingTool {
                         approval: ToolApproval {
                             tool_call_id,
                             tool_name: "memory.save".into(),
                             display_name: "保存记忆".into(),
-                            summary:
-                                "这段内容只会在你确认后保存到本地长期记忆，不会自动发送给模型。"
-                                    .into(),
+                            summary: format!(
+                                "这段{}只会在你确认后保存到本地长期记忆，不会自动发送给模型。",
+                                memory_scope_label(intent.scope)
+                            ),
                             url: None,
                             host: None,
-                            title: Some(content.clone()),
+                            title: Some(intent.content.clone()),
                             due_at_ms: None,
                             expires_at_ms: Self::tool_approval_expiry_ms(),
                         },
                         turn_id: turn_id.clone(),
                         generation,
-                        action: PendingToolAction::SaveMemory { content },
+                        action: PendingToolAction::SaveMemory {
+                            content: intent.content,
+                            scope: intent.scope.to_owned(),
+                            kind: intent.kind.to_owned(),
+                        },
                         origin: PendingToolOrigin::Explicit,
                     }
                 })
@@ -744,9 +756,11 @@ impl AppCore {
                     "timezone": "local"
                 })
                 .to_string(),
-                PendingToolAction::SaveMemory { content } => {
-                    json!({ "content": content }).to_string()
-                }
+                PendingToolAction::SaveMemory {
+                    content,
+                    scope,
+                    kind,
+                } => json!({ "content": content, "scope": scope, "kind": kind }).to_string(),
                 PendingToolAction::DeleteMemory {
                     id,
                     content,
@@ -778,7 +792,12 @@ impl AppCore {
                     now_ms(),
                 )
                 .map_err(storage_error)?;
-            if let PendingToolAction::SaveMemory { content } = &tool.action {
+            if let PendingToolAction::SaveMemory {
+                content,
+                scope,
+                kind,
+            } = &tool.action
+            {
                 let confidence = if matches!(&tool.origin, PendingToolOrigin::Explicit) {
                     1.0
                 } else {
@@ -788,8 +807,8 @@ impl AppCore {
                     id: &tool.approval.tool_call_id,
                     source_turn_id: &turn_id,
                     source_message_id: None,
-                    scope: "user",
-                    kind: "note",
+                    scope,
+                    kind,
                     content,
                     confidence,
                     sensitivity: "normal",
@@ -1182,16 +1201,34 @@ impl AppCore {
                     .iter()
                     .rev()
                     .find_map(|message| match message {
-                        LlmMessage::User { content } => Some(has_explicit_memory_intent(content)),
+                        LlmMessage::User { content } => parse_explicit_memory_intent(content),
                         _ => None,
-                    })
-                    == Some(true);
-            if !explicit_memory_intent {
+                    });
+            let Some(intent) = explicit_memory_intent else {
                 return Err(AppError::new(
                     "memory_confirmation_required",
                     "只有用户明确要求记住或保存信息时，模型才能提出记忆草案。",
                     false,
                 ));
+            };
+            let scope = intent.scope.to_owned();
+            let kind = intent.kind.to_owned();
+            if let PendingToolAction::SaveMemory {
+                scope: candidate_scope,
+                kind: candidate_kind,
+                ..
+            } = &mut candidate.action
+            {
+                *candidate_scope = scope.clone();
+                *candidate_kind = kind.clone();
+            }
+            candidate.summary = format!(
+                "模型请求把这段{}保存到本地长期记忆；执行前需要你的确认。",
+                memory_scope_label(&scope)
+            );
+            if let PendingToolAction::SaveMemory { content, .. } = &candidate.action {
+                candidate.arguments_json =
+                    json!({ "content": content, "scope": scope, "kind": kind }).to_string();
             }
         }
         if call.name == "screen.observe" && !has_explicit_screen_observe_intent(context.messages) {
@@ -1262,13 +1299,18 @@ impl AppCore {
                 now_ms(),
             )
             .map_err(storage_error)?;
-        if let PendingToolAction::SaveMemory { content } = &candidate.action {
+        if let PendingToolAction::SaveMemory {
+            content,
+            scope,
+            kind,
+        } = &candidate.action
+        {
             if let Err(error) = self.storage.create_memory_candidate(MemoryCandidateInput {
                 id: &tool_call_id,
                 source_turn_id: context.turn_id,
                 source_message_id: None,
-                scope: "user",
-                kind: "note",
+                scope,
+                kind,
                 content,
                 confidence: 0.7,
                 sensitivity: "normal",
@@ -1634,7 +1676,7 @@ impl AppCore {
                 PendingToolAction::CreateTimer { title, .. } => {
                     format!("好的，老师，已取消提醒：{title}")
                 }
-                PendingToolAction::SaveMemory { content } => {
+                PendingToolAction::SaveMemory { content, .. } => {
                     format!("好的，老师，已取消保存这条记忆：{content}")
                 }
                 PendingToolAction::DeleteMemory { content, .. } => {
@@ -1730,10 +1772,12 @@ impl AppCore {
                 }
             }
             PendingToolAction::SaveMemory { .. } => {
-                match self
-                    .storage
-                    .confirm_memory_candidate(&pending_tool_id, now_ms())
-                {
+                let character_id = self.character.read().await.character_id.clone();
+                match self.storage.confirm_memory_candidate(
+                    &pending_tool_id,
+                    &character_id,
+                    now_ms(),
+                ) {
                     Ok(Some(memory)) => Ok(format!(
                         "已保存本地长期记忆：{}（记忆 ID：{}）",
                         memory.content, memory.id
@@ -1816,7 +1860,7 @@ impl AppCore {
                             "已设置提醒：{title}（约{}后提醒）",
                             format_timer_delay(*due_at_ms - now_ms())
                         ),
-                        PendingToolAction::SaveMemory { content } => {
+                        PendingToolAction::SaveMemory { content, .. } => {
                             format!("已保存记忆：{content}")
                         }
                         PendingToolAction::DeleteMemory { content, .. } => {
@@ -2320,8 +2364,9 @@ impl AppCore {
             ));
         }
         if approved {
+            let character_id = self.character.read().await.character_id.clone();
             self.storage
-                .confirm_memory_candidate(candidate_id, now_ms())
+                .confirm_memory_candidate(candidate_id, &character_id, now_ms())
                 .map_err(storage_error)?
                 .ok_or_else(|| {
                     AppError::new("conflict", "这条记忆候选已被处理，请刷新后重试。", true)
@@ -3478,26 +3523,84 @@ fn validate_pet_settings(value: &PetSettings) -> Result<(), AppError> {
     Ok(())
 }
 
-fn has_explicit_memory_intent(text: &str) -> bool {
-    parse_explicit_memory_request(text).is_some()
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExplicitMemoryIntent {
+    content: String,
+    scope: &'static str,
+    kind: &'static str,
 }
 
-fn parse_explicit_memory_request(text: &str) -> Option<String> {
+fn parse_explicit_memory_intent(text: &str) -> Option<ExplicitMemoryIntent> {
     if ["不要记住", "别记住", "不要保存", "别保存"]
         .iter()
         .any(|phrase| text.contains(phrase))
     {
         return None;
     }
-    ["记住", "记下", "别忘了", "不要忘记", "保存这条", "存进记忆"]
+    let (markers, scope, kind) = if [
+        "记住我们",
+        "记下我们",
+        "记录我们",
+        "记住这次",
+        "记下这次",
+        "记录这次",
+        "记住这段经历",
+        "记下这段经历",
+        "记录这段经历",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
+    {
+        (
+            [
+                "记住我们",
+                "记下我们",
+                "记录我们",
+                "记住这次",
+                "记下这次",
+                "记录这次",
+                "记住这段经历",
+                "记下这段经历",
+                "记录这段经历",
+            ]
+            .as_slice(),
+            "relationship",
+            "event",
+        )
+    } else {
+        (
+            ["记住", "记下", "别忘了", "不要忘记", "保存这条", "存进记忆"].as_slice(),
+            "user",
+            "note",
+        )
+    };
+    markers
         .iter()
-        .find_map(|marker| text.find(marker).map(|start| start + marker.len()))
-        .and_then(|start| {
-            let content = text[start..].trim_matches(|character: char| {
+        .find_map(|marker| {
+            text.find(marker)
+                .map(|start| (start + marker.len(), *marker))
+        })
+        .and_then(|(start, marker)| {
+            let mut content = text[start..].trim_matches(|character: char| {
                 matches!(character, '：' | ':' | '，' | ',' | '。' | '！' | '!')
             });
-            (!content.is_empty()).then_some(content.to_owned())
+            if scope == "relationship" && marker.ends_with('们') {
+                content = content.strip_prefix('的').unwrap_or(content).trim();
+            }
+            (!content.is_empty()).then(|| ExplicitMemoryIntent {
+                content: content.to_owned(),
+                scope,
+                kind,
+            })
         })
+}
+
+fn memory_scope_label(scope: &str) -> &'static str {
+    if scope == "relationship" {
+        "关系记忆"
+    } else {
+        "用户记忆"
+    }
 }
 
 fn parse_explicit_memory_delete_query(text: &str) -> Option<String> {
@@ -5122,15 +5225,25 @@ mod tests {
 
     #[test]
     fn recognizes_only_explicit_memory_intent() {
-        assert!(has_explicit_memory_intent("请记住我喜欢蓝色"));
-        assert!(has_explicit_memory_intent("别忘了我周五要开会"));
-        assert!(!has_explicit_memory_intent("我喜欢蓝色"));
-        assert!(!has_explicit_memory_intent("不要记住这句话"));
+        assert!(parse_explicit_memory_intent("请记住我喜欢蓝色").is_some());
+        assert!(parse_explicit_memory_intent("别忘了我周五要开会").is_some());
+        assert!(parse_explicit_memory_intent("我喜欢蓝色").is_none());
+        assert!(parse_explicit_memory_intent("不要记住这句话").is_none());
         assert_eq!(
-            parse_explicit_memory_request("请记住：我喜欢蓝色。"),
+            parse_explicit_memory_intent("请记住：我喜欢蓝色。").map(|intent| intent.content),
             Some("我喜欢蓝色".into())
         );
-        assert_eq!(parse_explicit_memory_request("请记住"), None);
+        assert!(parse_explicit_memory_intent("请记住").is_none());
+        let relationship =
+            parse_explicit_memory_intent("请记住我们：第一次并肩完成任务。").unwrap();
+        assert_eq!(relationship.scope, "relationship");
+        assert_eq!(relationship.kind, "event");
+        assert_eq!(relationship.content, "第一次并肩完成任务");
+        assert_eq!(
+            parse_explicit_memory_intent("请记住这次：我们一起完成了任务。")
+                .map(|intent| intent.content),
+            Some("我们一起完成了任务".into())
+        );
     }
 
     #[test]

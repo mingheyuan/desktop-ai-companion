@@ -222,11 +222,11 @@ update 随后更新 `memories` 并插入新索引项；delete 随后删除 `memo
 
 ## 5. 记忆候选流程
 
-当前已实现的最小切片只接受用户明确保存意图下的 `memory.save` 提议，并仅生成 `scope='user'`、`kind='note'` 的本地候选。候选在工具确认前就持久化为 `pending`，因此确认卡被取消或应用重启后，用户仍可在记忆面板中继续审核；审核前可以编辑候选正文，这不等同于已经写入长期记忆。
+当前已实现的最小切片接受用户明确保存意图下的 `memory.save` 提议：普通“记住我……”生成 `scope='user'`、`kind='note'` 候选；“记住我们/记录这次/记住这段经历”生成 `scope='relationship'`、`kind='event'` 候选。候选在工具确认前就持久化为 `pending`，因此确认卡被取消或应用重启后，用户仍可在记忆面板中继续审核；审核前可以编辑候选正文，这不等同于已经写入长期记忆。
 
-确认路径在一个 SQLite 事务中读取 pending 候选、创建正式 `memories` 行、写入 `memory_fts` 和 `memory_audit`，最后把候选标记为 `confirmed`。拒绝路径只把候选标记为 `rejected`，不会写入正式记忆，也不会进入检索。所有状态更新都带有 `status='pending'` 条件，重复确认或拒绝只返回冲突/无变化，不会重复生成记忆。
+确认路径在一个 SQLite 事务中读取 pending 候选、按当前角色绑定 relationship 记忆、创建正式 `memories` 行、写入 `memory_fts` 和 `memory_audit`，最后把候选标记为 `confirmed`。拒绝路径只把候选标记为 `rejected`，不会写入正式记忆，也不会进入检索。所有状态更新都带有 `status='pending'` 条件，重复确认或拒绝只返回冲突/无变化，不会重复生成记忆。
 
-只有 `turn.status=completed` 才进入提取或互动计数：
+未来的自动提取只有 `turn.status=completed` 才允许进入；当前自动提取尚未启用。互动计数同样只在助手回复成功提交时更新：
 
 1. 读取该 turn 的 canonical user/assistant 文本。
 2. 提取最多 3 条候选，分为 user fact/preference 与 relationship event/summary。

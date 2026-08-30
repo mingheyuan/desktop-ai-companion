@@ -182,6 +182,7 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .memory-candidate-card button.danger { color: #ffb7c4; background: rgba(119, 28, 55, .35); }
 .memory-candidate-card button:disabled { cursor: default; opacity: .5; }
 .memory-card { margin-bottom: 10px; border: 1px solid rgba(127, 164, 238, .14); border-radius: 13px; padding: 12px; background: rgba(20, 31, 61, .7); }
+.memory-scope-label { display: inline-block; margin-bottom: 7px; color: #8ea9df; font-size: 10px; letter-spacing: .05em; }
 .memory-card > p { margin: 0; color: #dbe6ff; line-height: 1.6; white-space: pre-wrap; }
 .memory-card footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
 .memory-card footer span { color: #657ba9; font-size: 10px; }

@@ -52,27 +52,30 @@ const MEMORY_CANDIDATE_SELECT: &str = r#"
            c.created_at_ms, c.reviewed_at_ms,
            (SELECT m.id
               FROM memories m
-             WHERE c.scope='user'
-               AND m.scope='user'
-               AND m.character_id IS NULL
+             WHERE m.scope=c.scope
+               AND ((c.scope='user' AND m.character_id IS NULL)
+                 OR (c.scope='relationship' AND m.character_id=source_conversation.character_id))
                AND m.normalized_key=c.normalized_key
                AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
              ORDER BY m.updated_at_ms DESC, m.id DESC
              LIMIT 1) AS memory_duplicate_id,
            (SELECT m.content
               FROM memories m
-             WHERE c.scope='user'
-               AND m.scope='user'
-               AND m.character_id IS NULL
+             WHERE m.scope=c.scope
+               AND ((c.scope='user' AND m.character_id IS NULL)
+                 OR (c.scope='relationship' AND m.character_id=source_conversation.character_id))
                AND m.normalized_key=c.normalized_key
                AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
              ORDER BY m.updated_at_ms DESC, m.id DESC
              LIMIT 1) AS memory_duplicate_content,
            (SELECT other.id
               FROM memory_candidates other
+              JOIN turns other_turn ON other_turn.id=other.source_turn_id
+              JOIN conversations other_conversation ON other_conversation.id=other_turn.conversation_id
              WHERE other.id <> c.id
                AND other.status='pending'
                AND other.scope=c.scope
+               AND (c.scope <> 'relationship' OR other_conversation.character_id=source_conversation.character_id)
                AND other.normalized_key=c.normalized_key
                AND (other.created_at_ms < c.created_at_ms
                     OR (other.created_at_ms = c.created_at_ms AND other.id < c.id))
@@ -80,15 +83,20 @@ const MEMORY_CANDIDATE_SELECT: &str = r#"
              LIMIT 1) AS candidate_duplicate_id,
            (SELECT other.content
               FROM memory_candidates other
+              JOIN turns other_turn ON other_turn.id=other.source_turn_id
+              JOIN conversations other_conversation ON other_conversation.id=other_turn.conversation_id
              WHERE other.id <> c.id
                AND other.status='pending'
                AND other.scope=c.scope
+               AND (c.scope <> 'relationship' OR other_conversation.character_id=source_conversation.character_id)
                AND other.normalized_key=c.normalized_key
                AND (other.created_at_ms < c.created_at_ms
                     OR (other.created_at_ms = c.created_at_ms AND other.id < c.id))
              ORDER BY other.created_at_ms ASC, other.id ASC
              LIMIT 1) AS candidate_duplicate_content
-      FROM memory_candidates c"#;
+      FROM memory_candidates c
+      JOIN turns source_turn ON source_turn.id=c.source_turn_id
+      JOIN conversations source_conversation ON source_conversation.id=source_turn.conversation_id"#;
 
 impl Storage {
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
@@ -1078,6 +1086,7 @@ impl Storage {
     pub fn confirm_memory_candidate(
         &self,
         candidate_id: &str,
+        character_id: &str,
         now_ms: i64,
     ) -> Result<Option<MemoryItem>, rusqlite::Error> {
         let mut connection = self.connection.lock().expect("storage mutex poisoned");
@@ -1116,21 +1125,24 @@ impl Storage {
         else {
             return Ok(None);
         };
-        if scope != "user" {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
+        let memory_character_id = match scope.as_str() {
+            "user" => None,
+            "relationship" => Some(character_id),
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        };
         if let Some(existing) = transaction
             .query_row(
                 "SELECT id, scope, character_id, kind, content, importance, version,
                         created_at_ms, updated_at_ms
                    FROM memories m
-                  WHERE m.scope='user'
-                    AND m.character_id IS NULL
-                    AND m.normalized_key=?1
+                  WHERE m.scope=?1
+                    AND ((m.scope='user' AND m.character_id IS NULL)
+                      OR (m.scope='relationship' AND m.character_id=?2))
+                    AND m.normalized_key=?3
                     AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
                   ORDER BY m.updated_at_ms DESC, m.id DESC
                   LIMIT 1",
-                [&normalized_key],
+                params![scope, character_id, normalized_key],
                 map_memory_row,
             )
             .optional()?
@@ -1146,7 +1158,7 @@ impl Storage {
         let item = MemoryItem {
             id: Uuid::now_v7().to_string(),
             scope,
-            character_id: None,
+            character_id: memory_character_id.map(str::to_owned),
             kind,
             content,
             importance: 0.7,
@@ -1159,9 +1171,11 @@ impl Storage {
                 id, scope, character_id, kind, content, normalized_key, importance,
                 confidence, sensitivity, source_message_id, source_candidate_id,
                 version, created_at_ms, updated_at_ms
-             ) VALUES(?1, 'user', NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?11)",
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13)",
             params![
                 item.id,
+                item.scope,
+                item.character_id,
                 item.kind,
                 item.content,
                 normalized_key,
@@ -1223,14 +1237,14 @@ impl Storage {
             "INSERT INTO tool_runs(id, conversation_id, turn_id, tool_name, arguments_json, origin, status, created_at_ms)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
             params![
-                input.id,
-                input.conversation_id,
-                input.turn_id,
-                input.tool_name,
-                input.arguments_json,
-                input.origin,
-                now_ms
-            ],
+            input.id,
+            input.conversation_id,
+            input.turn_id,
+            input.tool_name,
+            input.arguments_json,
+            input.origin,
+            now_ms
+        ],
         )?;
         Ok(())
     }
@@ -1858,7 +1872,7 @@ mod tests {
             .unwrap();
 
         let confirmed = storage
-            .confirm_memory_candidate("candidate-confirm-duplicate", 5)
+            .confirm_memory_candidate("candidate-confirm-duplicate", "aris", 5)
             .unwrap()
             .unwrap();
         assert_eq!(confirmed.id, existing.id);
@@ -1907,7 +1921,7 @@ mod tests {
         assert_eq!(edited.content, "老师喜欢青色");
 
         let memory = storage
-            .confirm_memory_candidate("candidate-1", 4)
+            .confirm_memory_candidate("candidate-1", "aris", 4)
             .unwrap()
             .unwrap();
         assert_eq!(memory.content, "老师喜欢青色");
@@ -1933,6 +1947,55 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status, "confirmed");
+    }
+
+    #[test]
+    fn relationship_memory_candidate_is_scoped_to_the_active_character() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(1).unwrap();
+        storage
+            .begin_turn(
+                &conversation,
+                "relationship-memory-turn",
+                1,
+                "text",
+                "记住我们第一次并肩完成任务",
+                2,
+            )
+            .unwrap();
+        storage
+            .create_memory_candidate(MemoryCandidateInput {
+                id: "relationship-candidate",
+                source_turn_id: "relationship-memory-turn",
+                source_message_id: None,
+                scope: "relationship",
+                kind: "event",
+                content: "我们第一次并肩完成任务",
+                confidence: 1.0,
+                sensitivity: "normal",
+                created_at_ms: 3,
+            })
+            .unwrap();
+
+        let memory = storage
+            .confirm_memory_candidate("relationship-candidate", "aris", 4)
+            .unwrap()
+            .unwrap();
+        assert_eq!(memory.scope, "relationship");
+        assert_eq!(memory.character_id.as_deref(), Some("aris"));
+        assert_eq!(memory.kind, "event");
+        assert_eq!(
+            storage
+                .search_memories("第一次并肩", "aris", 8)
+                .unwrap()
+                .first()
+                .map(|item| item.id.as_str()),
+            Some(memory.id.as_str())
+        );
+        assert!(storage
+            .search_memories("第一次并肩", "another-character", 8)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1967,7 +2030,7 @@ mod tests {
             .unwrap()
             .is_empty());
         assert!(storage
-            .confirm_memory_candidate("candidate-reject", 6)
+            .confirm_memory_candidate("candidate-reject", "aris", 6)
             .unwrap()
             .is_none());
     }

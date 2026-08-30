@@ -10,6 +10,10 @@ function errorMessage(reason: unknown, fallback: string) {
   return fallback;
 }
 
+function memoryScopeLabel(scope: string) {
+  return scope === "relationship" ? "关系记忆" : "用户记忆";
+}
+
 export function MemoryPanel({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<MemoryItem[]>([]);
@@ -181,7 +185,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
           <button type="button" className="icon-button" onClick={onClose} aria-label="关闭记忆管理">×</button>
         </header>
 
-        <p className="memory-privacy">只有你在这里明确保存的内容才会进入长期记忆。发送给模型的开关在 Provider 设置中，默认关闭。</p>
+        <p className="memory-privacy">只有你确认过的内容才会进入长期记忆。关系记忆只绑定当前角色；发送给模型的开关在 Provider 设置中，默认关闭。</p>
         <input className="memory-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索已保存记忆…" />
 
         <form className="memory-create" onSubmit={create}>
@@ -203,6 +207,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
               <p className="memory-candidate-hint">这些内容只会在你点击“保存到记忆”后进入长期记忆。</p>
               {candidates.map((candidate) => (
                 <article className="memory-candidate-card" key={candidate.id}>
+                  <span className="memory-scope-label">{memoryScopeLabel(candidate.scope)}</span>
                   {editingCandidate?.id === candidate.id ? (
                     <textarea value={editingCandidate.content} maxLength={1000} rows={3} onChange={(event) => setEditingCandidate({ id: candidate.id, content: event.target.value })} />
                   ) : (
@@ -237,6 +242,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
           {items.length === 0 && <p className="memory-empty">{isTauri() ? (candidates.length > 0 ? "还没有已保存的长期记忆。" : "没有匹配的记忆。") : "浏览器预览不会读取本地记忆。"}</p>}
           {items.map((memory) => (
             <article className="memory-card" key={memory.id}>
+              <span className="memory-scope-label">{memoryScopeLabel(memory.scope)}</span>
               {editing?.id === memory.id ? (
                 <textarea value={editing.content} maxLength={1000} rows={3} onChange={(event) => setEditing({ id: memory.id, content: event.target.value })} />
               ) : (

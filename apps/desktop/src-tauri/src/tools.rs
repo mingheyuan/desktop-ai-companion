@@ -24,6 +24,8 @@ pub(crate) enum ToolAction {
     },
     SaveMemory {
         content: String,
+        scope: String,
+        kind: String,
     },
     DeleteMemory {
         id: String,
@@ -116,7 +118,7 @@ impl ToolRegistry {
         },
         ToolDefinition {
             name: "memory.save".into(),
-            description: "提出一条要保存到本地长期记忆的内容；执行前会请求用户确认。".into(),
+            description: "提出一条要保存到本地长期记忆的内容；仅在用户明确要求记住或记录时使用，执行前会请求用户确认。".into(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -373,6 +375,8 @@ impl ToolPolicy {
                 Ok(ModelToolCandidate {
                     action: ToolAction::SaveMemory {
                         content: content.clone(),
+                        scope: "user".into(),
+                        kind: "note".into(),
                     },
                     display_name: "保存记忆".into(),
                     summary: "模型请求把这段内容保存到本地长期记忆；执行前需要你的确认。".into(),
