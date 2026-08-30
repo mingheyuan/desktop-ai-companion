@@ -104,7 +104,7 @@ Rust 是应用业务状态的唯一事实来源，主要模块如下：
 - `AudioWorker`：串行处理音频控制请求，维护 AudioHost 连接、唤醒词、VAD、ASR 和播放会话。
 - `MemoryWorker`：记忆唯一写入口；串行执行候选合并、确认、修改、删除和索引更新。
 - `ProviderRegistry`：隔离 LLM、ASR、TTS 和 Vision Provider；Provider 不直接修改 UI、工具权限或数据库。
-- `ToolRuntime`（首批已实现）：校验、授权和执行 `system.open_url`/`timer.create`/`timer.cancel`/`memory.save`，并把结果回传当前 `TurnActor`；当前每次只接受一个模型 ToolCall，每轮最多连续 3 步，详细方案见 [`tools-and-vision.md`](tools-and-vision.md)。
+- `ToolRuntime`（首批已实现）：校验、授权和执行 `system.open_url`/`timer.create`/`timer.cancel`/`memory.save`/本地 `screen.observe`，并把结果回传当前 `TurnActor`；当前每次只接受一个模型 ToolCall，每轮最多连续 3 步，详细方案见 [`tools-and-vision.md`](tools-and-vision.md)。
 - `ScreenObserver`（规划）：按需捕获当前窗口、显示器或选区，管理临时截图与 Vision Provider 路由；不等同于 GUI 自动化。
 - `ActivityStore`：记录需要呈现给用户的当前活动、结果和阻塞项。
 - `AttentionResolver`：按优先级从多个活动中选出桌宠当前应该表达的状态。

@@ -127,6 +127,23 @@ impl ToolRegistry {
                 "required": ["content"]
             }),
         },
+        ToolDefinition {
+            name: "screen.observe".into(),
+            description: "在用户明确要求查看屏幕时，生成一张只保存在本机进程内存中的临时预览；不会上传给模型。执行前会请求用户确认。".into(),
+            parameters: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "request": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500,
+                        "description": "用户当前明确要求查看屏幕的原始请求"
+                    }
+                },
+                "required": ["request"]
+            }),
+        },
         ]
     }
 }
@@ -355,6 +372,40 @@ impl ToolPolicy {
                     title: Some(content.clone()),
                     due_at_ms: None,
                     arguments_json: json!({ "content": content }).to_string(),
+                })
+            }
+            "screen.observe" => {
+                reject_unknown_tool_arguments(object, &["request"])?;
+                let request = object
+                    .get("request")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        AppError::new(
+                            "invalid_tool_arguments",
+                            "读取屏幕需要非空 request 参数。",
+                            false,
+                        )
+                    })?;
+                if request.chars().count() > 500 {
+                    return Err(AppError::new(
+                        "invalid_tool_arguments",
+                        "屏幕观察请求不能超过 500 个字符。",
+                        false,
+                    ));
+                }
+                Ok(ModelToolCandidate {
+                    action: ToolAction::ObserveScreen {
+                        request: request.to_owned(),
+                    },
+                    display_name: "读取当前屏幕".into(),
+                    summary: "模型请求读取当前屏幕并生成本机临时预览；不会上传给任何模型，执行前需要你的确认。".into(),
+                    url: None,
+                    host: None,
+                    title: None,
+                    due_at_ms: None,
+                    arguments_json: json!({ "request": request, "send_to_provider": false }).to_string(),
                 })
             }
             other => Err(AppError::new(

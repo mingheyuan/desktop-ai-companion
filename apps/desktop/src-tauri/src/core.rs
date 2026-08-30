@@ -1161,6 +1161,13 @@ impl AppCore {
                 ));
             }
         }
+        if call.name == "screen.observe" && !has_explicit_screen_observe_intent(context.messages) {
+            return Err(AppError::new(
+                "screen_confirmation_required",
+                "只有用户明确要求查看当前屏幕时，模型才能提出本地屏幕观察。",
+                false,
+            ));
+        }
         if let PendingToolAction::CreateTimer {
             original_request, ..
         } = &mut candidate.action
@@ -3967,6 +3974,19 @@ fn parse_explicit_screen_observe_request(text: &str) -> Option<String> {
     Some(text.trim().to_owned())
 }
 
+fn has_explicit_screen_observe_intent(messages: &[LlmMessage]) -> bool {
+    messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            LlmMessage::User { content } => {
+                Some(parse_explicit_screen_observe_request(content).is_some())
+            }
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
 fn parse_relative_delay_ms(text: &str) -> Option<i64> {
     let common_phrases = [
         ("半小时", 30 * 60 * 1_000_i64),
@@ -4578,6 +4598,28 @@ mod tests {
     }
 
     #[test]
+    fn model_screen_observe_requires_latest_user_intent() {
+        assert!(has_explicit_screen_observe_intent(&[LlmMessage::User {
+            content: "请查看当前屏幕".into(),
+        },]));
+        assert!(!has_explicit_screen_observe_intent(&[LlmMessage::User {
+            content: "你好吗".into(),
+        },]));
+        assert!(!has_explicit_screen_observe_intent(&[
+            LlmMessage::User {
+                content: "请查看当前屏幕".into(),
+            },
+            LlmMessage::Assistant {
+                content: Some("好的".into()),
+                tool_calls: Vec::new(),
+            },
+            LlmMessage::User {
+                content: "不用了".into(),
+            },
+        ]));
+    }
+
+    #[test]
     fn screen_observation_expires_at_ttl_boundary() {
         let captured_at_ms = 100;
         let expires_at_ms = captured_at_ms + SCREEN_OBSERVATION_TTL_MS;
@@ -4642,6 +4684,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(memory.title.as_deref(), Some("老师喜欢蓝色"));
+
+        let screen = ToolPolicy::validate_model_call(
+            &ToolCall {
+                id: "call-screen".into(),
+                name: "screen.observe".into(),
+                arguments: r#"{"request":"请查看当前屏幕"}"#.into(),
+            },
+            1_000,
+        )
+        .unwrap();
+        assert!(matches!(
+            screen.action,
+            ToolAction::ObserveScreen { request } if request == "请查看当前屏幕"
+        ));
 
         assert!(ToolPolicy::validate_model_call(
             &ToolCall {
