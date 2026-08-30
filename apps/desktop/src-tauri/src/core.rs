@@ -973,7 +973,7 @@ impl AppCore {
             })
             .collect::<Vec<_>>();
         messages.push(LlmMessage::User { content: text });
-        self.run_llm_request(
+        self.run_agent_loop(
             app,
             turn_id,
             generation,
@@ -992,7 +992,13 @@ impl AppCore {
         .await;
     }
 
-    async fn run_llm_request(
+    /// Run one conversational Agent Loop.
+    ///
+    /// A normal turn ends only when the configured LLM emits text and a
+    /// completion event. If the LLM emits a tool call, the call is validated,
+    /// approved/executed by Rust, and the tool result is fed into the next
+    /// loop step. No user text is converted into a canned assistant sentence.
+    async fn run_agent_loop(
         self: Arc<Self>,
         app: AppHandle,
         turn_id: String,
@@ -1952,7 +1958,7 @@ impl AppCore {
         let generation = pending.generation;
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            core.run_llm_request(
+            core.run_agent_loop(
                 app,
                 turn_id,
                 generation,

@@ -190,7 +190,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - 类型化 Tauri Command 负责低频请求，Tauri Event 负责状态和批量流式事件；原始音频不经过 WebView JSON 通道。
 - `reqwest` 连接 OpenAI-compatible API，并使用 SSE 接收流式回复。
 - 支持云端模型，也支持 Ollama、LM Studio 等本地兼容服务；API key 可选，只有配置后才发送 Bearer 认证头。
-- API Key 默认使用 macOS Keychain 保存；开发模式也支持项目根目录下被 Git 忽略的 `.env` 中的 `DESKTOP_AI_LLM_API_KEY`，环境变量优先且启动时不读取 LLM Keychain。`.env` 只用于本地开发，不进入发布包。
+- API Key 默认使用 macOS Keychain 保存；开发模式也支持项目根目录下被 Git 忽略的 `.env`。设置 `DESKTOP_AI_LLM_API_KEY`、`DESKTOP_AI_LLM_PROVIDER`、`DESKTOP_AI_LLM_ENDPOINT` 和 `DESKTOP_AI_LLM_MODEL` 后，真实 LLM 配置会覆盖数据库中的旧 Provider 设置，启动时不读取 LLM Keychain。`.env` 只用于本地开发，不进入发布包。
 
 ### 记忆与数据
 
@@ -331,7 +331,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml \
   audio::tests::launches_audio_host_and_completes_handshake -- --ignored
 ```
 
-应用默认使用 `mock` Provider，因此无需 API key 即可验证文字流式对话。点击聊天面板右上角设置可切换 OpenAI-compatible endpoint/model，并将 API key 保存到 macOS Keychain；设置页的“测试已保存配置”只发送固定测试文本，不携带聊天记录、记忆或屏幕图片。开发期可将 `DESKTOP_AI_LLM_API_KEY` 写入项目根目录 `.env`，程序启动时优先读取它；`.env` 已被 Git 忽略，发布构建不会加载。
+没有本地配置时仍可选择 `mock` Provider 做离线 UI/单元测试；真实对话应使用 OpenAI-compatible Provider，回复由 LLM 根据 system prompt、历史消息和本轮上下文生成，不再由输入拼接固定短句。点击聊天面板右上角设置可切换 endpoint/model，并将 API key 保存到 macOS Keychain；设置页的“测试已保存配置”只发送固定测试文本，不携带聊天记录、记忆或屏幕图片。开发期可将 `.env.example` 中的四个 `DESKTOP_AI_LLM_*` 变量复制到项目根目录 `.env`，程序启动时优先读取它们；`.env` 已被 Git 忽略，发布构建不会加载。
 
 ## 目录约定
 

@@ -136,7 +136,7 @@ pub struct ProviderSettings {
 
 impl Default for ProviderSettings {
     fn default() -> Self {
-        Self {
+        let mut settings = Self {
             provider: "mock".into(),
             endpoint: "https://api.openai.com/v1".into(),
             model: "gpt-4.1-mini".into(),
@@ -144,8 +144,34 @@ impl Default for ProviderSettings {
             allow_memory_context: false,
             vision: VisionProviderSettings::default(),
             revision: 0,
-        }
+        };
+        settings.apply_environment_overrides();
+        settings
     }
+}
+
+impl ProviderSettings {
+    /// Apply explicit local debug configuration after loading persisted settings.
+    /// This lets a project `.env` move an old `mock` database configuration to a
+    /// real OpenAI-compatible endpoint without touching the database or Keychain.
+    pub fn apply_environment_overrides(&mut self) {
+        if let Some(value) = non_empty_environment_value("DESKTOP_AI_LLM_PROVIDER") {
+            self.provider = value;
+        }
+        if let Some(value) = non_empty_environment_value("DESKTOP_AI_LLM_ENDPOINT") {
+            self.endpoint = value;
+        }
+        if let Some(value) = non_empty_environment_value("DESKTOP_AI_LLM_MODEL") {
+            self.model = value;
+        }
+        self.has_api_key = non_empty_environment_value("DESKTOP_AI_LLM_API_KEY").is_some();
+    }
+}
+
+fn non_empty_environment_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -572,7 +572,7 @@ impl Storage {
             Some((json, revision)) => {
                 let mut value: ProviderSettings = serde_json::from_str(&json).unwrap_or_default();
                 value.revision = revision;
-                value.has_api_key = std::env::var("DESKTOP_AI_LLM_API_KEY").is_ok();
+                value.apply_environment_overrides();
                 Ok(value)
             }
             None => Ok(ProviderSettings::default()),

@@ -4,7 +4,7 @@
 
 - 使用 `rusqlite` 的 bundled SQLite + FTS5，开启 `foreign_keys`、WAL 和 `busy_timeout`。
 - SQLite 只保存会话、消息、确认流程、非秘密设置与角色关系状态。
-- API key 和 provider token 默认保存到 macOS Keychain；开发模式可从项目根目录 `.env` 读取 `DESKTOP_AI_LLM_API_KEY`，环境变量优先，数据库仍不保存密钥。
+- API key 和 provider token 默认保存到 macOS Keychain；开发模式可从项目根目录 `.env` 读取 `DESKTOP_AI_LLM_API_KEY` 及 Provider 配置，环境变量优先并可覆盖旧的数据库 Provider 设置，数据库仍不保存密钥。
 - 原始麦克风 PCM、屏幕截图和 TTS 临时音频默认不落盘。
 - Rust Core 只能通过 Storage repository 写入 `memory_candidates`、`memories`、`memory_fts` 与 `relationship_state`；Provider 和前端没有数据库直连。
 

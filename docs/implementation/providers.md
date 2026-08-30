@@ -6,7 +6,7 @@
 
 MVP 基线：
 
-- LLM：一个 OpenAI-compatible SSE provider，支持自定义 base URL、model 和 Keychain credential ref；开发模式也支持被 Git 忽略的 `.env` 环境变量。
+- LLM：一个 OpenAI-compatible SSE provider，支持自定义 base URL、model 和 Keychain credential ref；开发模式也支持被 Git 忽略的 `.env` 环境变量，并通过 Agent Loop 将历史消息、模型流和后续工具结果串起来。
 - ASR：Apple Speech（经 AudioHost）为 macOS 默认；离线实现保留注册位，不阻塞 MVP。
 - TTS：Apple AVSpeechSynthesizer（经 AudioHost）为默认；云端 TTS 作为后续实现。
 - KWS/VAD：属于音频管线，不伪装成 ASR Provider。
@@ -74,7 +74,7 @@ enum LlmEvent {
 }
 ```
 
-模型主动 ToolCall 的首个循环实现已经保留，但当前默认关闭：普通对话请求不发送工具 schema，避免工具决策干扰自然交流。显式中文工具请求仍由 Rust 本地解析、确认和执行；后续重新开启模型 ToolCall 时，OpenAI-compatible Provider 才会发送严格 schema，并将确认后的工具结果作为 `tool` 消息回传模型。已有校验仍拒绝未知工具、非法 JSON 或危险参数，不能把参数当作普通文本或 Shell 指令执行。
+普通对话的 Agent Loop 会把当前输入与历史消息交给配置的真实 LLM，只有收到 LLM 的文本完成事件才写入助手消息；不会把用户输入拼接成固定回复。模型主动 ToolCall 的首个循环实现已经保留，但当前默认关闭：普通对话请求不发送工具 schema，避免工具决策干扰自然交流。显式中文工具请求仍由 Rust 本地解析、确认和执行；后续重新开启模型 ToolCall 时，OpenAI-compatible Provider 才会发送严格 schema，并将确认后的工具结果作为 `tool` 消息回传模型。已有校验仍拒绝未知工具、非法 JSON 或危险参数，不能把参数当作普通文本或 Shell 指令执行。
 确认卡片默认有 2 分钟生命周期。超时由 Core 负责清理并将对应 `tool_run` 记为 `cancelled`；`memory.save` 的 pending 候选同时标记为 `rejected`。超时路径不调用工具执行器、不产生外部副作用；模型 ToolCall 会收到未执行结果，显式用户请求则结束当前回合。确认、取消、超时三条路径通过同一交互锁串行化，并以工具调用 ID、回合 ID 和 generation 防止旧任务误伤新请求。
 
 ### 上下文装配顺序
