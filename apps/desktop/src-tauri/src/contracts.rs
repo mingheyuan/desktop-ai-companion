@@ -161,7 +161,7 @@ impl Default for PetSettings {
         Self {
             visible: true,
             click_through: false,
-            scale: 1.0,
+            scale: 0.5,
             revision: 0,
         }
     }

@@ -311,6 +311,7 @@ export function ChatPanel() {
             disabled={petUpdating}
             onChange={(event) => patchPet({ scale: Number(event.target.value) })}
           >
+            <option value={0.5}>50%</option>
             <option value={0.8}>80%</option>
             <option value={1}>100%</option>
             <option value={1.2}>120%</option>

@@ -3514,10 +3514,10 @@ fn validate_provider_settings(value: &ProviderSettings) -> Result<(), AppError> 
 }
 
 fn validate_pet_settings(value: &PetSettings) -> Result<(), AppError> {
-    if !value.scale.is_finite() || !(0.6..=1.5).contains(&value.scale) {
+    if !value.scale.is_finite() || !(0.5..=1.5).contains(&value.scale) {
         return Err(AppError::new(
             "invalid_request",
-            "桌宠缩放比例必须在 60% 到 150% 之间。",
+            "桌宠缩放比例必须在 50% 到 150% 之间。",
             false,
         ));
     }
@@ -4850,7 +4850,7 @@ mod tests {
     fn validates_pet_scale() {
         assert!(validate_pet_settings(&PetSettings::default()).is_ok());
         assert!(validate_pet_settings(&PetSettings {
-            scale: 0.5,
+            scale: 0.4,
             ..PetSettings::default()
         })
         .is_err());
