@@ -32,6 +32,8 @@ button { color: inherit; }
   border-bottom: 1px solid rgba(153, 187, 255, .13);
 }
 
+.preview-banner { margin: 12px 32px 0; padding: 10px 12px; border: 1px solid rgba(255, 199, 131, .35); border-radius: 10px; color: #ffd9a6; background: rgba(93, 59, 27, .35); font-size: 11px; line-height: 1.5; }
+
 .eyebrow { margin: 0 0 6px; color: #7896d9; font-size: 11px; letter-spacing: .2em; }
 h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .status-pill { padding: 7px 12px; border: 1px solid #5277be; border-radius: 99px; color: #9ebfff; font-size: 12px; }

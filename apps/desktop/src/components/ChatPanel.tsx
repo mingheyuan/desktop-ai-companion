@@ -36,6 +36,7 @@ export function ChatPanel() {
   const voicePermissionRestricted = snapshot.voice_permissions.microphone === "restricted"
     || snapshot.voice_permissions.speech_recognition === "restricted";
   const voiceSystemSpeechDisabled = snapshot.last_error?.code === "system_speech_disabled";
+  const browserPreview = !isTauri();
 
   useEffect(() => {
     const observation = snapshot.screen_observation;
@@ -152,6 +153,10 @@ export function ChatPanel() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (browserPreview) {
+      setSubmitError("当前是浏览器预览，请启动桌面窗口后再开始对话。");
+      return;
+    }
     const text = draft.trim();
     if (!text || submitting) return;
     setDraft("");
@@ -277,7 +282,7 @@ export function ChatPanel() {
           <h1>爱丽丝</h1>
         </div>
         <div className="header-actions">
-          <span className="provider-badge">{snapshot.provider.provider === "mock" ? "MOCK" : snapshot.provider.model}</span>
+          <span className="provider-badge">{browserPreview ? "浏览器预览" : snapshot.provider.provider === "mock" ? "MOCK" : snapshot.provider.model}</span>
           <span
             className="relationship-badge"
             title={`已完成 ${snapshot.relationship.interaction_count} 次互动，熟悉度 ${Math.round(snapshot.relationship.familiarity * 100)}%`}
@@ -291,6 +296,12 @@ export function ChatPanel() {
           <button className="icon-button" type="button" onClick={() => setSettingsOpen(true)} aria-label="打开设置">⚙</button>
         </div>
       </header>
+
+      {browserPreview && (
+        <div className="preview-banner" role="status">
+          这是浏览器预览，只展示界面，不连接 Rust Core、模型或本地记忆。请从桌面应用窗口进行对话。
+        </div>
+      )}
 
       <nav className="pet-controls" aria-label="桌宠窗口控制">
         <button type="button" disabled={petUpdating} onClick={() => patchPet({ visible: !snapshot.pet.visible })}>
@@ -541,12 +552,13 @@ export function ChatPanel() {
           }}
           placeholder="和爱丽丝说点什么…"
           rows={2}
+          disabled={browserPreview}
         />
         <div className="composer-actions">
           {snapshot.active_turn_id && snapshot.turn_state !== "completed" && (
             <button type="button" className="secondary" onClick={() => cancelTurn(snapshot.active_turn_id!)}>停止</button>
           )}
-          <button type="submit" disabled={!draft.trim() || submitting}>发送</button>
+          <button type="submit" disabled={browserPreview || !draft.trim() || submitting}>发送</button>
         </div>
       </form>
       {settingsOpen && (
