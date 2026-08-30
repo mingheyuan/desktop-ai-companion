@@ -376,6 +376,7 @@ export function ChatPanel() {
             <span className="tool-risk-badge">需要确认</span>
           </div>
           <p className="tool-approval-summary">{snapshot.pending_tool_approval.summary}</p>
+          <p className={`tool-approval-expiry ${snapshot.pending_tool_approval.expires_at_ms - clockMs <= 15_000 ? "urgent" : ""}`} aria-live="polite">确认有效期：{formatTimerRemaining(snapshot.pending_tool_approval.expires_at_ms, clockMs)}</p>
           {snapshot.pending_tool_approval.url && <code className="tool-url">{snapshot.pending_tool_approval.url}</code>}
           {snapshot.pending_tool_approval.host && <p className="tool-host">目标域名：{snapshot.pending_tool_approval.host}</p>}
           {snapshot.pending_tool_approval.title && <p className="tool-host">{snapshot.pending_tool_approval.tool_name === "memory.save" || snapshot.pending_tool_approval.tool_name === "memory.delete" ? "记忆内容" : "提醒内容"}：{snapshot.pending_tool_approval.title}</p>}

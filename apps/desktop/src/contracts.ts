@@ -105,6 +105,7 @@ export interface ToolApproval {
   host?: string;
   title?: string;
   due_at_ms?: number;
+  expires_at_ms: number;
 }
 
 export interface TimerItem {

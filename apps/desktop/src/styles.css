@@ -69,6 +69,8 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .tool-approval-heading h2 { margin: 0; font-size: 16px; }
 .tool-risk-badge { border: 1px solid rgba(255, 200, 107, .4); border-radius: 999px; padding: 5px 8px; color: #ffd18b; font-size: 10px; white-space: nowrap; }
 .tool-approval-summary, .tool-host { margin: 8px 0 0; color: #b8c5e1; font-size: 11px; line-height: 1.5; }
+.tool-approval-expiry { margin: 9px 0 0; color: #ffd18b; font-size: 10px; }
+.tool-approval-expiry.urgent { color: #ff9db1; }
 .tool-url { display: block; overflow: hidden; margin-top: 11px; border: 1px solid rgba(149, 177, 237, .2); border-radius: 9px; padding: 9px 10px; color: #e8efff; background: rgba(5, 11, 28, .46); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .tool-approval-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .tool-approval-actions button { border: 0; border-radius: 9px; padding: 8px 13px; color: #eef5ff; background: #3979dd; cursor: pointer; font-size: 11px; }

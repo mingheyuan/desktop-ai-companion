@@ -258,6 +258,7 @@ pub struct ToolApproval {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub due_at_ms: Option<i64>,
+    pub expires_at_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

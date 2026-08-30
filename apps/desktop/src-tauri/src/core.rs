@@ -135,7 +135,8 @@ struct ModelToolContext<'a> {
 
 const MAX_TOOL_STEPS: u8 = 3;
 const SCREEN_OBSERVATION_TTL_MS: i64 = 5 * 60 * 1_000;
-const TOOL_APPROVAL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+const TOOL_APPROVAL_TIMEOUT_MS: i64 = 2 * 60 * 1_000;
+const TOOL_APPROVAL_TIMEOUT: Duration = Duration::from_millis(TOOL_APPROVAL_TIMEOUT_MS as u64);
 
 pub struct AppCore {
     storage: Storage,
@@ -582,6 +583,7 @@ impl AppCore {
                         host: Some(request.host),
                         title: None,
                         due_at_ms: None,
+                        expires_at_ms: Self::tool_approval_expiry_ms(),
                     },
                     turn_id: turn_id.clone(),
                     generation,
@@ -602,6 +604,7 @@ impl AppCore {
                             host: None,
                             title: Some(request.title.clone()),
                             due_at_ms: Some(request.due_at_ms),
+                            expires_at_ms: Self::tool_approval_expiry_ms(),
                         },
                         turn_id: turn_id.clone(),
                         generation,
@@ -629,6 +632,7 @@ impl AppCore {
                             host: None,
                             title: Some(content.clone()),
                             due_at_ms: None,
+                            expires_at_ms: Self::tool_approval_expiry_ms(),
                         },
                         turn_id: turn_id.clone(),
                         generation,
@@ -650,6 +654,7 @@ impl AppCore {
                             host: None,
                             title: Some(memory.content.clone()),
                             due_at_ms: None,
+                            expires_at_ms: Self::tool_approval_expiry_ms(),
                         },
                         turn_id: turn_id.clone(),
                         generation,
@@ -675,6 +680,7 @@ impl AppCore {
                             host: None,
                             title: Some(timer.title.clone()),
                             due_at_ms: Some(timer.due_at_ms),
+                            expires_at_ms: Self::tool_approval_expiry_ms(),
                         },
                         turn_id: turn_id.clone(),
                         generation,
@@ -700,6 +706,7 @@ impl AppCore {
                             host: None,
                             title: None,
                             due_at_ms: None,
+                            expires_at_ms: Self::tool_approval_expiry_ms(),
                         },
                         turn_id: turn_id.clone(),
                         generation,
@@ -1272,6 +1279,7 @@ impl AppCore {
                 host: candidate.host,
                 title: candidate.title,
                 due_at_ms: candidate.due_at_ms,
+                expires_at_ms: Self::tool_approval_expiry_ms(),
             },
             turn_id: context.turn_id.to_owned(),
             generation: context.generation,
@@ -1369,6 +1377,10 @@ impl AppCore {
                 && tool.turn_id == turn_id
                 && tool.generation == generation
         })
+    }
+
+    fn tool_approval_expiry_ms() -> i64 {
+        now_ms().saturating_add(TOOL_APPROVAL_TIMEOUT_MS)
     }
 
     async fn emit_pending_delta(
@@ -4591,6 +4603,7 @@ mod tests {
                 host: Some("example.com".into()),
                 title: None,
                 due_at_ms: None,
+                expires_at_ms: 2_000,
             },
             turn_id: "turn-1".into(),
             generation: 3,
