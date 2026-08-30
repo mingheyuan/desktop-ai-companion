@@ -163,6 +163,21 @@ export function ChatPanel() {
     }
   };
 
+  const rereadScreen = async () => {
+    if (submitting || !isTauri()) return;
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      await submitText("请帮我看一下当前屏幕");
+    } catch (reason) {
+      if (typeof reason === "string") setSubmitError(reason);
+      else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setSubmitError(reason.message);
+      else setSubmitError("重新读取屏幕失败。");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const decidePendingTool = async (approved: boolean) => {
     const pending = snapshot.pending_tool_approval;
     if (!pending || toolBusy || !isTauri()) return;
@@ -449,10 +464,13 @@ export function ChatPanel() {
               <p className="eyebrow">LOCAL ONLY</p>
               <h2>本地屏幕预览</h2>
             </div>
-            <button className="icon-button" type="button" disabled={screenPreviewBusy} onClick={() => void clearScreenPreview()} aria-label="清除屏幕预览">×</button>
+            <div className="screen-preview-actions">
+              <button className="header-text-button" type="button" disabled={submitting || !isTauri()} onClick={() => void rereadScreen()}>重新读取</button>
+              <button className="icon-button" type="button" disabled={screenPreviewBusy} onClick={() => void clearScreenPreview()} aria-label="清除屏幕预览">×</button>
+            </div>
           </div>
           {screenPreviewUrl ? <img className="screen-preview-image" src={screenPreviewUrl} alt="当前屏幕的本地临时预览" /> : <p className="timer-empty">正在准备本地预览…</p>}
-          <p className="screen-preview-note">截图只保存在当前应用进程内存中，未发送给聊天或视觉模型。关闭、清除预览或 5 分钟自动过期后会释放它。</p>
+          <p className="screen-preview-note">截图只保存在当前应用进程内存中，未发送给聊天或视觉模型。{formatTimerRemaining(snapshot.screen_observation.expires_at_ms, clockMs)}后自动清除；也可以手动清除。</p>
           {screenPreviewError && <p className="settings-error">{screenPreviewError}</p>}
         </section>
       )}
