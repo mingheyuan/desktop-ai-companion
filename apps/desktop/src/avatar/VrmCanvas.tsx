@@ -13,6 +13,22 @@ interface VrmCanvasProps {
   modelUrl?: string;
 }
 
+export function clampGaze(value: number): number {
+  return Number.isFinite(value) ? THREE.MathUtils.clamp(value, -1, 1) : 0;
+}
+
+export function gazeFromPointer(
+  clientX: number,
+  clientY: number,
+  rect: Pick<DOMRect, "left" | "top" | "width" | "height">,
+) {
+  if (!rect.width || !rect.height) return { x: 0, y: 0 };
+  return {
+    x: clampGaze((clientX - (rect.left + rect.width / 2)) / (rect.width / 2)),
+    y: clampGaze(((rect.top + rect.height / 2) - clientY) / (rect.height / 2)),
+  };
+}
+
 const stateColors: Record<AvatarSemanticState, number> = {
   idle: 0x79a9ff,
   listening: 0x70e1c1,
@@ -123,6 +139,31 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
     scene.add(fallback);
     if ("weapon" in preview && preview.weapon) preview.weapon.visible = showReferenceWeapon;
 
+    const lookTarget = new THREE.Object3D();
+    lookTarget.name = "desktop-ai-gaze-target";
+    lookTarget.position.set(0, 1.25, 3.2);
+    scene.add(lookTarget);
+    const headWorldPosition = new THREE.Vector3();
+    const pointerGaze = { x: 0, y: 0 };
+    let gazeX = 0;
+    let gazeY = 0;
+    const onPointerMove = (event: PointerEvent) => {
+      pointerGaze.x = 0;
+      pointerGaze.y = 0;
+      const rect = host.getBoundingClientRect();
+      if (
+        event.clientX >= rect.left
+        && event.clientX <= rect.right
+        && event.clientY >= rect.top
+        && event.clientY <= rect.bottom
+      ) {
+        const next = gazeFromPointer(event.clientX, event.clientY, rect);
+        pointerGaze.x = next.x;
+        pointerGaze.y = next.y;
+      }
+    };
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+
     let vrm: VRM | null = null;
     let vrmHead: THREE.Object3D | null = null;
     let vrmSpine: THREE.Object3D | null = null;
@@ -189,6 +230,8 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
       lastRenderAt = now;
       const delta = Math.min(clock.getDelta(), 0.05);
       const elapsed = clock.elapsedTime;
+      gazeX = THREE.MathUtils.damp(gazeX, pointerGaze.x, 9, delta);
+      gazeY = THREE.MathUtils.damp(gazeY, pointerGaze.y, 9, delta);
       const listeningWeight = semantic === "listening" ? 1 : 0;
       const thinkingWeight = semantic === "thinking" ? 1 : 0;
       const speakingWeight = semantic === "speaking" ? 1 : 0;
@@ -205,18 +248,28 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
       preview.haloMaterial.color.setHex(stateColors[semantic] === stateColors.error ? 0xff93a9 : stateColors[semantic]);
       fallback.position.y = Math.sin(elapsed * (semantic === "speaking" ? 4 : 1.5)) * (useReferencePreview ? 0.018 : 0.025);
       fallback.rotation.y = (useReferencePreview ? 0.1 : 0) + Math.sin(elapsed * 0.55) * (useReferencePreview ? 0.035 : 0.08);
-      preview.head.rotation.set(headPitch, headYaw, headRoll);
+      preview.head.rotation.set(headPitch + gazeY * 0.07, headYaw + gazeX * 0.16, headRoll - gazeX * 0.018);
       preview.body.scale.y = 1 + breath * 0.012;
       preview.leftEye.scale.y = preview.rightEye.scale.y = Math.max(0.08, 1 - blink);
       preview.mouth.scale.y = 0.15 * (1 + smoothedMouth * 5);
       preview.halo.rotation.y = Math.sin(elapsed * 0.45) * (useReferencePreview ? 0.04 : 0.06);
       if (vrm) {
+        if (vrm.lookAt && vrmHead) {
+          vrmHead.getWorldPosition(headWorldPosition);
+          lookTarget.position.set(
+            headWorldPosition.x + gazeX * 1.35 + headYaw * 3.2,
+            headWorldPosition.y + gazeY * 1.0 - headPitch * 2.8,
+            headWorldPosition.z + 3.2,
+          );
+          vrm.lookAt.target = lookTarget;
+          vrm.lookAt.autoUpdate = true;
+        }
         vrm.expressionManager?.setValue("happy", semantic === "ready" ? 0.55 : 0);
         vrm.expressionManager?.setValue("surprised", semantic === "needs_input" ? 0.35 : 0);
         vrm.expressionManager?.setValue("blink", blink);
         vrm.expressionManager?.setValue("aa", smoothedMouth);
-        if (vrmHead && vrmHeadBase) {
-          vrmHead.rotation.set(vrmHeadBase.x + headPitch, vrmHeadBase.y + headYaw, vrmHeadBase.z + headRoll, vrmHeadBase.order);
+        if (vrmHead && vrmHeadBase && !vrm.lookAt) {
+          vrmHead.rotation.set(vrmHeadBase.x + headPitch + gazeY * 0.07, vrmHeadBase.y + headYaw + gazeX * 0.16, vrmHeadBase.z + headRoll - gazeX * 0.018, vrmHeadBase.order);
         }
         if (vrmSpine && vrmSpineBase) {
           vrmSpine.rotation.set(vrmSpineBase.x + breath * 0.008, vrmSpineBase.y, vrmSpineBase.z + thinkingWeight * -0.025, vrmSpineBase.order);
@@ -231,6 +284,8 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
       disposed = true;
       cancelAnimationFrame(frame);
       observer.disconnect();
+      window.removeEventListener("pointermove", onPointerMove);
+      scene.remove(lookTarget);
       if (vrm) {
         scene.remove(vrm.scene);
         VRMUtils.deepDispose(vrm.scene);

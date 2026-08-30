@@ -296,6 +296,8 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 ## 当前状态
 
+桌宠表现已补充鼠标注视：程序化预览使用平滑头部转向，正式 VRM 优先使用 three-vrm 的 `lookAt` 目标；鼠标离开桌宠区域后自动回到正视位置。
+
 已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。`memory.save` 现在会先形成持久化待确认候选，用户可在确认卡或记忆面板审核，并可在记忆面板确认前编辑候选正文；确认后才原子写入长期记忆、FTS 和审计，拒绝或取消不会自动落库。候选列表会提示与已有候选或长期记忆完全重复的内容，直接保存、候选确认和正式记忆编辑都会阻止产生精确重复。记忆面板还提供本地数据摘要与二次确认入口，可独立清空聊天记录或全部长期记忆，不影响 Provider、角色模型和桌宠设置。`system.open_url`、一次性本地提醒、`memory.save`、显式 `memory.delete` 和本地 `screen.observe` 已形成确认卡片、执行、结果回传和 `tool_runs` 审计闭环；主面板可查看最近工具调用的本地审计摘要，不展示原始参数。提醒支持相对时间和明确绝对日期/时间、主面板实时倒计时、待处理/最近历史查看、聊天中唯一匹配后确认取消、重启恢复和 macOS 用户级离线通知，屏幕观察支持确认后本地预览和 macOS Vision 本地 OCR、手动清除以及 5 分钟自动过期释放。当前限制是单次单工具调用、每轮最多 3 步、绝对时间仅限未来 7 天内的一次性提醒、截图和 OCR 尚未发送到 Vision Provider，尚未接入并行工具和 GUI 自动化。
 
 语音首个闭环已完成代码接入：Swift `AudioHost.app`、UDS 安全握手、control socket heartbeat、权限状态、PTT、Apple Speech partial/final、设备端“爱丽丝”及少量中文同音变体持续唤醒、`AVSpeechSynthesizer` 回复、停止朗读和新输入打断。发音区间事件会经过 `turn_id + generation` 过滤后驱动 VRM `aa` 表情；角色另有 idle/listening/thinking/speaking 基础程序化姿态、眨眼与呼吸。Rust、前端、Swift 编译均已通过，并有不请求权限的真实 `.app` 握手测试。MVP 正式验收仍需要稳定本地签名后的首次实机授权，以及 PTT、TTS、唤醒词和持续监听的长时间实测。Sherpa KWS/VAD、正式 VRMA 动作和真实 PCM/RMS 口型属于后续质量增强，不替代当前可运行 fallback 的验收。
