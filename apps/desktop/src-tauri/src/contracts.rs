@@ -296,6 +296,7 @@ pub struct ToolRunSummary {
 pub struct ScreenObservation {
     pub id: String,
     pub captured_at_ms: i64,
+    pub expires_at_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]

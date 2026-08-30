@@ -228,7 +228,7 @@ screen.observe
 - 每次采集显示明显的“正在读取屏幕”状态；托盘提供立即暂停入口。
 - Tool MVP 不做连续录屏、历史回溯或后台自动截图。
 
-当前已实现的是上述范围的最小安全切片：仅接受显式中文观察意图，统一走 `screen.observe` 确认卡片；确认后使用 macOS `screencapture` 读取一次整屏 PNG，暂存在 Rust 进程内存中供主面板预览。当前还没有窗口/显示器/区域选择，截图也不会发送给任何模型。
+当前已实现的是上述范围的最小安全切片：仅接受显式中文观察意图，统一走 `screen.observe` 确认卡片；确认后使用 macOS `screencapture` 读取一次整屏 PNG，暂存在 Rust 进程内存中供主面板预览，5 分钟后自动过期释放，也可以手动清除。当前还没有窗口/显示器/区域选择，截图也不会发送给任何模型。
 
 ### 8.2 处理链路
 
@@ -265,7 +265,7 @@ vision.api_key (Keychain account: vision.default)
 - 当前配置使用独立的 `vision.default` Keychain 条目，不复用或暴露聊天 Key；设置页可以单独开启、修改 endpoint/model 和 Key。
 - Provider 必须声明 `image_input` 能力，不能只根据模型名称猜测。
 - 上传前显示采集范围、目标 Provider 和是否会离开本机。
-- 用户明确说“看一下屏幕”等请求后，应用先展示 `screen.observe` 确认卡片；允许后才调用 macOS `screencapture` 生成一次 PNG，并把图片暂存在当前进程内存中供主面板预览。图片可以手动清除，应用退出时也会随进程释放。
+- 用户明确说“看一下屏幕”等请求后，应用先展示 `screen.observe` 确认卡片；允许后才调用 macOS `screencapture` 生成一次 PNG，并把图片暂存在当前进程内存中供主面板预览。图片可以手动清除，成功采集后 5 分钟自动过期，应用退出时也会随进程释放。
 - 当前本地预览不会调用聊天 Provider 或 Vision Provider；截图尚未上传或分析，后续仍需增加 `never | ask_each_time | allow_for_session` 数据发送策略，并在“发送给视觉模型”前单独确认。
 - 原始截图默认不写入聊天记录、记忆或诊断日志；模型结果也不会自动成为长期记忆。
 

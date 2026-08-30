@@ -139,6 +139,7 @@ export interface ToolRunSummary {
 export interface ScreenObservation {
   id: string;
   captured_at_ms: number;
+  expires_at_ms: number;
 }
 
 export interface AppSnapshot {

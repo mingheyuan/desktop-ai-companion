@@ -134,6 +134,7 @@ struct ModelToolContext<'a> {
 }
 
 const MAX_TOOL_STEPS: u8 = 3;
+const SCREEN_OBSERVATION_TTL_MS: i64 = 5 * 60 * 1_000;
 
 pub struct AppCore {
     storage: Storage,
@@ -311,12 +312,15 @@ impl AppCore {
             .storage
             .list_tool_runs(&self.conversation_id, 30)
             .map_err(storage_error)?;
-        let screen_observation = self
-            .screen_observation
-            .read()
-            .await
-            .as_ref()
-            .map(|record| record.metadata.clone());
+        let screen_observation = {
+            let mut observation = self.screen_observation.write().await;
+            if observation.as_ref().is_some_and(|record| {
+                screen_observation_expired(record.metadata.expires_at_ms, now_ms())
+            }) {
+                *observation = None;
+            }
+            observation.as_ref().map(|record| record.metadata.clone())
+        };
         Ok(AppSnapshot {
             revision: runtime.revision,
             listening_mode: runtime.listening_mode,
@@ -1832,7 +1836,7 @@ impl AppCore {
     }
 
     async fn capture_screen_observation(
-        &self,
+        self: &Arc<Self>,
         app: &AppHandle,
     ) -> Result<ScreenObservation, AppError> {
         let png = capture_screen_png().await?;
@@ -1850,9 +1854,11 @@ impl AppCore {
                 false,
             ));
         }
+        let captured_at_ms = now_ms();
         let metadata = ScreenObservation {
             id: Uuid::now_v7().to_string(),
-            captured_at_ms: now_ms(),
+            captured_at_ms,
+            expires_at_ms: captured_at_ms.saturating_add(SCREEN_OBSERVATION_TTL_MS),
         };
         *self.screen_observation.write().await = Some(ScreenObservationRecord {
             metadata: metadata.clone(),
@@ -1863,6 +1869,30 @@ impl AppCore {
             *self.screen_observation.write().await = None;
             return Err(error);
         }
+        let weak_core = Arc::downgrade(self);
+        let observation_id = metadata.id.clone();
+        let expiration_app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(SCREEN_OBSERVATION_TTL_MS as u64)).await;
+            let Some(core) = weak_core.upgrade() else {
+                return;
+            };
+            let removed = {
+                let mut observation = core.screen_observation.write().await;
+                let should_remove = observation.as_ref().is_some_and(|record| {
+                    record.metadata.id == observation_id
+                        && screen_observation_expired(record.metadata.expires_at_ms, now_ms())
+                });
+                if should_remove {
+                    *observation = None;
+                }
+                should_remove
+            };
+            if removed {
+                core.runtime.write().await.revision += 1;
+                let _ = core.emit_snapshot(&expiration_app).await;
+            }
+        });
         Ok(metadata)
     }
 
@@ -1877,7 +1907,17 @@ impl AppCore {
                 false,
             ));
         }
-        let observation = self.screen_observation.read().await;
+        let mut observation = self.screen_observation.write().await;
+        if observation.as_ref().is_some_and(|record| {
+            screen_observation_expired(record.metadata.expires_at_ms, now_ms())
+        }) {
+            *observation = None;
+            return Err(AppError::new(
+                "screen_observation_expired",
+                "本地屏幕预览已自动过期，请重新读取。",
+                false,
+            ));
+        }
         let Some(record) = observation.as_ref() else {
             return Err(AppError::new(
                 "not_found",
@@ -3139,6 +3179,10 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+fn screen_observation_expired(expires_at_ms: i64, now_ms: i64) -> bool {
+    now_ms >= expires_at_ms
 }
 
 fn storage_error(error: rusqlite::Error) -> AppError {
@@ -4531,6 +4575,17 @@ mod tests {
         assert!(parse_explicit_screen_observe_request("不要看我的屏幕").is_none());
         assert!(parse_explicit_screen_observe_request("取消屏幕观察").is_none());
         assert!(parse_explicit_screen_observe_request("你好吗").is_none());
+    }
+
+    #[test]
+    fn screen_observation_expires_at_ttl_boundary() {
+        let captured_at_ms = 100;
+        let expires_at_ms = captured_at_ms + SCREEN_OBSERVATION_TTL_MS;
+        assert!(!screen_observation_expired(
+            expires_at_ms,
+            expires_at_ms - 1
+        ));
+        assert!(screen_observation_expired(expires_at_ms, expires_at_ms));
     }
 
     #[test]

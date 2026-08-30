@@ -452,7 +452,7 @@ export function ChatPanel() {
             <button className="icon-button" type="button" disabled={screenPreviewBusy} onClick={() => void clearScreenPreview()} aria-label="清除屏幕预览">×</button>
           </div>
           {screenPreviewUrl ? <img className="screen-preview-image" src={screenPreviewUrl} alt="当前屏幕的本地临时预览" /> : <p className="timer-empty">正在准备本地预览…</p>}
-          <p className="screen-preview-note">截图只保存在当前应用进程内存中，未发送给聊天或视觉模型。关闭或清除预览后会释放它。</p>
+          <p className="screen-preview-note">截图只保存在当前应用进程内存中，未发送给聊天或视觉模型。关闭、清除预览或 5 分钟自动过期后会释放它。</p>
           {screenPreviewError && <p className="settings-error">{screenPreviewError}</p>}
         </section>
       )}
