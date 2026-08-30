@@ -94,6 +94,8 @@
 
 视觉 Provider 的独立启用开关、endpoint、模型名和 Keychain API key 已可在设置中保存；当前不会自动采集或上传屏幕。显式 `screen.observe` 只会在确认后生成本地临时预览，真正的数据出站仍需单独授权和实现。
 
+工具确认卡片默认保留 2 分钟；超时会自动取消且不执行动作，模型发起的调用会收到未执行结果，记忆候选不会落库。
+
 ### 语音
 
 语音交互会参考本人的 [realtime-ai-translation](https://github.com/mingheyuan/realtime-ai-translation) 项目，重点借鉴：

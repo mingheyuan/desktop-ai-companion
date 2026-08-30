@@ -135,6 +135,7 @@ struct ModelToolContext<'a> {
 
 const MAX_TOOL_STEPS: u8 = 3;
 const SCREEN_OBSERVATION_TTL_MS: i64 = 5 * 60 * 1_000;
+const TOOL_APPROVAL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
 pub struct AppCore {
     storage: Storage,
@@ -797,7 +798,13 @@ impl AppCore {
         }
         self.emit_snapshot(&app).await?;
 
-        if pending_tool.is_some() {
+        if let Some(pending) = pending_tool.as_ref() {
+            self.schedule_tool_approval_expiration(
+                app.clone(),
+                pending.approval.tool_call_id.clone(),
+                pending.turn_id.clone(),
+                pending.generation,
+            );
             return Ok(());
         }
 
@@ -1137,7 +1144,7 @@ impl AppCore {
     }
 
     async fn queue_model_tool_call(
-        &self,
+        self: &Arc<Self>,
         context: ModelToolContext<'_>,
         call: ToolCall,
     ) -> Result<(), AppError> {
@@ -1257,7 +1264,7 @@ impl AppCore {
         });
         let pending = PendingTool {
             approval: ToolApproval {
-                tool_call_id,
+                tool_call_id: tool_call_id.clone(),
                 tool_name: call.name.clone(),
                 display_name: candidate.display_name,
                 summary: candidate.summary,
@@ -1283,7 +1290,85 @@ impl AppCore {
             runtime.generation_state = GenerationState::Finished;
             runtime.pending_tool = Some(pending);
         }
-        self.emit_snapshot(context.app).await
+        self.emit_snapshot(context.app).await?;
+        self.schedule_tool_approval_expiration(
+            context.app.clone(),
+            tool_call_id,
+            context.turn_id.to_owned(),
+            context.generation,
+        );
+        Ok(())
+    }
+
+    fn schedule_tool_approval_expiration(
+        self: &Arc<Self>,
+        app: AppHandle,
+        tool_call_id: String,
+        turn_id: String,
+        generation: u64,
+    ) {
+        let weak_core = Arc::downgrade(self);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(TOOL_APPROVAL_TIMEOUT).await;
+            let Some(core) = weak_core.upgrade() else {
+                return;
+            };
+            let _interaction_guard = core.interaction_command.lock().await;
+            let pending = {
+                let mut runtime = core.runtime.write().await;
+                if !Self::tool_approval_matches(
+                    runtime.pending_tool.as_ref(),
+                    &tool_call_id,
+                    &turn_id,
+                    generation,
+                ) {
+                    return;
+                }
+                let pending = runtime.pending_tool.take().expect("pending tool exists");
+                runtime.revision += 1;
+                runtime.turn_state = TurnState::Active;
+                runtime.generation_state = GenerationState::Finished;
+                pending
+            };
+            if matches!(&pending.action, PendingToolAction::SaveMemory { .. }) {
+                let _ = core
+                    .storage
+                    .reject_memory_candidate(&pending.approval.tool_call_id, now_ms());
+            }
+            let _ = core.storage.finish_tool_run(
+                &pending.approval.tool_call_id,
+                "cancelled",
+                "确认超时，工具未执行。",
+                now_ms(),
+            );
+            let _ = core.emit_snapshot(&app).await;
+            if matches!(&pending.origin, PendingToolOrigin::Model { .. }) {
+                let _ = core
+                    .resume_model_tool(&app, pending, "用户未在 2 分钟内确认，工具未执行。".into())
+                    .await;
+            } else {
+                core.complete_turn(
+                    &app,
+                    &pending.turn_id,
+                    pending.generation,
+                    "好的，老师，这次工具确认已超时，动作没有执行。",
+                )
+                .await;
+            }
+        });
+    }
+
+    fn tool_approval_matches(
+        pending: Option<&PendingTool>,
+        tool_call_id: &str,
+        turn_id: &str,
+        generation: u64,
+    ) -> bool {
+        pending.is_some_and(|tool| {
+            tool.approval.tool_call_id == tool_call_id
+                && tool.turn_id == turn_id
+                && tool.generation == generation
+        })
     }
 
     async fn emit_pending_delta(
@@ -4492,6 +4577,48 @@ mod tests {
             ..PetSettings::default()
         })
         .is_err());
+    }
+
+    #[test]
+    fn matches_tool_approval_identity_and_generation() {
+        let pending = PendingTool {
+            approval: ToolApproval {
+                tool_call_id: "tool-1".into(),
+                tool_name: "system.open_url".into(),
+                display_name: "打开网页".into(),
+                summary: "打开 example.com".into(),
+                url: Some("https://example.com".into()),
+                host: Some("example.com".into()),
+                title: None,
+                due_at_ms: None,
+            },
+            turn_id: "turn-1".into(),
+            generation: 3,
+            action: PendingToolAction::OpenUrl {
+                url: "https://example.com".into(),
+            },
+            origin: PendingToolOrigin::Explicit,
+        };
+
+        assert!(AppCore::tool_approval_matches(
+            Some(&pending),
+            "tool-1",
+            "turn-1",
+            3
+        ));
+        assert!(!AppCore::tool_approval_matches(
+            Some(&pending),
+            "tool-1",
+            "turn-1",
+            4
+        ));
+        assert!(!AppCore::tool_approval_matches(
+            Some(&pending),
+            "tool-2",
+            "turn-1",
+            3
+        ));
+        assert!(!AppCore::tool_approval_matches(None, "tool-1", "turn-1", 3));
     }
 
     #[test]
