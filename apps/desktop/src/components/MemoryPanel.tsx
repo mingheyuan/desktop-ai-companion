@@ -155,6 +155,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
     try {
       const nextSummary = scope === "conversation" ? await clearConversationData() : await clearMemoryData();
       setSummary(nextSummary);
+      await loadCandidates();
       setConfirming(null);
       if (scope === "memories") {
         setEditing(null);
