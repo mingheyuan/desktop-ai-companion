@@ -3095,6 +3095,7 @@ impl AppCore {
                     code,
                     "on_device_wake_unavailable"
                         | "wake_recognition_unavailable"
+                        | "system_speech_disabled"
                         | "permission_denied"
                 ) {
                     self.listening_requested.store(false, Ordering::SeqCst);

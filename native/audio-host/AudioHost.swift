@@ -110,6 +110,18 @@ private func speechStatus() -> String {
     }
 }
 
+private func speechFailure(_ error: Error) -> (code: String, message: String) {
+    let description = error.localizedDescription
+    let normalized = description.lowercased()
+    if normalized.contains("siri") && normalized.contains("dictation") {
+        return (
+            "system_speech_disabled",
+            "macOS 的 Siri 和听写已关闭，持续监听已停止。请在“系统设置 → Siri 与 Spotlight”和“键盘 → 听写”中开启，然后重新刷新语音状态。"
+        )
+    }
+    return ("recognition_failed", description)
+}
+
 private func emitPermissionStatus() {
     emit([
         "type": "permissions.status",
@@ -300,6 +312,7 @@ private final class VoiceController {
         }
         if let error, !finishing {
             let wasWake = mode == .wake
+            let failure = speechFailure(error)
             stop(cancelled: true)
             if wasWake {
                 wakeErrorCount += 1
@@ -307,13 +320,15 @@ private final class VoiceController {
                     armed = false
                     emit([
                         "type": "voice.error",
-                        "code": "wake_recognition_unavailable",
-                        "message": "设备端持续识别连续失败，已关闭持续监听：\(error.localizedDescription)"
+                        "code": failure.code == "system_speech_disabled" ? failure.code : "wake_recognition_unavailable",
+                        "message": failure.code == "system_speech_disabled"
+                            ? failure.message
+                            : "设备端持续识别连续失败，已关闭持续监听：\(failure.message)"
                     ])
                     return
                 }
             }
-            emit(["type": "voice.error", "code": "recognition_failed", "message": error.localizedDescription])
+            emit(["type": "voice.error", "code": failure.code, "message": failure.message])
             restartWakeIfNeeded()
         }
     }

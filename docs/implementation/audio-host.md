@@ -132,6 +132,7 @@ speech_recognition: not_determined | denied | restricted | authorized
 
 - 只在用户主动启用语音/监听时请求权限，不在首次启动自动弹窗。
 - denied/restricted 时给出打开系统设置的 UI action；AudioHost 自己不循环请求。
+- 如果 Apple Speech 返回 `Siri and Dictation are disabled`，映射为 `system_speech_disabled`：停止持续监听并提示用户在“系统设置 → Siri 与 Spotlight”和“键盘 → 听写”中开启；PTT 仍作为临时交互入口。
 - 权限变化会终止相关 session 并通知 Rust；文本和不依赖该权限的能力继续工作。
 - 应用必须有明确的麦克风活动指示、暂停入口和托盘状态。
 

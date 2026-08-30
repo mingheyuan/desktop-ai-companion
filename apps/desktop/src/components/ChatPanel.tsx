@@ -35,6 +35,7 @@ export function ChatPanel() {
     || snapshot.voice_permissions.speech_recognition === "denied";
   const voicePermissionRestricted = snapshot.voice_permissions.microphone === "restricted"
     || snapshot.voice_permissions.speech_recognition === "restricted";
+  const voiceSystemSpeechDisabled = snapshot.last_error?.code === "system_speech_disabled";
 
   useEffect(() => {
     const observation = snapshot.screen_observation;
@@ -340,7 +341,14 @@ export function ChatPanel() {
             <button type="button" disabled={voiceBusy || !isTauri()} onClick={() => runVoiceAction(requestVoicePermissions)}>刷新权限</button>
           </>
         )}
+        {voiceSystemSpeechDisabled && !voicePermissionDenied && (
+          <>
+            <button type="button" disabled={voiceBusy || !isTauri()} onClick={() => runVoiceAction(openVoicePrivacySettings)}>打开语音设置</button>
+            <button type="button" disabled={voiceBusy || !isTauri()} onClick={() => runVoiceAction(requestVoicePermissions)}>刷新语音状态</button>
+          </>
+        )}
         {voicePermissionRestricted && <span className="voice-error">语音权限受系统策略限制</span>}
+        {voiceSystemSpeechDisabled && <span className="voice-error">请开启 Siri 和“听写”后再开启持续监听；临时可使用“按住说话”。</span>}
         <button
           type="button"
           disabled={voiceBusy || !isTauri() || snapshot.voice_permissions.microphone !== "authorized" || snapshot.voice_permissions.speech_recognition !== "authorized"}

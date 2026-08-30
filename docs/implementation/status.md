@@ -32,7 +32,7 @@
 - ASR 使用 `capture_id + generation + recognition_epoch + revision` 拒绝过期回调；TTS 使用 `turn_id + generation` 拒绝过期播放回调。
 - 当前只有 JSONL control socket，不传输 PCM；socket 明确断线已有三次退避恢复，二进制 media socket、heartbeat、request/response ACK 和半开故障检测属于下一协议小版本。
 
-当前已注册的语音 Tauri commands：`voice_request_permissions`、`voice_open_privacy_settings`、`voice_set_listening_mode`、`voice_ptt_start`、`voice_ptt_finish`、`playback_stop`、`voice_update_settings`；工具决策 command 为 `tool_decide`。React 不直接连接 AudioHost，所有状态以 Rust `AppSnapshot` 为准。权限被拒绝后，UI 可打开系统设置并显式刷新状态；`restricted` 只提示系统策略限制，不重复请求。
+当前已注册的语音 Tauri commands：`voice_request_permissions`、`voice_open_privacy_settings`、`voice_set_listening_mode`、`voice_ptt_start`、`voice_ptt_finish`、`playback_stop`、`voice_update_settings`；工具决策 command 为 `tool_decide`。React 不直接连接 AudioHost，所有状态以 Rust `AppSnapshot` 为准。权限被拒绝后，UI 可打开系统设置并显式刷新状态；`restricted` 只提示系统策略限制，不重复请求；Apple Speech 返回 Siri/听写关闭时，错误码为 `system_speech_disabled`，UI 会提供语音设置入口并建议临时使用 PTT。
 
 ## 与目标规格的明确差距
 
