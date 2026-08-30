@@ -45,6 +45,49 @@ pub struct MemoryCandidateInput<'a> {
     pub created_at_ms: i64,
 }
 
+const MEMORY_CANDIDATE_SELECT: &str = r#"
+    SELECT c.id, c.scope, c.kind, c.content, c.confidence, c.sensitivity, c.status,
+           c.created_at_ms, c.reviewed_at_ms,
+           (SELECT m.id
+              FROM memories m
+             WHERE c.scope='user'
+               AND m.scope='user'
+               AND m.character_id IS NULL
+               AND m.normalized_key=c.normalized_key
+               AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+             ORDER BY m.updated_at_ms DESC, m.id DESC
+             LIMIT 1) AS memory_duplicate_id,
+           (SELECT m.content
+              FROM memories m
+             WHERE c.scope='user'
+               AND m.scope='user'
+               AND m.character_id IS NULL
+               AND m.normalized_key=c.normalized_key
+               AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+             ORDER BY m.updated_at_ms DESC, m.id DESC
+             LIMIT 1) AS memory_duplicate_content,
+           (SELECT other.id
+              FROM memory_candidates other
+             WHERE other.id <> c.id
+               AND other.status='pending'
+               AND other.scope=c.scope
+               AND other.normalized_key=c.normalized_key
+               AND (other.created_at_ms < c.created_at_ms
+                    OR (other.created_at_ms = c.created_at_ms AND other.id < c.id))
+             ORDER BY other.created_at_ms ASC, other.id ASC
+             LIMIT 1) AS candidate_duplicate_id,
+           (SELECT other.content
+              FROM memory_candidates other
+             WHERE other.id <> c.id
+               AND other.status='pending'
+               AND other.scope=c.scope
+               AND other.normalized_key=c.normalized_key
+               AND (other.created_at_ms < c.created_at_ms
+                    OR (other.created_at_ms = c.created_at_ms AND other.id < c.id))
+             ORDER BY other.created_at_ms ASC, other.id ASC
+             LIMIT 1) AS candidate_duplicate_content
+      FROM memory_candidates c"#;
+
 impl Storage {
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
         let mut connection = Connection::open(path)?;
@@ -592,6 +635,26 @@ impl Storage {
     ) -> Result<MemoryItem, rusqlite::Error> {
         let mut connection = self.connection.lock().expect("storage mutex poisoned");
         let transaction = connection.transaction()?;
+        let normalized_key = normalize_memory_text(content);
+        if let Some(existing) = transaction
+            .query_row(
+                "SELECT id, scope, character_id, kind, content, importance, version,
+                        created_at_ms, updated_at_ms
+                   FROM memories m
+                  WHERE m.scope='user'
+                    AND m.character_id IS NULL
+                    AND m.normalized_key=?1
+                    AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+                  ORDER BY m.updated_at_ms DESC, m.id DESC
+                  LIMIT 1",
+                [&normalized_key],
+                map_memory_row,
+            )
+            .optional()?
+        {
+            transaction.commit()?;
+            return Ok(existing);
+        }
         let item = MemoryItem {
             id: Uuid::now_v7().to_string(),
             scope: "user".into(),
@@ -603,7 +666,6 @@ impl Storage {
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
         };
-        let normalized_key = normalize_memory_text(content);
         transaction.execute(
             "INSERT INTO memories(id, scope, character_id, kind, content, normalized_key, importance, confidence, sensitivity, version, created_at_ms, updated_at_ms)
              VALUES(?1, 'user', NULL, 'note', ?2, ?3, ?4, 1, 'normal', 1, ?5, ?5)",
@@ -697,6 +759,29 @@ impl Storage {
             created_at_ms,
             updated_at_ms: now_ms,
         }))
+    }
+
+    pub fn has_duplicate_user_memory(
+        &self,
+        content: &str,
+        excluded_id: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let normalized_key = normalize_memory_text(content);
+        let found: i64 = connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                  FROM memories m
+                 WHERE m.scope='user'
+                   AND m.character_id IS NULL
+                   AND m.normalized_key=?1
+                   AND m.id<>?2
+                   AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+            )",
+            params![normalized_key, excluded_id],
+            |row| row.get(0),
+        )?;
+        Ok(found != 0)
     }
 
     pub fn delete_memory(
@@ -879,6 +964,8 @@ impl Storage {
             status: "pending".into(),
             created_at_ms: input.created_at_ms,
             reviewed_at_ms: None,
+            duplicate_of: None,
+            duplicate_content: None,
         };
         let normalized_key = normalize_memory_text(&candidate.content);
         connection.execute(
@@ -899,7 +986,8 @@ impl Storage {
                 candidate.created_at_ms,
             ],
         )?;
-        Ok(candidate)
+        load_memory_candidate(&connection, &candidate.id)?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
 
     pub fn list_pending_memory_candidates(
@@ -907,14 +995,13 @@ impl Storage {
         limit: usize,
     ) -> Result<Vec<MemoryCandidate>, rusqlite::Error> {
         let connection = self.connection.lock().expect("storage mutex poisoned");
-        let mut statement = connection.prepare(
-            "SELECT id, scope, kind, content, confidence, sensitivity, status,
-                    created_at_ms, reviewed_at_ms
-             FROM memory_candidates
-             WHERE status='pending'
-             ORDER BY created_at_ms DESC
-             LIMIT ?1",
-        )?;
+        let query = format!(
+            "{MEMORY_CANDIDATE_SELECT}
+             WHERE c.status='pending'
+             ORDER BY c.created_at_ms DESC
+             LIMIT ?1"
+        );
+        let mut statement = connection.prepare(&query)?;
         let rows = statement.query_map([limit.clamp(1, 50) as i64], map_memory_candidate_row)?;
         rows.collect()
     }
@@ -935,15 +1022,7 @@ impl Storage {
         if changed != 1 {
             return Ok(None);
         }
-        connection
-            .query_row(
-                "SELECT id, scope, kind, content, confidence, sensitivity, status,
-                        created_at_ms, reviewed_at_ms
-                 FROM memory_candidates WHERE id=?1",
-                [candidate_id],
-                map_memory_candidate_row,
-            )
-            .optional()
+        load_memory_candidate(&connection, candidate_id)
     }
 
     pub fn confirm_memory_candidate(
@@ -955,8 +1034,8 @@ impl Storage {
         let transaction = connection.transaction()?;
         let candidate = transaction
             .query_row(
-                "SELECT scope, kind, content, confidence, sensitivity, source_message_id,
-                        created_at_ms
+                "SELECT scope, kind, content, normalized_key, confidence, sensitivity,
+                        source_message_id, created_at_ms
                  FROM memory_candidates
                  WHERE id=?1 AND status='pending'",
                 [candidate_id],
@@ -965,21 +1044,54 @@ impl Storage {
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, f64>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                        row.get::<_, i64>(6)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, f64>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, i64>(7)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((scope, kind, content, confidence, sensitivity, source_message_id, created_at_ms)) =
-            candidate
+        let Some((
+            scope,
+            kind,
+            content,
+            normalized_key,
+            confidence,
+            sensitivity,
+            source_message_id,
+            created_at_ms,
+        )) = candidate
         else {
             return Ok(None);
         };
         if scope != "user" {
             return Err(rusqlite::Error::InvalidQuery);
+        }
+        if let Some(existing) = transaction
+            .query_row(
+                "SELECT id, scope, character_id, kind, content, importance, version,
+                        created_at_ms, updated_at_ms
+                   FROM memories m
+                  WHERE m.scope='user'
+                    AND m.character_id IS NULL
+                    AND m.normalized_key=?1
+                    AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+                  ORDER BY m.updated_at_ms DESC, m.id DESC
+                  LIMIT 1",
+                [&normalized_key],
+                map_memory_row,
+            )
+            .optional()?
+        {
+            transaction.execute(
+                "UPDATE memory_candidates SET status='confirmed', reviewed_at_ms=?1
+                 WHERE id=?2 AND status='pending'",
+                params![now_ms, candidate_id],
+            )?;
+            transaction.commit()?;
+            return Ok(Some(existing));
         }
         let item = MemoryItem {
             id: Uuid::now_v7().to_string(),
@@ -992,7 +1104,6 @@ impl Storage {
             created_at_ms,
             updated_at_ms: now_ms,
         };
-        let normalized_key = normalize_memory_text(&item.content);
         transaction.execute(
             "INSERT INTO memories(
                 id, scope, character_id, kind, content, normalized_key, importance,
@@ -1253,6 +1364,10 @@ fn map_memory_row(row: &rusqlite::Row<'_>) -> Result<MemoryItem, rusqlite::Error
 }
 
 fn map_memory_candidate_row(row: &rusqlite::Row<'_>) -> Result<MemoryCandidate, rusqlite::Error> {
+    let memory_duplicate_id = row.get::<_, Option<String>>(9)?;
+    let memory_duplicate_content = row.get::<_, Option<String>>(10)?;
+    let candidate_duplicate_id = row.get::<_, Option<String>>(11)?;
+    let candidate_duplicate_content = row.get::<_, Option<String>>(12)?;
     Ok(MemoryCandidate {
         id: row.get(0)?,
         scope: row.get(1)?,
@@ -1263,7 +1378,22 @@ fn map_memory_candidate_row(row: &rusqlite::Row<'_>) -> Result<MemoryCandidate, 
         status: row.get(6)?,
         created_at_ms: row.get(7)?,
         reviewed_at_ms: row.get(8)?,
+        duplicate_of: memory_duplicate_id.or(candidate_duplicate_id),
+        duplicate_content: memory_duplicate_content.or(candidate_duplicate_content),
     })
+}
+
+fn load_memory_candidate(
+    connection: &Connection,
+    candidate_id: &str,
+) -> Result<Option<MemoryCandidate>, rusqlite::Error> {
+    let query = format!(
+        "{MEMORY_CANDIDATE_SELECT}
+         WHERE c.id=?1"
+    );
+    connection
+        .query_row(&query, [candidate_id], map_memory_candidate_row)
+        .optional()
 }
 
 fn map_timer_row(row: &rusqlite::Row<'_>) -> Result<TimerItem, rusqlite::Error> {
@@ -1500,6 +1630,131 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM memory_audit", [], |row| row.get(0))
             .unwrap();
         assert_eq!(audit_count, 3);
+    }
+
+    #[test]
+    fn direct_memory_creation_reuses_an_exact_existing_memory() {
+        let storage = Storage::open_in_memory().unwrap();
+        let first = storage.create_user_memory("我喜欢蓝色", 10).unwrap();
+        let second = storage.create_user_memory("  我喜欢蓝色 ", 20).unwrap();
+
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.version, first.version);
+        assert!(storage
+            .has_duplicate_user_memory("我喜欢蓝色", "another-memory")
+            .unwrap());
+        assert!(!storage
+            .has_duplicate_user_memory("我喜欢蓝色", &first.id)
+            .unwrap());
+        assert_eq!(
+            storage
+                .search_memories("喜欢蓝色", "aris", 20)
+                .unwrap()
+                .len(),
+            1
+        );
+        let connection = storage.connection.lock().unwrap();
+        let audit_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM memory_audit", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(audit_count, 1);
+    }
+
+    #[test]
+    fn pending_candidate_exposes_earlier_exact_duplicate() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(1).unwrap();
+        storage
+            .begin_turn(&conversation, "duplicate-turn", 1, "text", "记住蓝色", 2)
+            .unwrap();
+        storage
+            .create_memory_candidate(MemoryCandidateInput {
+                id: "candidate-first",
+                source_turn_id: "duplicate-turn",
+                source_message_id: None,
+                scope: "user",
+                kind: "note",
+                content: "我喜欢蓝色",
+                confidence: 0.8,
+                sensitivity: "normal",
+                created_at_ms: 3,
+            })
+            .unwrap();
+        let second = storage
+            .create_memory_candidate(MemoryCandidateInput {
+                id: "candidate-second",
+                source_turn_id: "duplicate-turn",
+                source_message_id: None,
+                scope: "user",
+                kind: "note",
+                content: "  我喜欢蓝色 ",
+                confidence: 0.7,
+                sensitivity: "normal",
+                created_at_ms: 4,
+            })
+            .unwrap();
+
+        assert_eq!(second.duplicate_of.as_deref(), Some("candidate-first"));
+        assert_eq!(second.duplicate_content.as_deref(), Some("我喜欢蓝色"));
+        let candidates = storage.list_pending_memory_candidates(20).unwrap();
+        assert!(candidates
+            .iter()
+            .find(|candidate| candidate.id == "candidate-first")
+            .unwrap()
+            .duplicate_of
+            .is_none());
+        assert_eq!(
+            candidates
+                .iter()
+                .filter(|candidate| candidate.duplicate_of.is_some())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn confirming_duplicate_candidate_does_not_create_a_second_memory() {
+        let storage = Storage::open_in_memory().unwrap();
+        let existing = storage.create_user_memory("我喜欢蓝色", 1).unwrap();
+        let conversation = storage.ensure_conversation(2).unwrap();
+        storage
+            .begin_turn(
+                &conversation,
+                "duplicate-confirm-turn",
+                1,
+                "text",
+                "记住蓝色",
+                3,
+            )
+            .unwrap();
+        storage
+            .create_memory_candidate(MemoryCandidateInput {
+                id: "candidate-confirm-duplicate",
+                source_turn_id: "duplicate-confirm-turn",
+                source_message_id: None,
+                scope: "user",
+                kind: "note",
+                content: "我喜欢蓝色",
+                confidence: 0.9,
+                sensitivity: "normal",
+                created_at_ms: 4,
+            })
+            .unwrap();
+
+        let confirmed = storage
+            .confirm_memory_candidate("candidate-confirm-duplicate", 5)
+            .unwrap()
+            .unwrap();
+        assert_eq!(confirmed.id, existing.id);
+        assert!(storage
+            .list_pending_memory_candidates(20)
+            .unwrap()
+            .is_empty());
+        let connection = storage.connection.lock().unwrap();
+        let memory_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(memory_count, 1);
     }
 
     #[test]

@@ -62,6 +62,9 @@ export interface MemoryCandidate {
   status: string;
   created_at_ms: number;
   reviewed_at_ms: number | null;
+  /** Exact normalized match found in an existing memory or earlier pending candidate. */
+  duplicate_of?: string;
+  duplicate_content?: string;
 }
 
 export interface DataSummary {

@@ -208,6 +208,11 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
                   ) : (
                     <p>{candidate.content}</p>
                   )}
+                  {candidate.duplicate_content && (
+                    <p className="memory-candidate-duplicate">
+                      与已有候选或长期记忆完全重复：{candidate.duplicate_content}。保存时不会创建第二条相同记忆。
+                    </p>
+                  )}
                   <footer>
                     <span>置信度 {Math.round(candidate.confidence * 100)}% · {new Date(candidate.created_at_ms).toLocaleDateString()}</span>
                     <div>

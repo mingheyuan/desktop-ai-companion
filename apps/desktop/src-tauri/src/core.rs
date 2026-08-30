@@ -2367,6 +2367,17 @@ impl AppCore {
         expected_version: u64,
     ) -> Result<MemoryItem, AppError> {
         let content = validate_memory_content(content)?;
+        if self
+            .storage
+            .has_duplicate_user_memory(&content, id)
+            .map_err(storage_error)?
+        {
+            return Err(AppError::new(
+                "duplicate_memory",
+                "已有一条完全相同的长期记忆，请编辑现有记忆或修改这条内容。",
+                true,
+            ));
+        }
         self.storage
             .update_memory(id, &content, expected_version, now_ms())
             .map_err(storage_error)?

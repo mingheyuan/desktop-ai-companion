@@ -170,6 +170,7 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .memory-candidate-hint { margin: 8px 0 0; color: #ad956e; font-size: 10px; line-height: 1.45; }
 .memory-candidate-card { margin-top: 10px; border-top: 1px solid rgba(255, 200, 107, .16); padding-top: 10px; }
 .memory-candidate-card > p { margin: 0; color: #f2e2c1; line-height: 1.55; white-space: pre-wrap; }
+.memory-candidate-card > .memory-candidate-duplicate { margin-top: 7px; color: #d8b77d; font-size: 10px; line-height: 1.45; }
 .memory-candidate-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 9px; }
 .memory-candidate-card footer span { color: #a58d69; font-size: 10px; }
 .memory-candidate-card footer div { display: flex; gap: 7px; }

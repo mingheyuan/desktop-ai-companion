@@ -201,6 +201,12 @@ pub struct MemoryCandidate {
     pub status: String,
     pub created_at_ms: i64,
     pub reviewed_at_ms: Option<i64>,
+    /// Exact normalized match already present in a pending candidate or formal memory.
+    /// This is derived at read time and is intentionally not persisted as a relationship.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
