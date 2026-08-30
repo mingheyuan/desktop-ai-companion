@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.mingheyuan.desktop-ai-companion",
   "build": {
-    "beforeDevCommand": "../../scripts/build-audio-host.sh && pnpm dev",
+    "beforeDevCommand": "../../scripts/build-audio-host.sh && ../../scripts/build-screen-ocr.sh && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "../../scripts/build-audio-host.sh && pnpm build",
+    "beforeBuildCommand": "../../scripts/build-audio-host.sh && ../../scripts/build-screen-ocr.sh && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -48,7 +48,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../../../target/AudioHost.app/": "AudioHost.app/"
+      "../../../target/AudioHost.app/": "AudioHost.app/",
+      "../../../target/ScreenOCR": "ScreenOCR"
     },
     "macOS": {
       "minimumSystemVersion": "13.0",

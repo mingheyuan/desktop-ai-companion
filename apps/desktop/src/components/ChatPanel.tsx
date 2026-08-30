@@ -24,6 +24,7 @@ export function ChatPanel() {
   const [timerBusy, setTimerBusy] = useState(false);
   const [timerError, setTimerError] = useState("");
   const [screenPreviewUrl, setScreenPreviewUrl] = useState<string | null>(null);
+  const [screenOcrText, setScreenOcrText] = useState<string | null>(null);
   const [screenPreviewError, setScreenPreviewError] = useState("");
   const [screenPreviewBusy, setScreenPreviewBusy] = useState(false);
   const [clockMs, setClockMs] = useState(() => Date.now());
@@ -39,11 +40,14 @@ export function ChatPanel() {
     const observation = snapshot.screen_observation;
     setScreenPreviewError("");
     setScreenPreviewUrl(null);
+    setScreenOcrText(null);
     if (!observation || !isTauri()) return undefined;
     let cancelled = false;
     void getScreenObservationPreview(observation.id)
       .then((preview) => {
-        if (!cancelled) setScreenPreviewUrl(preview.data_url);
+        if (cancelled) return;
+        setScreenPreviewUrl(preview.data_url);
+        setScreenOcrText(preview.ocr_text ?? null);
       })
       .catch((reason) => {
         if (cancelled) return;
@@ -474,6 +478,12 @@ export function ChatPanel() {
             </div>
           </div>
           {screenPreviewUrl ? <img className="screen-preview-image" src={screenPreviewUrl} alt="当前屏幕的本地临时预览" /> : <p className="timer-empty">正在准备本地预览…</p>}
+          {screenOcrText && (
+            <div className="screen-ocr-result">
+              <div className="screen-ocr-heading">本机 OCR 文字</div>
+              <pre>{screenOcrText}</pre>
+            </div>
+          )}
           <p className="screen-preview-note">截图只保存在当前应用进程内存中，未发送给聊天或视觉模型。{formatTimerRemaining(snapshot.screen_observation.expires_at_ms, clockMs)}后自动清除；也可以手动清除。</p>
           {screenPreviewError && <p className="settings-error">{screenPreviewError}</p>}
         </section>

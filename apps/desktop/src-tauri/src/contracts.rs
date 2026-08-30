@@ -337,6 +337,8 @@ pub struct ScreenObservationPreview {
     pub id: String,
     pub captured_at_ms: i64,
     pub data_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ocr_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -211,6 +211,7 @@ export interface ScreenObservationPreview {
   id: string;
   captured_at_ms: number;
   data_url: string;
+  ocr_text?: string;
 }
 
 export async function getScreenObservationPreview(observationId: string): Promise<ScreenObservationPreview> {

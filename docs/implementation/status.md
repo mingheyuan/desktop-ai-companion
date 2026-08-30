@@ -10,7 +10,7 @@
 | VRM | `three-vrm` 加载、合法性/大小校验、应用数据目录托管、授权模型导入和 fallback 降级 | 前端构建和浏览器渲染检查；正式角色仍待授权 VRM 验收 |
 | 默认角色 | 天童爱丽丝的人格摘要进入 LLM system prompt；角色规则与不可信用户记忆分区 | Provider 单元测试、角色资料人工复核 |
 | 文字对话 | mock/OpenAI-compatible SSE、单活动 turn、generation + cancellation；API key 可选以支持 Ollama/LM Studio；设置页可用固定无上下文探针测试已保存的 LLM 配置 | Rust 单元测试、Provider 连接测试、前端状态测试 |
-| 视觉 Provider 配置 | 独立启用开关、endpoint、model 和 Keychain API key 已保存；`screen.observe` 已可在用户确认后按所有显示器/主显示器范围生成进程内存中的一次性本地预览，范围显示在结果中，支持自动清除倒计时、重新读取、手动清除和 5 分钟自动过期，但尚未采集后上传 | Provider 设置 UI、Rust 配置校验、本地截图预览清除与自动过期；视觉模型数据出站仍待单独明确授权和实现 |
+| 视觉 Provider 配置 | 独立启用开关、endpoint、model 和 Keychain API key 已保存；`screen.observe` 已可在用户确认后按所有显示器/主显示器范围生成进程内存中的一次性本地预览，并由 macOS Vision 在本地提取 OCR 文字，范围和 OCR 结果显示在预览中，支持自动清除倒计时、重新读取、手动清除和 5 分钟自动过期，但尚未采集后上传 | Provider 设置 UI、Rust 配置校验、本地截图与 OCR 预览清除/自动过期；视觉模型数据出站仍待单独明确授权和实现 |
 | 本地数据 | SQLite migration、会话恢复、消息提交 | Rust repository 测试和真实数据库迁移 |
 | 显式记忆 | 创建、FTS 搜索、中文二字片段回退、编辑、物理删除、审计、可选上下文注入；聊天中明确“忘记/删除某条记忆”时支持本地唯一匹配、确认和版本校验删除；模型或明确保存请求先写入持久化候选，审核通过后才转为正式记忆 | SQLite 事务/FTS 测试、候选确认/拒绝幂等测试、保存→自然改写检索→Provider 使用→删除闭环测试、聊天删除解析/唯一匹配测试、UI 检查 |
 | 受控网页工具 | 用户明确输入“打开/访问 + HTTP(S) 网址”后，展示确认卡片；允许后调用 macOS 默认浏览器，拒绝或取消不执行；每次请求写入 `tool_runs` 审计表，主面板可查看最近工具记录的摘要投影 | URL 解析/危险 scheme/凭据测试、工具审计测试、前端构建；真实默认浏览器打开仍需手工验收 |
@@ -43,7 +43,7 @@
 | 音频恢复 | control socket 每 2 秒 heartbeat；当前连接连续 6 秒无 pong 或写入失败会在用户仍期望持续监听时做三次退避重启，主动关闭/权限错误会取消恢复；仍无设备切换和睡眠恢复 | 完成半开故障、30 分钟/睡眠/外设验收 |
 | 角色表现 | 已有原创程序化爱丽丝预览、idle/listen/think/speak 姿态、眨眼、呼吸和近似口型；授权 VRM 加载后优先替换 | 授权 VRM + 正式 VRMA 动作验收 |
 | 记忆候选 | 用户可显式 CRUD；模型或明确保存请求会先创建 `pending` 候选；记忆面板可编辑候选正文并在应用重启后继续审核，确认通过以事务方式写入长期记忆、FTS 和审计，拒绝只标记候选状态；候选列表会标出与已有候选/长期记忆完全相同的内容，直接保存和候选确认均不会生成第二条相同长期记忆，编辑正式记忆时也会阻止精确重复 | 更主动的自动提取、`relationship` scope 候选、语义级冲突识别和候选合并仍待补齐 |
-| 模型工具循环 | OpenAI-compatible 请求已通过 `ToolRegistry` 发送 `system.open_url`/`timer.create`/`timer.cancel`/`memory.save`/本地 `screen.observe` schema；`ToolPolicy` 负责 JSON、URL、时间、标题、记忆和屏幕观察请求校验；SSE 分片会还原单次 ToolCall，进入确认卡后执行结果回传模型继续生成，每轮最多 3 步；确认卡片 2 分钟未处理会自动取消，审计记为 `cancelled`，`memory.save` 候选标记为 `rejected`，模型收到未执行结果；`screen.observe` 仅在用户当前消息明确要求查看屏幕时允许，图片只生成本地临时预览；显式中文意图入口仍保留，`memory.delete` 仅允许用户显式触发，不暴露给模型；主面板可查看最近工具审计摘要，不展示原始参数 | 已有本地 HTTP Provider、集中参数安全校验和 ToolCall 消息测试；Vision 图片出站授权、多工具并行、更细风险分级和完整端到端 UI 验收仍待补齐 |
+| 模型工具循环 | OpenAI-compatible 请求已通过 `ToolRegistry` 发送 `system.open_url`/`timer.create`/`timer.cancel`/`memory.save`/本地 `screen.observe` schema；`ToolPolicy` 负责 JSON、URL、时间、标题、记忆和屏幕观察请求校验；SSE 分片会还原单次 ToolCall，进入确认卡后执行结果回传模型继续生成，每轮最多 3 步；确认卡片 2 分钟未处理会自动取消，审计记为 `cancelled`，`memory.save` 候选标记为 `rejected`，模型收到未执行结果；`screen.observe` 仅在用户当前消息明确要求查看屏幕时允许，截图会在本机由 macOS Vision 提取 OCR 并只展示在临时预览中，不把图片或 OCR 正文发送给模型；显式中文意图入口仍保留，`memory.delete` 仅允许用户显式触发，不暴露给模型；主面板可查看最近工具审计摘要，不展示原始参数 | 已有本地 HTTP Provider、集中参数安全校验和 ToolCall 消息测试；Vision 图片出站授权、多工具并行、更细风险分级和完整端到端 UI 验收仍待补齐 |
 
 ## 当前验证命令
 

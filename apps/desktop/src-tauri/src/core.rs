@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    path::{Path, PathBuf},
     pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -11,7 +12,7 @@ use std::{
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{Datelike, Duration as ChronoDuration, Local, LocalResult, TimeZone};
 use futures_util::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
@@ -65,6 +66,7 @@ struct RuntimeState {
 struct ScreenObservationRecord {
     metadata: ScreenObservation,
     png: Vec<u8>,
+    ocr_text: Option<String>,
 }
 
 impl Default for RuntimeState {
@@ -1971,6 +1973,16 @@ impl AppCore {
                 false,
             ));
         }
+        let ocr_text = match run_local_screen_ocr(app, &png).await {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!(
+                    "local screen OCR unavailable [{}]: {}",
+                    error.diagnostic_id, error.message
+                );
+                None
+            }
+        };
         let captured_at_ms = now_ms();
         let metadata = ScreenObservation {
             id: Uuid::now_v7().to_string(),
@@ -1981,6 +1993,7 @@ impl AppCore {
         *self.screen_observation.write().await = Some(ScreenObservationRecord {
             metadata: metadata.clone(),
             png,
+            ocr_text,
         });
         self.runtime.write().await.revision += 1;
         if let Err(error) = self.emit_snapshot(app).await {
@@ -2057,6 +2070,7 @@ impl AppCore {
                 "data:image/png;base64,{}",
                 BASE64_STANDARD.encode(&record.png)
             ),
+            ocr_text: record.ocr_text.clone(),
         })
     }
 
@@ -4390,6 +4404,112 @@ async fn capture_screen_png(scope: ScreenCaptureScope) -> Result<Vec<u8>, AppErr
             "当前版本的屏幕观察仅支持 macOS。",
             false,
         ))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn local_screen_ocr_executable(app: &AppHandle) -> Option<PathBuf> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let packaged = resource_dir.join("ScreenOCR");
+        if packaged.is_file() {
+            return Some(packaged);
+        }
+    }
+    let development = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target/ScreenOCR");
+    development.is_file().then_some(development)
+}
+
+#[derive(Debug, Deserialize)]
+struct LocalOcrResult {
+    text: String,
+}
+
+async fn run_local_screen_ocr(app: &AppHandle, png: &[u8]) -> Result<Option<String>, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(executable) = local_screen_ocr_executable(app) else {
+            return Ok(None);
+        };
+        let ocr_id = Uuid::now_v7().to_string();
+        let directory = std::env::temp_dir().join(format!("desktop-ai-companion-ocr-{ocr_id}"));
+        tokio::fs::create_dir(&directory).await.map_err(|error| {
+            AppError::new(
+                "screen_ocr_failed",
+                format!("无法创建本地 OCR 临时目录：{error}"),
+                true,
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700));
+        }
+        let path = directory.join("capture.png");
+        let result = async {
+            tokio::fs::write(&path, png).await.map_err(|error| {
+                AppError::new(
+                    "screen_ocr_failed",
+                    format!("无法准备本地 OCR 图片：{error}"),
+                    true,
+                )
+            })?;
+            let output = tokio::time::timeout(
+                Duration::from_secs(15),
+                tokio::process::Command::new(&executable)
+                    .kill_on_drop(true)
+                    .args(["--input", path.to_string_lossy().as_ref()])
+                    .output(),
+            )
+            .await
+            .map_err(|_| AppError::new("screen_ocr_timeout", "本地 OCR 超过 15 秒未完成。", true))?
+            .map_err(|error| {
+                AppError::new(
+                    "screen_ocr_failed",
+                    format!("无法启动本地 OCR：{error}"),
+                    true,
+                )
+            })?;
+            if !output.status.success() {
+                return Err(AppError::new(
+                    "screen_ocr_failed",
+                    format!(
+                        "本地 OCR 执行失败（退出码：{}）。",
+                        output.status.code().unwrap_or(-1)
+                    ),
+                    true,
+                ));
+            }
+            if output.stdout.len() > 256 * 1024 {
+                return Err(AppError::new(
+                    "screen_ocr_output_too_large",
+                    "本地 OCR 返回内容过大，已丢弃。",
+                    false,
+                ));
+            }
+            let parsed: LocalOcrResult =
+                serde_json::from_slice(&output.stdout).map_err(|error| {
+                    AppError::new(
+                        "screen_ocr_failed",
+                        format!("本地 OCR 返回格式无法识别：{error}"),
+                        true,
+                    )
+                })?;
+            let text = parsed.text.trim();
+            if text.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(text.chars().take(6_000).collect()))
+            }
+        }
+        .await;
+        let _ = tokio::fs::remove_file(&path).await;
+        let _ = tokio::fs::remove_dir(&directory).await;
+        result
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, png);
+        Ok(None)
     }
 }
 
