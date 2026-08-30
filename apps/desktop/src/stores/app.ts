@@ -56,6 +56,7 @@ const emptySnapshot: AppSnapshot = {
   pending_tool_approval: null,
   timers: [],
   timer_history: [],
+  tool_history: [],
   screen_observation: null,
   last_error: null,
 };

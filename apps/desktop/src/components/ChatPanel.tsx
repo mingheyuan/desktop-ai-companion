@@ -13,6 +13,7 @@ export function ChatPanel() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [timersOpen, setTimersOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [petUpdating, setPetUpdating] = useState(false);
   const [petError, setPetError] = useState("");
   const [importingVrm, setImportingVrm] = useState(false);
@@ -226,6 +227,26 @@ export function ChatPanel() {
 
   const formatTimerHistoryStatus = (status: string) => status === "fired" ? "已触发" : "已取消";
 
+  const formatToolName = (name: string) => ({
+    "system.open_url": "打开网页",
+    "timer.create": "创建提醒",
+    "timer.cancel": "取消提醒",
+    "memory.save": "保存记忆",
+    "memory.delete": "删除记忆",
+    "screen.observe": "读取屏幕",
+  }[name] ?? name);
+
+  const formatToolStatus = (status: string) => ({
+    pending: "待处理",
+    approved: "已授权",
+    rejected: "已拒绝",
+    succeeded: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+  }[status] ?? status);
+
+  const formatToolOrigin = (origin: string) => origin === "model_suggested" ? "模型提议" : origin === "user_explicit" ? "用户请求" : "系统任务";
+
   return (
     <main className="panel-shell">
       <header className="panel-header">
@@ -238,6 +259,7 @@ export function ChatPanel() {
           <div className={`status-pill state-${snapshot.avatar_state}`}>{snapshot.avatar_state}</div>
           <button className="header-text-button" type="button" onClick={() => setMemoryOpen(true)}>记忆</button>
           <button className="header-text-button" type="button" onClick={() => setTimersOpen((open) => !open)}>提醒{snapshot.timers.length ? ` ${snapshot.timers.length}` : ""}</button>
+          <button className="header-text-button" type="button" onClick={() => setToolsOpen((open) => !open)}>工具{snapshot.tool_history.length ? ` ${snapshot.tool_history.length}` : ""}</button>
           <button className="icon-button" type="button" onClick={() => setSettingsOpen(true)} aria-label="打开设置">⚙</button>
         </div>
       </header>
@@ -392,6 +414,31 @@ export function ChatPanel() {
           )}
           {snapshot.timers.length === 0 && snapshot.timer_history.length === 0 && <p className="timer-empty">还没有提醒记录。</p>}
           {timerError && <p className="settings-error">{timerError}</p>}
+        </section>
+      )}
+
+      {toolsOpen && (
+        <section className="tool-history-panel" aria-label="工具记录">
+          <div className="tool-history-heading">
+            <div>
+              <p className="eyebrow">LOCAL AUDIT</p>
+              <h2>工具记录</h2>
+            </div>
+            <button className="icon-button" type="button" onClick={() => setToolsOpen(false)} aria-label="关闭工具记录">×</button>
+          </div>
+          <p className="tool-history-note">这里只显示本地工具的名称、来源和结果摘要，不展示原始参数。</p>
+          {snapshot.tool_history.length > 0 ? snapshot.tool_history.map((run) => (
+            <article className="tool-history-item" key={run.id}>
+              <div className="tool-history-item-heading">
+                <div>
+                  <p>{formatToolName(run.tool_name)}</p>
+                  <span>{formatToolOrigin(run.origin)} · {formatTimerHistoryTime(run.created_at_ms)}</span>
+                </div>
+                <span className={`tool-history-status status-${run.status}`}>{formatToolStatus(run.status)}</span>
+              </div>
+              {run.result_summary && <div className="tool-history-result">{run.result_summary}</div>}
+            </article>
+          )) : <p className="timer-empty">还没有工具调用记录。</p>}
         </section>
       )}
 

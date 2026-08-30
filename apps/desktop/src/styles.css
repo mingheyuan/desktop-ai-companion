@@ -90,6 +90,19 @@ h1 { margin: 0; font-size: 28px; letter-spacing: .04em; }
 .timer-history-status { flex: 0 0 auto; border-radius: 999px; padding: 5px 8px; font-size: 10px !important; }
 .timer-history-status.fired { color: #70e1c1 !important; background: rgba(51, 139, 112, .18); }
 .timer-history-status.cancelled { color: #ffb2c2 !important; background: rgba(119, 28, 55, .25); }
+.tool-history-panel { margin: 14px 32px 0; border: 1px solid rgba(169, 139, 255, .24); border-radius: 15px; padding: 14px 16px; background: rgba(31, 24, 61, .68); box-shadow: 0 12px 30px rgba(0, 0, 0, .14); }
+.tool-history-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.tool-history-heading h2 { margin: 0; font-size: 16px; }
+.tool-history-note { margin: 9px 0 0; color: #9d91c5; font-size: 10px; line-height: 1.5; }
+.tool-history-item { margin-top: 11px; border-top: 1px solid rgba(169, 139, 255, .14); padding-top: 10px; }
+.tool-history-item-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tool-history-item-heading p { margin: 0 0 4px; color: #e4dcff; font-size: 12px; }
+.tool-history-item-heading span { color: #887dab; font-size: 10px; }
+.tool-history-status { flex: 0 0 auto; border-radius: 999px; padding: 5px 8px; }
+.tool-history-status.status-succeeded { color: #70e1c1 !important; background: rgba(51, 139, 112, .18); }
+.tool-history-status.status-failed, .tool-history-status.status-rejected, .tool-history-status.status-cancelled { color: #ffb2c2 !important; background: rgba(119, 28, 55, .25); }
+.tool-history-status.status-pending, .tool-history-status.status-approved { color: #ffd18b !important; background: rgba(151, 92, 35, .2); }
+.tool-history-result { margin-top: 8px; color: #b7acd8; font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
 .screen-preview { margin: 14px 32px 0; border: 1px solid rgba(103, 220, 187, .28); border-radius: 15px; padding: 14px 16px; background: rgba(13, 45, 53, .62); box-shadow: 0 12px 30px rgba(0, 0, 0, .14); }
 .screen-preview-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .screen-preview-heading h2 { margin: 0; font-size: 16px; }

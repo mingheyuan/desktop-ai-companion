@@ -55,9 +55,10 @@ const snapshot: AppSnapshot = {
     voice_input_route: "unknown",
     mouth_level: 0,
     pending_tool_approval: null,
-    timers: [],
-    timer_history: [],
-    screen_observation: null,
+  timers: [],
+  timer_history: [],
+  tool_history: [],
+  screen_observation: null,
     last_error: null,
 };
 

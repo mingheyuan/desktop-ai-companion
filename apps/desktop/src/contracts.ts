@@ -126,6 +126,16 @@ export interface TimerHistoryItem {
   created_at_ms: number;
 }
 
+export interface ToolRunSummary {
+  id: string;
+  tool_name: string;
+  origin: string;
+  status: string;
+  result_summary: string | null;
+  created_at_ms: number;
+  completed_at_ms: number | null;
+}
+
 export interface ScreenObservation {
   id: string;
   captured_at_ms: number;
@@ -155,6 +165,7 @@ export interface AppSnapshot {
   pending_tool_approval: ToolApproval | null;
   timers: TimerItem[];
   timer_history: TimerHistoryItem[];
+  tool_history: ToolRunSummary[];
   screen_observation: ScreenObservation | null;
   last_error: AppError | null;
 }

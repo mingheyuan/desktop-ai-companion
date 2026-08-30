@@ -6,7 +6,8 @@ use uuid::Uuid;
 
 use crate::contracts::{
     CharacterSettings, ChatMessage, DataSummary, MemoryCandidate, MemoryItem, MessageRole,
-    MessageStatus, PetSettings, ProviderSettings, TimerHistoryItem, TimerItem, VoiceSettings,
+    MessageStatus, PetSettings, ProviderSettings, TimerHistoryItem, TimerItem, ToolRunSummary,
+    VoiceSettings,
 };
 
 pub struct Storage {
@@ -1096,6 +1097,27 @@ impl Storage {
         Ok(())
     }
 
+    pub fn list_tool_runs(
+        &self,
+        conversation_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ToolRunSummary>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let mut statement = connection.prepare(
+            "SELECT id, tool_name, origin, status, result_summary,
+                    created_at_ms, completed_at_ms
+             FROM tool_runs
+             WHERE conversation_id=?1
+             ORDER BY created_at_ms DESC
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(
+            params![conversation_id, limit.clamp(1, 50) as i64],
+            map_tool_run_row,
+        )?;
+        rows.collect()
+    }
+
     pub fn create_timer(
         &self,
         input: TimerInput<'_>,
@@ -1264,6 +1286,18 @@ fn map_timer_history_row(row: &rusqlite::Row<'_>) -> Result<TimerHistoryItem, ru
         status: row.get(3)?,
         completed_at_ms: row.get(4)?,
         created_at_ms: row.get(5)?,
+    })
+}
+
+fn map_tool_run_row(row: &rusqlite::Row<'_>) -> Result<ToolRunSummary, rusqlite::Error> {
+    Ok(ToolRunSummary {
+        id: row.get(0)?,
+        tool_name: row.get(1)?,
+        origin: row.get(2)?,
+        status: row.get(3)?,
+        result_summary: row.get(4)?,
+        created_at_ms: row.get(5)?,
+        completed_at_ms: row.get(6)?,
     })
 }
 
@@ -1676,6 +1710,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(row, ("succeeded".into(), "浏览器已打开".into()));
+        drop(connection);
+
+        let history = storage.list_tool_runs(&conversation, 20).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].tool_name, "system.open_url");
+        assert_eq!(history[0].origin, "user_explicit");
+        assert_eq!(history[0].status, "succeeded");
+        assert_eq!(history[0].result_summary.as_deref(), Some("浏览器已打开"));
+        assert_eq!(history[0].created_at_ms, 3);
+        assert_eq!(history[0].completed_at_ms, Some(5));
     }
 
     #[test]
