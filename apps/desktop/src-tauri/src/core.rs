@@ -25,9 +25,9 @@ use crate::{
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, DataSummary, EventEnvelope,
         GenerationState, InputState, ListeningMode, MemoryCandidate, MemoryItem, MouthLevelPayload,
-        PetSettings, PlaybackState, ProviderSettings, ScreenObservation, ScreenObservationPreview,
-        TextDeltaPayload, TimerItem, ToolApproval, TurnEndedPayload, TurnState, VoicePermissions,
-        VoiceSettings,
+        PetSettings, PlaybackState, ProviderSettings, ScreenCaptureScope, ScreenObservation,
+        ScreenObservationPreview, TextDeltaPayload, TimerItem, ToolApproval, TurnEndedPayload,
+        TurnState, VoicePermissions, VoiceSettings,
     },
     desktop::apply_pet_window_settings,
     notifications,
@@ -131,6 +131,12 @@ struct ModelToolContext<'a> {
     memory_context: &'a [String],
     response: &'a str,
     tool_steps: u8,
+}
+
+#[derive(Clone)]
+struct ExplicitScreenObserveRequest {
+    request: String,
+    scope: ScreenCaptureScope,
 }
 
 const MAX_TOOL_STEPS: u8 = 3;
@@ -700,8 +706,10 @@ impl AppCore {
                             tool_call_id,
                             tool_name: "screen.observe".into(),
                             display_name: "读取当前屏幕".into(),
-                            summary: "只会在本机生成一次临时截图并显示预览；不会上传给任何模型。"
-                                .into(),
+                            summary: format!(
+                                "只会在本机生成一次{}临时截图并显示预览；不会上传给任何模型。",
+                                request.scope.label()
+                            ),
                             url: None,
                             host: None,
                             title: None,
@@ -710,7 +718,10 @@ impl AppCore {
                         },
                         turn_id: turn_id.clone(),
                         generation,
-                        action: PendingToolAction::ObserveScreen { request },
+                        action: PendingToolAction::ObserveScreen {
+                            request: request.request,
+                            scope: request.scope,
+                        },
                         origin: PendingToolOrigin::Explicit,
                     }
                 })
@@ -742,8 +753,9 @@ impl AppCore {
                 PendingToolAction::CancelTimer { timer_id, title } => {
                     json!({ "timer_id": timer_id, "title": title }).to_string()
                 }
-                PendingToolAction::ObserveScreen { request } => {
-                    json!({ "request": request, "send_to_provider": false }).to_string()
+                PendingToolAction::ObserveScreen { request, scope } => {
+                    json!({ "request": request, "scope": scope, "send_to_provider": false })
+                        .to_string()
                 }
             };
             self.storage
@@ -1746,15 +1758,13 @@ impl AppCore {
             },
             PendingToolAction::CancelTimer { timer_id, title } => {
                 match self.storage.cancel_timer(&timer_id, now_ms()) {
-                    Ok(true) => {
-                        match notifications::cancel_timer(app, &timer_id).await {
-                            Ok(()) => {
-                                self.timer_notify.notify_one();
-                                Ok(format!("已取消本地提醒：{title}"))
-                            }
-                            Err(error) => Err(error),
+                    Ok(true) => match notifications::cancel_timer(app, &timer_id).await {
+                        Ok(()) => {
+                            self.timer_notify.notify_one();
+                            Ok(format!("已取消本地提醒：{title}"))
                         }
-                    }
+                        Err(error) => Err(error),
+                    },
                     Ok(false) => Err(AppError::new(
                         "not_found",
                         "这条提醒不存在、已经触发或已经取消。",
@@ -1763,14 +1773,16 @@ impl AppCore {
                     Err(error) => Err(storage_error(error)),
                 }
             }
-            PendingToolAction::ObserveScreen { .. } => {
-                self.capture_screen_observation(app).await.map(|observation| {
+            PendingToolAction::ObserveScreen { scope, .. } => self
+                .capture_screen_observation(app, scope)
+                .await
+                .map(|observation| {
                     format!(
-                        "已读取当前屏幕，并生成了本机临时预览（观察 ID：{}）。截图尚未发送给任何模型。",
-                        observation.id
+                        "已读取{}，并生成了本机临时预览（观察 ID：{}）。截图尚未发送给任何模型。",
+                        observation.scope.label(),
+                        observation.id,
                     )
-                })
-            }
+                }),
         };
         match execution {
             Ok(result) => {
@@ -1942,8 +1954,9 @@ impl AppCore {
     async fn capture_screen_observation(
         self: &Arc<Self>,
         app: &AppHandle,
+        scope: ScreenCaptureScope,
     ) -> Result<ScreenObservation, AppError> {
-        let png = capture_screen_png().await?;
+        let png = capture_screen_png(scope).await?;
         if png.len() > 32 * 1024 * 1024 {
             return Err(AppError::new(
                 "screen_capture_too_large",
@@ -1963,6 +1976,7 @@ impl AppCore {
             id: Uuid::now_v7().to_string(),
             captured_at_ms,
             expires_at_ms: captured_at_ms.saturating_add(SCREEN_OBSERVATION_TTL_MS),
+            scope,
         };
         *self.screen_observation.write().await = Some(ScreenObservationRecord {
             metadata: metadata.clone(),
@@ -4111,8 +4125,8 @@ fn parse_explicit_timer_list_request(text: &str) -> bool {
     .any(|keyword| compact.contains(keyword))
 }
 
-fn parse_explicit_screen_observe_request(text: &str) -> Option<String> {
-    let has_screen_target = ["屏幕", "桌面", "画面"]
+fn parse_explicit_screen_observe_request(text: &str) -> Option<ExplicitScreenObserveRequest> {
+    let has_screen_target = ["屏幕", "桌面", "画面", "显示器"]
         .iter()
         .any(|keyword| text.contains(keyword));
     let has_observe_intent = ["看", "查看", "观察", "分析", "识别", "读取", "截图", "截屏"]
@@ -4133,7 +4147,18 @@ fn parse_explicit_screen_observe_request(text: &str) -> Option<String> {
     {
         return None;
     }
-    Some(text.trim().to_owned())
+    let scope = if ["主屏", "主显示器", "主屏幕"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        ScreenCaptureScope::MainDisplay
+    } else {
+        ScreenCaptureScope::AllDisplays
+    };
+    Some(ExplicitScreenObserveRequest {
+        request: text.trim().to_owned(),
+        scope,
+    })
 }
 
 fn has_explicit_screen_observe_intent(messages: &[LlmMessage]) -> bool {
@@ -4286,7 +4311,7 @@ async fn open_url_in_default_browser(url: &str) -> Result<(), AppError> {
     }
 }
 
-async fn capture_screen_png() -> Result<Vec<u8>, AppError> {
+async fn capture_screen_png(scope: ScreenCaptureScope) -> Result<Vec<u8>, AppError> {
     #[cfg(target_os = "macos")]
     {
         let capture_id = Uuid::now_v7().to_string();
@@ -4306,10 +4331,11 @@ async fn capture_screen_png() -> Result<Vec<u8>, AppError> {
         }
         let path = directory.join("capture.png");
         let mut command = tokio::process::Command::new("/usr/sbin/screencapture");
-        command
-            .kill_on_drop(true)
-            .args(["-x", "-t", "png"])
-            .arg(&path);
+        command.kill_on_drop(true).args(["-x", "-t", "png"]);
+        if scope == ScreenCaptureScope::MainDisplay {
+            command.arg("-m");
+        }
+        command.arg(&path);
         let status = match tokio::time::timeout(Duration::from_secs(15), command.status()).await {
             Ok(result) => result.map_err(|error| {
                 AppError::new(
@@ -4793,10 +4819,14 @@ mod tests {
 
     #[test]
     fn recognizes_explicit_screen_observe_request() {
-        assert_eq!(
-            parse_explicit_screen_observe_request("请帮我看一下当前屏幕"),
-            Some("请帮我看一下当前屏幕".into())
-        );
+        let request =
+            parse_explicit_screen_observe_request("请帮我看一下当前屏幕").expect("screen request");
+        assert_eq!(request.request, "请帮我看一下当前屏幕");
+        assert_eq!(request.scope, ScreenCaptureScope::AllDisplays);
+
+        let request = parse_explicit_screen_observe_request("请看一下主显示器")
+            .expect("main display request");
+        assert_eq!(request.scope, ScreenCaptureScope::MainDisplay);
         assert!(parse_explicit_screen_observe_request("不要看我的屏幕").is_none());
         assert!(parse_explicit_screen_observe_request("取消屏幕观察").is_none());
         assert!(parse_explicit_screen_observe_request("你好吗").is_none());
@@ -4901,8 +4931,34 @@ mod tests {
         .unwrap();
         assert!(matches!(
             screen.action,
-            ToolAction::ObserveScreen { request } if request == "请查看当前屏幕"
+            ToolAction::ObserveScreen { request, scope }
+                if request == "请查看当前屏幕" && scope == ScreenCaptureScope::AllDisplays
         ));
+
+        let main_screen = ToolPolicy::validate_model_call(
+            &ToolCall {
+                id: "call-main-screen".into(),
+                name: "screen.observe".into(),
+                arguments: r#"{"request":"请查看主显示器","scope":"main_display"}"#.into(),
+            },
+            1_000,
+        )
+        .unwrap();
+        assert!(matches!(
+            main_screen.action,
+            ToolAction::ObserveScreen { scope, .. }
+                if scope == ScreenCaptureScope::MainDisplay
+        ));
+
+        assert!(ToolPolicy::validate_model_call(
+            &ToolCall {
+                id: "call-invalid-screen-scope".into(),
+                name: "screen.observe".into(),
+                arguments: r#"{"request":"请查看当前屏幕","scope":"window"}"#.into(),
+            },
+            1_000,
+        )
+        .is_err());
 
         assert!(ToolPolicy::validate_model_call(
             &ToolCall {

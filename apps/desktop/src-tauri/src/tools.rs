@@ -1,6 +1,9 @@
 use serde_json::{json, Value};
 
-use crate::{contracts::AppError, provider::ToolCall};
+use crate::{
+    contracts::{AppError, ScreenCaptureScope},
+    provider::ToolCall,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolDefinition {
@@ -33,6 +36,7 @@ pub(crate) enum ToolAction {
     },
     ObserveScreen {
         request: String,
+        scope: ScreenCaptureScope,
     },
 }
 
@@ -139,6 +143,11 @@ impl ToolRegistry {
                         "minLength": 1,
                         "maxLength": 500,
                         "description": "用户当前明确要求查看屏幕的原始请求"
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["all_displays", "main_display"],
+                        "description": "采集范围；默认 all_displays，主显示器范围更小"
                     }
                 },
                 "required": ["request"]
@@ -375,7 +384,7 @@ impl ToolPolicy {
                 })
             }
             "screen.observe" => {
-                reject_unknown_tool_arguments(object, &["request"])?;
+                reject_unknown_tool_arguments(object, &["request", "scope"])?;
                 let request = object
                     .get("request")
                     .and_then(Value::as_str)
@@ -395,17 +404,40 @@ impl ToolPolicy {
                         false,
                     ));
                 }
+                let scope = match object.get("scope") {
+                    None => ScreenCaptureScope::default(),
+                    Some(value) => {
+                        let value = value.as_str().ok_or_else(|| {
+                            AppError::new(
+                                "invalid_tool_arguments",
+                                "屏幕观察范围必须是字符串。",
+                                false,
+                            )
+                        })?;
+                        ScreenCaptureScope::parse(value).ok_or_else(|| {
+                            AppError::new(
+                                "invalid_tool_arguments",
+                                "屏幕观察范围只支持 all_displays 或 main_display。",
+                                false,
+                            )
+                        })?
+                    }
+                };
                 Ok(ModelToolCandidate {
                     action: ToolAction::ObserveScreen {
                         request: request.to_owned(),
+                        scope,
                     },
                     display_name: "读取当前屏幕".into(),
-                    summary: "模型请求读取当前屏幕并生成本机临时预览；不会上传给任何模型，执行前需要你的确认。".into(),
+                    summary: format!(
+                        "模型请求读取{}并生成本机临时预览；不会上传给任何模型，执行前需要你的确认。",
+                        scope.label()
+                    ),
                     url: None,
                     host: None,
                     title: None,
                     due_at_ms: None,
-                    arguments_json: json!({ "request": request, "send_to_provider": false }).to_string(),
+                    arguments_json: json!({ "request": request, "scope": scope, "send_to_provider": false }).to_string(),
                 })
             }
             other => Err(AppError::new(

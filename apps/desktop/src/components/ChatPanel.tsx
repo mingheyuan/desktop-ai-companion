@@ -163,12 +163,12 @@ export function ChatPanel() {
     }
   };
 
-  const rereadScreen = async () => {
+  const rereadScreen = async (scope: "all_displays" | "main_display" = "all_displays") => {
     if (submitting || !isTauri()) return;
     setSubmitting(true);
     setSubmitError("");
     try {
-      await submitText("请帮我看一下当前屏幕");
+      await submitText(scope === "main_display" ? "请帮我看一下主显示器" : "请帮我看一下当前屏幕");
     } catch (reason) {
       if (typeof reason === "string") setSubmitError(reason);
       else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setSubmitError(reason.message);
@@ -250,6 +250,8 @@ export function ChatPanel() {
     "memory.delete": "删除记忆",
     "screen.observe": "读取屏幕",
   }[name] ?? name);
+
+  const formatScreenScope = (scope: string) => scope === "main_display" ? "主显示器" : "所有显示器";
 
   const formatToolStatus = (status: string) => ({
     pending: "待处理",
@@ -464,9 +466,10 @@ export function ChatPanel() {
             <div>
               <p className="eyebrow">LOCAL ONLY</p>
               <h2>本地屏幕预览</h2>
+              <span className="screen-preview-scope">范围：{formatScreenScope(snapshot.screen_observation.scope)}</span>
             </div>
             <div className="screen-preview-actions">
-              <button className="header-text-button" type="button" disabled={submitting || !isTauri()} onClick={() => void rereadScreen()}>重新读取</button>
+              <button className="header-text-button" type="button" disabled={submitting || !isTauri()} onClick={() => void rereadScreen(snapshot.screen_observation?.scope)}>重新读取</button>
               <button className="icon-button" type="button" disabled={screenPreviewBusy} onClick={() => void clearScreenPreview()} aria-label="清除屏幕预览">×</button>
             </div>
           </div>

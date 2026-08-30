@@ -141,6 +141,7 @@ export interface ScreenObservation {
   id: string;
   captured_at_ms: number;
   expires_at_ms: number;
+  scope: "all_displays" | "main_display";
 }
 
 export interface AppSnapshot {

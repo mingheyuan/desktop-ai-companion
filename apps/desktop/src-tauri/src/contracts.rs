@@ -293,11 +293,37 @@ pub struct ToolRunSummary {
     pub completed_at_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenCaptureScope {
+    #[default]
+    AllDisplays,
+    MainDisplay,
+}
+
+impl ScreenCaptureScope {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "all_displays" => Some(Self::AllDisplays),
+            "main_display" => Some(Self::MainDisplay),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AllDisplays => "所有显示器",
+            Self::MainDisplay => "主显示器",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScreenObservation {
     pub id: String,
     pub captured_at_ms: i64,
     pub expires_at_ms: i64,
+    pub scope: ScreenCaptureScope,
 }
 
 #[derive(Debug, Clone, Serialize)]
