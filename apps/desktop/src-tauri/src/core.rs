@@ -5,7 +5,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -148,6 +148,8 @@ pub struct AppCore {
     interaction_command: Mutex<()>,
     active_playback: Mutex<Option<(String, u64)>>,
     audio_writer: Mutex<Option<AudioWriter>>,
+    audio_connection_id: Mutex<Option<String>>,
+    audio_last_pong: Mutex<Option<(String, Instant)>>,
     audio_launch: Mutex<()>,
     voice_command: Mutex<()>,
     listening_requested: AtomicBool,
@@ -191,6 +193,8 @@ impl AppCore {
             interaction_command: Mutex::new(()),
             active_playback: Mutex::new(None),
             audio_writer: Mutex::new(None),
+            audio_connection_id: Mutex::new(None),
+            audio_last_pong: Mutex::new(None),
             audio_launch: Mutex::new(()),
             voice_command: Mutex::new(()),
             listening_requested: AtomicBool::new(false),
@@ -2376,6 +2380,8 @@ impl AppCore {
     pub async fn shutdown_audio_host(&self) {
         self.listening_requested.store(false, Ordering::SeqCst);
         let writer = self.audio_writer.lock().await.take();
+        *self.audio_connection_id.lock().await = None;
+        *self.audio_last_pong.lock().await = None;
         if let Some(writer) = writer {
             let _ = audio::send(&writer, json!({"type": "shutdown"})).await;
         }
@@ -2445,13 +2451,25 @@ impl AppCore {
                 return Err(error);
             }
         };
+        let connection_id = connection.connection_id.clone();
         *self.audio_writer.lock().await = Some(connection.writer.clone());
+        *self.audio_connection_id.lock().await = Some(connection_id.clone());
+        *self.audio_last_pong.lock().await = Some((connection_id.clone(), Instant::now()));
         {
             let mut runtime = self.runtime.write().await;
             runtime.revision += 1;
             runtime.audio_host_state = "handshaking".into();
         }
         self.emit_snapshot(app).await?;
+        let heartbeat_core = Arc::clone(self);
+        let heartbeat_app = app.clone();
+        let heartbeat_writer = connection.writer.clone();
+        let heartbeat_connection_id = connection_id.clone();
+        tauri::async_runtime::spawn(async move {
+            heartbeat_core
+                .run_audio_heartbeat(heartbeat_app, heartbeat_writer, heartbeat_connection_id)
+                .await;
+        });
         let core = Arc::clone(self);
         let app = app.clone();
         let task: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(async move {
@@ -2463,12 +2481,78 @@ impl AppCore {
         Ok(connection.writer)
     }
 
+    async fn run_audio_heartbeat(
+        self: Arc<Self>,
+        app: AppHandle,
+        writer: AudioWriter,
+        connection_id: String,
+    ) {
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut sequence = 0_u64;
+        loop {
+            interval.tick().await;
+            let current = self.audio_connection_id.lock().await.clone();
+            if current.as_deref() != Some(connection_id.as_str()) {
+                return;
+            }
+            let stale = self
+                .audio_last_pong
+                .lock()
+                .await
+                .as_ref()
+                .filter(|(id, _)| id == &connection_id)
+                .is_none_or(|(_, last_pong)| last_pong.elapsed() > Duration::from_secs(6));
+            if stale {
+                self.handle_audio_event(
+                    &app,
+                    json!({
+                        "type": "host.disconnected",
+                        "_connection_id": connection_id,
+                        "reason": "heartbeat_timeout"
+                    }),
+                )
+                .await;
+                return;
+            }
+            sequence = sequence.wrapping_add(1);
+            if audio::send(&writer, json!({"type": "core.ping", "seq": sequence}))
+                .await
+                .is_err()
+            {
+                self.handle_audio_event(
+                    &app,
+                    json!({
+                        "type": "host.disconnected",
+                        "_connection_id": connection_id,
+                        "reason": "heartbeat_write_failed"
+                    }),
+                )
+                .await;
+                return;
+            }
+        }
+    }
+
     async fn handle_audio_event(self: &Arc<Self>, app: &AppHandle, event: Value) {
+        let event_connection_id = event.get("_connection_id").and_then(Value::as_str);
+        if let Some(event_connection_id) = event_connection_id {
+            let current = self.audio_connection_id.lock().await;
+            if current.as_deref() != Some(event_connection_id) {
+                return;
+            }
+        }
         let event_type = event
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or_default();
         match event_type {
+            "host.pong" => {
+                if let Some(connection_id) = event_connection_id {
+                    *self.audio_last_pong.lock().await =
+                        Some((connection_id.to_owned(), Instant::now()));
+                }
+            }
             "host.ready" => {
                 let mut runtime = self.runtime.write().await;
                 runtime.revision += 1;
@@ -2719,6 +2803,8 @@ impl AppCore {
                 let _ = self.emit_snapshot(app).await;
             }
             "host.disconnected" => {
+                *self.audio_connection_id.lock().await = None;
+                *self.audio_last_pong.lock().await = None;
                 *self.audio_writer.lock().await = None;
                 *self.active_playback.lock().await = None;
                 let should_recover = self.listening_requested.load(Ordering::SeqCst);

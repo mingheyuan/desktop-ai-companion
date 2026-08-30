@@ -1,6 +1,6 @@
 # IPC 与 AudioHost 协议
 
-> 本文主体是目标协议。当前代码已经实现的 v1.0 子集、实际消息名和缺口以 [MVP 实现状态矩阵](status.md#当前-audiohost-协议v10-子集) 为准；media socket、heartbeat、统一 request/response ACK 尚未接入。
+> 本文主体是目标协议。当前代码已经实现的 v1.0 子集、实际消息名和缺口以 [MVP 实现状态矩阵](status.md#当前-audiohost-协议v10-子集) 为准；二进制 media socket 和统一 request/response ACK 尚未接入，control socket 的 heartbeat 已接入。
 
 ## 1. 版本与公共 envelope
 
@@ -105,7 +105,8 @@ Rust 验证后回复：
 
 - major 不同：立即拒绝并提示升级。
 - minor 不同：使用双方 capability 交集。
-- Rust 每 2 秒发送 `core.ping(seq)`；连续 3 次未收到 `host.pong` 即判定断线。
+- 当前实现使用 `host.ack` 完成握手；随后 Rust 每 2 秒发送 `core.ping(seq)`，AudioHost 回 `host.pong(seq)`。连续 6 秒未收到当前连接对应的 pong，或 ping 写入失败，即判定半开/断线并进入已有恢复路径。
+- 每次连接由 Rust 注入唯一 connection ID；迟到的旧连接事件不会清理新连接，正常 shutdown 也不会触发持续监听恢复。
 - 启动连接超时 15 秒；优雅停止等待 3 秒，之后终止进程。
 
 ## 6. AudioHost control 消息

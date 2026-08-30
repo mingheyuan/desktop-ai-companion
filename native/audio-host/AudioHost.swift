@@ -491,6 +491,8 @@ DispatchQueue.global(qos: .userInitiated).async {
         case "host.ack":
             emitPermissionStatus()
             emit(["type": "host.ready"])
+        case "core.ping":
+            emit(["type": "host.pong", "seq": message["seq"] as? Int ?? 0])
         case "permissions.request":
             DispatchQueue.main.async { requestPermissions {} }
         case "permissions.status":

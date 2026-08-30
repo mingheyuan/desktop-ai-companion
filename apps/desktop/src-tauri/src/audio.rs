@@ -24,6 +24,7 @@ pub type AudioWriter = Arc<Mutex<OwnedWriteHalf>>;
 pub struct AudioConnection {
     pub writer: AudioWriter,
     pub events: mpsc::UnboundedReceiver<Value>,
+    pub connection_id: String,
 }
 
 pub async fn launch(bundled_app: Option<PathBuf>) -> Result<AudioConnection, AppError> {
@@ -90,6 +91,7 @@ pub async fn launch(bundled_app: Option<PathBuf>) -> Result<AudioConnection, App
     drop(listener);
     cleanup_paths(&socket_path, &token_path);
 
+    let connection_id = launch_nonce.clone();
     let (reader, writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let hello_line = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
@@ -129,20 +131,31 @@ pub async fn launch(bundled_app: Option<PathBuf>) -> Result<AudioConnection, App
     )
     .await?;
     let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let event_connection_id = connection_id.clone();
     tauri::async_runtime::spawn(async move {
         while let Ok(Some(line)) = lines.next_line().await {
-            if let Ok(event) = serde_json::from_str::<Value>(&line) {
+            if let Ok(mut event) = serde_json::from_str::<Value>(&line) {
+                if let Some(object) = event.as_object_mut() {
+                    object.insert(
+                        "_connection_id".into(),
+                        Value::String(event_connection_id.clone()),
+                    );
+                }
                 if event_tx.send(event).is_err() {
                     break;
                 }
             }
         }
-        let _ = event_tx.send(json!({"type": "host.disconnected"}));
+        let _ = event_tx.send(json!({
+            "type": "host.disconnected",
+            "_connection_id": event_connection_id
+        }));
         let _ = child.wait().await;
     });
     Ok(AudioConnection {
         writer,
         events: event_rx,
+        connection_id,
     })
 }
 
@@ -278,6 +291,22 @@ mod tests {
         .await
         .expect("AudioHost should become ready before timeout");
         assert!(ready);
+        send(&connection.writer, json!({"type": "core.ping", "seq": 1}))
+            .await
+            .expect("AudioHost should accept heartbeat");
+        let pong = tokio::time::timeout(Duration::from_secs(3), async {
+            while let Some(event) = connection.events.recv().await {
+                if event.get("type").and_then(Value::as_str) == Some("host.pong")
+                    && event.get("seq").and_then(Value::as_u64) == Some(1)
+                {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .expect("AudioHost should respond to heartbeat");
+        assert!(pong);
         send(&connection.writer, json!({"type": "shutdown"}))
             .await
             .expect("AudioHost should accept shutdown");
