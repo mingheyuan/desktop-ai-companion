@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::contracts::{
     CharacterSettings, ChatMessage, DataSummary, MemoryCandidate, MemoryItem, MessageRole,
-    MessageStatus, PetSettings, ProviderSettings, TimerHistoryItem, TimerItem, ToolRunSummary,
-    VoiceSettings,
+    MessageStatus, PetSettings, ProviderSettings, RelationshipState, TimerHistoryItem, TimerItem,
+    ToolRunSummary, VoiceSettings,
 };
 
 pub struct Storage {
@@ -32,6 +32,8 @@ pub struct TimerInput<'a> {
     pub timezone: &'a str,
     pub original_request: &'a str,
 }
+
+const RELATIONSHIP_FAMILIARITY_STEP: f64 = 0.02;
 
 pub struct MemoryCandidateInput<'a> {
     pub id: &'a str,
@@ -327,6 +329,43 @@ impl Storage {
         Ok(id)
     }
 
+    pub fn load_relationship_state(
+        &self,
+        character_id: &str,
+    ) -> Result<RelationshipState, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        connection
+            .query_row(
+                "SELECT character_id, affinity, familiarity, interaction_count, summary, version, updated_at_ms
+                   FROM relationship_state
+                  WHERE character_id=?1",
+                [character_id],
+                |row| {
+                    Ok(RelationshipState {
+                        character_id: row.get(0)?,
+                        affinity: row.get(1)?,
+                        familiarity: row.get(2)?,
+                        interaction_count: row.get(3)?,
+                        summary: row.get(4)?,
+                        version: row.get(5)?,
+                        updated_at_ms: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+            .map(|state| {
+                state.unwrap_or_else(|| RelationshipState {
+                    character_id: character_id.to_owned(),
+                    affinity: 0.0,
+                    familiarity: 0.0,
+                    interaction_count: 0,
+                    summary: String::new(),
+                    version: 1,
+                    updated_at_ms: 0,
+                })
+            })
+    }
+
     pub fn recover_interrupted_turns(&self, now_ms: i64) -> Result<(), rusqlite::Error> {
         let connection = self.connection.lock().expect("storage mutex poisoned");
         connection.execute(
@@ -396,6 +435,7 @@ impl Storage {
     pub fn complete_turn(
         &self,
         conversation_id: &str,
+        character_id: &str,
         turn_id: &str,
         text: &str,
         now_ms: i64,
@@ -415,6 +455,16 @@ impl Storage {
         transaction.execute(
             "UPDATE conversations SET updated_at_ms=?1 WHERE id=?2",
             params![now_ms, conversation_id],
+        )?;
+        transaction.execute(
+            "INSERT INTO relationship_state(character_id, affinity, familiarity, interaction_count, summary, version, updated_at_ms)
+             VALUES(?1, 0, MIN(1.0, ?2), 1, '', 1, ?3)
+             ON CONFLICT(character_id) DO UPDATE SET
+               familiarity=MIN(1.0, relationship_state.familiarity + ?2),
+               interaction_count=relationship_state.interaction_count + 1,
+               version=relationship_state.version + 1,
+               updated_at_ms=excluded.updated_at_ms",
+            params![character_id, RELATIONSHIP_FAMILIARITY_STEP, now_ms],
         )?;
         transaction.commit()?;
         Ok(ChatMessage {
@@ -1548,12 +1598,78 @@ mod tests {
             .unwrap();
         storage.mark_turn_active("turn-1").unwrap();
         storage
-            .complete_turn(&conversation, "turn-1", "老师，爱丽丝已就绪。", 3)
+            .complete_turn(&conversation, "aris", "turn-1", "老师，爱丽丝已就绪。", 3)
             .unwrap();
         let messages = storage.list_messages(&conversation, 20).unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].canonical_text, "你好");
         assert_eq!(messages[1].role, MessageRole::Assistant);
+        let relationship = storage.load_relationship_state("aris").unwrap();
+        assert_eq!(relationship.interaction_count, 1);
+        assert!((relationship.familiarity - 0.02).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn relationship_state_counts_completed_turns_and_caps_familiarity() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(1).unwrap();
+
+        for index in 0..60 {
+            let turn_id = format!("relationship-turn-{index}");
+            storage
+                .begin_turn(
+                    &conversation,
+                    &turn_id,
+                    index + 1,
+                    "text",
+                    "你好，爱丽丝。",
+                    index as i64 + 2,
+                )
+                .unwrap();
+            storage
+                .complete_turn(
+                    &conversation,
+                    "aris",
+                    &turn_id,
+                    "老师，爱丽丝收到。",
+                    index as i64 + 3,
+                )
+                .unwrap();
+        }
+
+        let relationship = storage.load_relationship_state("aris").unwrap();
+        assert_eq!(relationship.interaction_count, 60);
+        assert!((relationship.familiarity - 1.0).abs() < f64::EPSILON);
+        assert_eq!(relationship.version, 60);
+        assert_eq!(relationship.affinity, 0.0);
+
+        storage
+            .begin_turn(
+                &conversation,
+                "relationship-cancelled",
+                61,
+                "text",
+                "取消这次对话",
+                100,
+            )
+            .unwrap();
+        storage
+            .finish_turn_with_status(
+                "relationship-cancelled",
+                "cancelled",
+                Some("user_cancelled"),
+                "",
+                &conversation,
+                101,
+            )
+            .unwrap();
+        assert_eq!(
+            storage
+                .load_relationship_state("aris")
+                .unwrap()
+                .interaction_count,
+            60
+        );
     }
 
     #[test]
@@ -1864,7 +1980,7 @@ mod tests {
             .begin_turn(&conversation, "turn-cleanup", 1, "text", "记住蓝色", 2)
             .unwrap();
         storage
-            .complete_turn(&conversation, "turn-cleanup", "已记录。", 3)
+            .complete_turn(&conversation, "aris", "turn-cleanup", "已记录。", 3)
             .unwrap();
         storage.create_user_memory("老师喜欢蓝色", 4).unwrap();
         {

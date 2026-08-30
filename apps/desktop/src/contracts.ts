@@ -99,6 +99,16 @@ export interface CharacterSettings {
   revision: number;
 }
 
+export interface RelationshipState {
+  character_id: string;
+  affinity: number;
+  familiarity: number;
+  interaction_count: number;
+  summary: string;
+  version: number;
+  updated_at_ms: number;
+}
+
 export interface ToolApproval {
   tool_call_id: string;
   tool_name: string;
@@ -162,6 +172,7 @@ export interface AppSnapshot {
   provider: ProviderSettings;
   pet: PetSettings;
   character: CharacterSettings;
+  relationship: RelationshipState;
   audio_host_state: "stopped" | "launching" | "handshaking" | "ready" | "failed";
   voice_permissions: VoicePermissions;
   voice_settings: VoiceSettings;

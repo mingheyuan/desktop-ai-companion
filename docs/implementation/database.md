@@ -6,7 +6,7 @@
 - SQLite 只保存会话、消息、确认流程、非秘密设置与角色关系状态。
 - API key 和 provider token 只保存到 macOS Keychain；数据库仅保存 Keychain item 的逻辑引用。
 - 原始麦克风 PCM、屏幕截图和 TTS 临时音频默认不落盘。
-- MemoryWorker 是 `memory_candidates`、`memories`、`memory_fts` 与 `relationship_state` 的唯一写入者。
+- Rust Core 只能通过 Storage repository 写入 `memory_candidates`、`memories`、`memory_fts` 与 `relationship_state`；Provider 和前端没有数据库直连。
 
 所有 ID 使用 UUIDv7 文本；时间使用 UTC Unix milliseconds。用户输入和助手回复分开保存 canonical/display/spoken 文本，记忆提取只能读取 canonical 文本。
 
@@ -177,6 +177,8 @@ CREATE TABLE app_settings (
 
 `scope='user'` 与具体角色无关，`character_id` 必须为空；`scope='relationship'` 必须带角色 ID。该约束由 repository 校验并由测试覆盖。角色核心设定和资源许可证属于版本控制内的角色包，不写入记忆表。
 
+当前 MVP 只在助手回复成功提交时更新 `relationship_state`：`interaction_count` 加 1，`familiarity` 以固定 0.02 步长增加并封顶为 1；取消、失败和应用中断不会计入。`affinity` 与 `summary` 暂不自动推断，避免把模型猜测当成关系事实；清空全部长期记忆时关系状态也会随之清空。
+
 提醒事实保存在 `timers` 表中；主面板将 `pending` 投影为待处理列表，将 `fired`/`cancelled` 按完成时间投影为最近历史，不额外复制提醒状态，也不改变调度器的 claim 流程。
 
 ## 4. FTS5
@@ -224,7 +226,7 @@ update 随后更新 `memories` 并插入新索引项；delete 随后删除 `memo
 
 确认路径在一个 SQLite 事务中读取 pending 候选、创建正式 `memories` 行、写入 `memory_fts` 和 `memory_audit`，最后把候选标记为 `confirmed`。拒绝路径只把候选标记为 `rejected`，不会写入正式记忆，也不会进入检索。所有状态更新都带有 `status='pending'` 条件，重复确认或拒绝只返回冲突/无变化，不会重复生成记忆。
 
-只有 `turn.status=completed` 才进入提取：
+只有 `turn.status=completed` 才进入提取或互动计数：
 
 1. 读取该 turn 的 canonical user/assistant 文本。
 2. 提取最多 3 条候选，分为 user fact/preference 与 relationship event/summary。

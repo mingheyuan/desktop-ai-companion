@@ -277,6 +277,12 @@ export function ChatPanel() {
         </div>
         <div className="header-actions">
           <span className="provider-badge">{snapshot.provider.provider === "mock" ? "MOCK" : snapshot.provider.model}</span>
+          <span
+            className="relationship-badge"
+            title={`已完成 ${snapshot.relationship.interaction_count} 次互动，熟悉度 ${Math.round(snapshot.relationship.familiarity * 100)}%`}
+          >
+            互动 {snapshot.relationship.interaction_count}
+          </span>
           <div className={`status-pill state-${snapshot.avatar_state}`}>{snapshot.avatar_state}</div>
           <button className="header-text-button" type="button" onClick={() => setMemoryOpen(true)}>记忆</button>
           <button className="header-text-button" type="button" onClick={() => setTimersOpen((open) => !open)}>提醒{snapshot.timers.length ? ` ${snapshot.timers.length}` : ""}</button>

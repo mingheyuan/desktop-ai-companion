@@ -42,6 +42,15 @@ const snapshot: AppSnapshot = {
     model_size_bytes: null,
     revision: 0,
   },
+  relationship: {
+    character_id: "aris",
+    affinity: 0,
+    familiarity: 0,
+    interaction_count: 0,
+    summary: "",
+    version: 1,
+    updated_at_ms: 0,
+  },
   audio_host_state: "stopped",
   voice_permissions: {
     microphone: "not_determined",

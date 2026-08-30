@@ -178,6 +178,17 @@ pub struct CharacterSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RelationshipState {
+    pub character_id: String,
+    pub affinity: f64,
+    pub familiarity: f64,
+    pub interaction_count: u64,
+    pub summary: String,
+    pub version: u64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MemoryItem {
     pub id: String,
     pub scope: String,
@@ -384,6 +395,7 @@ pub struct AppSnapshot {
     pub provider: ProviderSettings,
     pub pet: PetSettings,
     pub character: CharacterSettings,
+    pub relationship: RelationshipState,
     pub audio_host_state: String,
     pub voice_permissions: VoicePermissions,
     pub voice_settings: VoiceSettings,

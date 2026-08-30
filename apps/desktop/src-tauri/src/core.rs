@@ -308,6 +308,10 @@ impl AppCore {
         let provider = self.provider.read().await.clone();
         let pet = self.pet.read().await.clone();
         let character = self.character.read().await.clone();
+        let relationship = self
+            .storage
+            .load_relationship_state(&character.character_id)
+            .map_err(storage_error)?;
         let voice_settings = self.voice_settings.read().await.clone();
         let messages = self
             .storage
@@ -346,6 +350,7 @@ impl AppCore {
             provider,
             pet,
             character,
+            relationship,
             audio_host_state: runtime.audio_host_state.clone(),
             voice_permissions: runtime.voice_permissions.clone(),
             voice_settings,
@@ -1436,10 +1441,14 @@ impl AppCore {
             runtime.generation_state = GenerationState::Finished;
         }
         let _ = self.emit_snapshot(app).await;
-        if let Err(error) =
-            self.storage
-                .complete_turn(&self.conversation_id, turn_id, response, now_ms())
-        {
+        let character_id = self.character.read().await.character_id.clone();
+        if let Err(error) = self.storage.complete_turn(
+            &self.conversation_id,
+            &character_id,
+            turn_id,
+            response,
+            now_ms(),
+        ) {
             self.fail_turn(
                 app,
                 turn_id,
