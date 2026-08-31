@@ -132,6 +132,7 @@ MVP 包含唤醒词和持续监听，并满足以下边界：
 ## 项目文档
 
 - [`docs/architecture.md`](docs/architecture.md)：MVP 内部架构、数据所有权、状态模型、语音与记忆流程。
+- [`docs/memory-v2.md`](docs/memory-v2.md)：Memory V2 设计与冻结规则；当前为待确认方案，尚未修改数据库和业务代码。
 - [`docs/implementation/README.md`](docs/implementation/README.md)：可直接指导编码的状态机、协议、数据库、Provider、AudioHost、时序和 VRM 规格索引。
 - [`docs/implementation/status.md`](docs/implementation/status.md)：当前已实现代码事实、验证结果与目标规格差距。
 - [`docs/tools-and-vision.md`](docs/tools-and-vision.md)：工具调用、闹钟/提醒、屏幕观察、独立多模态 Provider 与真实参考项目。
