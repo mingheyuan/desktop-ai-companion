@@ -367,6 +367,8 @@ pub struct ScreenObservation {
     pub captured_at_ms: i64,
     pub expires_at_ms: i64,
     pub scope: ScreenCaptureScope,
+    #[serde(default)]
+    pub sent_to_vision: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

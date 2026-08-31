@@ -10,7 +10,7 @@
 | VRM | `three-vrm` 加载、合法性/大小校验、应用数据目录托管、授权模型导入和 fallback 降级 | 前端构建和浏览器渲染检查；正式角色仍待授权 VRM 验收 |
 | 默认角色 | 天童爱丽丝的人格摘要进入 LLM system prompt；角色规则与不可信用户记忆分区 | Provider 单元测试、角色资料人工复核 |
 | 文字对话 | mock/OpenAI-compatible SSE、单活动 turn、generation + cancellation；API key 可选以支持 Ollama/LM Studio；设置页可用固定无上下文探针测试已保存的 LLM 配置 | Rust 单元测试、Provider 连接测试、前端状态测试 |
-| 视觉 Provider 配置 | 独立启用开关、endpoint、model 和 Keychain API key 已保存；`screen.observe` 已可在用户确认后按所有显示器/主显示器范围生成进程内存中的一次性本地预览，并由 macOS Vision 在本地提取 OCR 文字，范围和 OCR 结果显示在预览中，支持自动清除倒计时、重新读取、手动清除和 5 分钟自动过期，但尚未采集后上传 | Provider 设置 UI、Rust 配置校验、本地截图与 OCR 预览清除/自动过期；视觉模型数据出站仍待单独明确授权和实现 |
+| 视觉 Provider 配置 | 独立启用开关、endpoint、model 和 Keychain API key 已保存；`screen.observe` 已可在用户确认后按所有显示器/主显示器范围生成进程内存中的一次性本地预览，并由 macOS Vision 在本地提取 OCR 文字；启用 Vision 后，第二次确认才会通过 OpenAI-compatible `image_url` 发送 PNG，并把分析文本作为当前助手回复，截图不写入数据库或长期记忆 | Provider 设置 UI、Rust 配置校验、本地截图与 OCR 预览清除/自动过期、二次出站确认和 Vision 请求已完成；窗口/区域选择、会话级授权和云端/本地端到端兼容性验证仍待补齐 |
 | 本地数据 | SQLite migration、会话恢复、消息提交 | Rust repository 测试和真实数据库迁移 |
 | 显式记忆 | 创建、FTS 搜索、中文二字片段回退、编辑、物理删除、审计、可选上下文注入；聊天中明确“忘记/删除某条记忆”时支持本地唯一匹配、确认和版本校验删除；模型或明确保存请求先写入持久化候选，审核通过后才转为正式记忆 | SQLite 事务/FTS 测试、候选确认/拒绝幂等测试、保存→自然改写检索→Provider 使用→删除闭环测试、聊天删除解析/唯一匹配测试、UI 检查 |
 | 互动状态 | 每个成功完成的助手 turn 在同一 SQLite 事务内累加当前角色的 `interaction_count`，并以 0.02 步长增加封顶的 `familiarity`；快照和主面板显示互动次数，取消/失败/中断不计入，暂不自动修改 `affinity` 或 `summary` | relationship 事件候选、语义关系摘要、衰减与更细粒度的用户可控规则仍待补齐 |

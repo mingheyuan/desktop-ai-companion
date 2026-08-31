@@ -40,6 +40,10 @@ pub(crate) enum ToolAction {
         request: String,
         scope: ScreenCaptureScope,
     },
+    AnalyzeScreen {
+        observation_id: String,
+        question: String,
+    },
 }
 
 pub(crate) struct ModelToolCandidate {

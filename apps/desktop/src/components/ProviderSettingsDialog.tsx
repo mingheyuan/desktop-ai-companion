@@ -133,7 +133,7 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
         <section className="settings-section" aria-label="视觉 Provider 配置">
           <p className="eyebrow">VISION PROVIDER</p>
           <h3>屏幕理解配置</h3>
-          <p className="settings-hint">这里只保存独立的视觉模型连接信息，不会自动采集或上传屏幕。真正启用屏幕观察前仍会单独确认数据出站。</p>
+          <p className="settings-hint">这里只保存独立的视觉模型连接信息，不会自动采集或上传屏幕。读取本地预览后，还会单独确认是否把截图发送到这里配置的 Endpoint。</p>
           <label className="check-row">
             <input type="checkbox" checked={visionEnabled} onChange={(event) => setVisionEnabled(event.target.checked)} />
             启用视觉 Provider 配置

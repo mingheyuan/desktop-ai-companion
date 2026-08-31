@@ -155,6 +155,7 @@ export interface ScreenObservation {
   captured_at_ms: number;
   expires_at_ms: number;
   scope: "all_displays" | "main_display";
+  sent_to_vision: boolean;
 }
 
 export interface AppSnapshot {

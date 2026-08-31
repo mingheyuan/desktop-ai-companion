@@ -32,7 +32,7 @@ use crate::{
     },
     desktop::apply_pet_window_settings,
     notifications,
-    provider::{create_provider, LlmEvent, LlmMessage, LlmRequest, ToolCall},
+    provider::{analyze_image, create_provider, LlmEvent, LlmMessage, LlmRequest, ToolCall},
     secret::SecretStore,
     storage::{MemoryCandidateInput, Storage, TimerInput, ToolRunInput},
     tools::{
@@ -785,6 +785,15 @@ impl AppCore {
                     json!({ "request": request, "scope": scope, "send_to_provider": false })
                         .to_string()
                 }
+                PendingToolAction::AnalyzeScreen {
+                    observation_id,
+                    question,
+                } => json!({
+                    "observation_id": observation_id,
+                    "question": question,
+                    "send_to_provider": true
+                })
+                .to_string(),
             };
             self.storage
                 .begin_tool_run(
@@ -1403,6 +1412,112 @@ impl AppCore {
         Ok(())
     }
 
+    async fn queue_vision_analysis(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        turn_id: &str,
+        generation: u64,
+        observation_id: String,
+        question: String,
+    ) -> Result<(), AppError> {
+        let question = question.trim().to_owned();
+        if question.is_empty() || question.chars().count() > 500 {
+            return Err(AppError::new(
+                "invalid_request",
+                "视觉分析问题必须是 1 到 500 个字符。",
+                false,
+            ));
+        }
+        let scope = {
+            let observation = self.screen_observation.read().await;
+            let Some(record) = observation.as_ref() else {
+                return Err(AppError::new(
+                    "not_found",
+                    "当前没有可发送给视觉模型的屏幕预览。",
+                    false,
+                ));
+            };
+            if record.metadata.id != observation_id
+                || screen_observation_expired(record.metadata.expires_at_ms, now_ms())
+            {
+                return Err(AppError::new(
+                    "screen_observation_expired",
+                    "本地屏幕预览已过期，请重新读取后再分析。",
+                    false,
+                ));
+            }
+            record.metadata.scope
+        };
+        let provider = self.provider.read().await.clone();
+        if !provider.vision.enabled {
+            return Err(AppError::new(
+                "vision_disabled",
+                "视觉 Provider 当前未启用，请先在设置中开启。",
+                false,
+            ));
+        }
+        let tool_call_id = Uuid::now_v7().to_string();
+        let arguments_json = json!({
+            "observation_id": observation_id,
+            "question": question,
+            "send_to_provider": true
+        })
+        .to_string();
+        self.storage
+            .begin_tool_run(
+                ToolRunInput {
+                    id: &tool_call_id,
+                    conversation_id: &self.conversation_id,
+                    turn_id,
+                    tool_name: "vision.analyze",
+                    arguments_json: &arguments_json,
+                    origin: "user_explicit",
+                },
+                now_ms(),
+            )
+            .map_err(storage_error)?;
+        let pending = PendingTool {
+            approval: ToolApproval {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: "vision.analyze".into(),
+                display_name: "发送屏幕给视觉模型".into(),
+                summary: format!(
+                    "确认后会把{}的当前截图发送到 Vision Provider（{} / {}），只用于回答本次问题；截图不会写入数据库或长期记忆。",
+                    scope.label(),
+                    vision_endpoint_label(&provider.vision.endpoint),
+                    provider.vision.model
+                ),
+                url: None,
+                host: None,
+                title: Some(question.clone()),
+                due_at_ms: None,
+                expires_at_ms: Self::tool_approval_expiry_ms(),
+            },
+            turn_id: turn_id.to_owned(),
+            generation,
+            action: PendingToolAction::AnalyzeScreen {
+                observation_id,
+                question,
+            },
+            origin: PendingToolOrigin::Explicit,
+        };
+        {
+            let mut runtime = self.runtime.write().await;
+            runtime.revision += 1;
+            runtime.turn_state = TurnState::Active;
+            runtime.generation_state = GenerationState::Finished;
+            runtime.pending_tool = Some(pending);
+        }
+        self.emit_snapshot(app).await?;
+        self.schedule_tool_approval_expiration(
+            app.clone(),
+            tool_call_id,
+            turn_id.to_owned(),
+            generation,
+        );
+        Ok(())
+    }
+
     fn schedule_tool_approval_expiration(
         self: &Arc<Self>,
         app: AppHandle,
@@ -1722,6 +1837,9 @@ impl AppCore {
                 PendingToolAction::ObserveScreen { .. } => {
                     "好的，老师，已取消读取当前屏幕。".into()
                 }
+                PendingToolAction::AnalyzeScreen { .. } => {
+                    "好的，老师，已取消把屏幕发送给视觉模型。".into()
+                }
             };
             if matches!(&pending.action, PendingToolAction::SaveMemory { .. }) {
                 let _ = self
@@ -1872,6 +1990,58 @@ impl AppCore {
                         observation.id,
                     )
                 }),
+            PendingToolAction::AnalyzeScreen {
+                observation_id,
+                question,
+            } => {
+                let png = {
+                    let observation = self.screen_observation.read().await;
+                    if observation.as_ref().is_some_and(|record| {
+                        screen_observation_expired(record.metadata.expires_at_ms, now_ms())
+                    }) {
+                        return Err(AppError::new(
+                            "screen_observation_expired",
+                            "本地屏幕预览已过期，请重新读取后再分析。",
+                            false,
+                        ));
+                    }
+                    observation
+                        .as_ref()
+                        .filter(|record| record.metadata.id == observation_id)
+                        .map(|record| record.png.clone())
+                        .ok_or_else(|| {
+                            AppError::new(
+                                "not_found",
+                                "当前没有可发送给视觉模型的屏幕预览。",
+                                false,
+                            )
+                        })?
+                };
+                if png.len() > 8 * 1024 * 1024 {
+                    return Err(AppError::new(
+                        "vision_image_too_large",
+                        "屏幕截图超过 8 MB，未发送给视觉模型。",
+                        false,
+                    ));
+                }
+                let provider = self.provider.read().await.clone();
+                if !provider.vision.enabled {
+                    return Err(AppError::new(
+                        "vision_disabled",
+                        "视觉 Provider 当前未启用，请先在设置中开启。",
+                        false,
+                    ));
+                }
+                let api_key = self.resolve_vision_api_key().await?;
+                let cancel = self
+                    .active_turn
+                    .lock()
+                    .await
+                    .as_ref()
+                    .map(|active| active.cancel.clone())
+                    .unwrap_or_else(CancellationToken::new);
+                analyze_image(&provider.vision, api_key, &png, &question, cancel).await
+            }
         };
         match execution {
             Ok(result) => {
@@ -1885,7 +2055,49 @@ impl AppCore {
                     .map_err(storage_error)?;
                 if matches!(&pending.origin, PendingToolOrigin::Model { .. }) {
                     self.resume_model_tool(app, pending, result).await?;
+                } else if matches!(&pending.action, PendingToolAction::AnalyzeScreen { .. }) {
+                    if let PendingToolAction::AnalyzeScreen { observation_id, .. } = &pending.action
+                    {
+                        self.mark_screen_observation_sent(observation_id, app).await;
+                    }
+                    self.complete_turn(app, &pending.turn_id, pending.generation, &result)
+                        .await;
                 } else {
+                    if let PendingToolAction::ObserveScreen { request, .. } = &pending.action {
+                        let vision_enabled = self.provider.read().await.vision.enabled;
+                        if vision_enabled {
+                            let observation_id = self
+                                .screen_observation
+                                .read()
+                                .await
+                                .as_ref()
+                                .map(|record| record.metadata.id.clone());
+                            if let Some(observation_id) = observation_id {
+                                if let Err(error) = self
+                                    .queue_vision_analysis(
+                                        app,
+                                        &pending.turn_id,
+                                        pending.generation,
+                                        observation_id,
+                                        request.clone(),
+                                    )
+                                    .await
+                                {
+                                    self.complete_turn(
+                                        app,
+                                        &pending.turn_id,
+                                        pending.generation,
+                                        &format!(
+                                            "{result}（无法准备视觉模型确认：{}）",
+                                            error.message
+                                        ),
+                                    )
+                                    .await;
+                                }
+                                return Ok(());
+                            }
+                        }
+                    }
                     let message = match &pending.action {
                         PendingToolAction::OpenUrl { url } => format!("网页已打开，老师：{url}"),
                         PendingToolAction::CreateTimer {
@@ -1906,6 +2118,7 @@ impl AppCore {
                         PendingToolAction::ObserveScreen { .. } => {
                             "已读取当前屏幕，老师可以在本地预览区查看截图。".into()
                         }
+                        PendingToolAction::AnalyzeScreen { .. } => "已完成视觉模型分析。".into(),
                     };
                     self.complete_turn(app, &pending.turn_id, pending.generation, &message)
                         .await;
@@ -2076,6 +2289,7 @@ impl AppCore {
             captured_at_ms,
             expires_at_ms: captured_at_ms.saturating_add(SCREEN_OBSERVATION_TTL_MS),
             scope,
+            sent_to_vision: false,
         };
         *self.screen_observation.write().await = Some(ScreenObservationRecord {
             metadata: metadata.clone(),
@@ -2112,6 +2326,24 @@ impl AppCore {
             }
         });
         Ok(metadata)
+    }
+
+    async fn mark_screen_observation_sent(&self, observation_id: &str, app: &AppHandle) {
+        let marked = {
+            let mut observation = self.screen_observation.write().await;
+            let Some(record) = observation.as_mut() else {
+                return;
+            };
+            if record.metadata.id != observation_id {
+                return;
+            }
+            record.metadata.sent_to_vision = true;
+            true
+        };
+        if marked {
+            self.runtime.write().await.revision += 1;
+            let _ = self.emit_snapshot(app).await;
+        }
     }
 
     pub async fn get_screen_observation_preview(
@@ -3480,6 +3712,13 @@ fn now_ms() -> i64 {
 
 fn screen_observation_expired(expires_at_ms: i64, now_ms: i64) -> bool {
     now_ms >= expires_at_ms
+}
+
+fn vision_endpoint_label(endpoint: &str) -> String {
+    reqwest::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "已配置地址".into())
 }
 
 fn storage_error(error: rusqlite::Error) -> AppError {

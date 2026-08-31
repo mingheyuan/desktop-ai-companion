@@ -259,6 +259,7 @@ export function ChatPanel() {
     "memory.save": "保存记忆",
     "memory.delete": "删除记忆",
     "screen.observe": "读取屏幕",
+    "vision.analyze": "视觉模型分析",
   }[name] ?? name);
 
   const formatScreenScope = (scope: string) => scope === "main_display" ? "主显示器" : "所有显示器";
@@ -411,11 +412,11 @@ export function ChatPanel() {
           <p className={`tool-approval-expiry ${snapshot.pending_tool_approval.expires_at_ms - clockMs <= 15_000 ? "urgent" : ""}`} aria-live="polite">确认有效期：{formatTimerRemaining(snapshot.pending_tool_approval.expires_at_ms, clockMs)}</p>
           {snapshot.pending_tool_approval.url && <code className="tool-url">{snapshot.pending_tool_approval.url}</code>}
           {snapshot.pending_tool_approval.host && <p className="tool-host">目标域名：{snapshot.pending_tool_approval.host}</p>}
-          {snapshot.pending_tool_approval.title && <p className="tool-host">{snapshot.pending_tool_approval.tool_name === "memory.save" || snapshot.pending_tool_approval.tool_name === "memory.delete" ? "记忆内容" : "提醒内容"}：{snapshot.pending_tool_approval.title}</p>}
+          {snapshot.pending_tool_approval.title && <p className="tool-host">{snapshot.pending_tool_approval.tool_name === "memory.save" || snapshot.pending_tool_approval.tool_name === "memory.delete" ? "记忆内容" : snapshot.pending_tool_approval.tool_name === "vision.analyze" ? "分析问题" : "提醒内容"}：{snapshot.pending_tool_approval.title}</p>}
           {snapshot.pending_tool_approval.due_at_ms && <p className="tool-host">提醒时间：{formatTimerDue(snapshot.pending_tool_approval.due_at_ms)}</p>}
           <div className="tool-approval-actions">
             <button type="button" className="secondary" disabled={toolBusy} onClick={() => void decidePendingTool(false)}>取消</button>
-            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : snapshot.pending_tool_approval.tool_name === "timer.create" ? "设置提醒" : snapshot.pending_tool_approval.tool_name === "timer.cancel" ? "取消提醒" : snapshot.pending_tool_approval.tool_name === "memory.save" ? "保存记忆" : snapshot.pending_tool_approval.tool_name === "memory.delete" ? "删除记忆" : snapshot.pending_tool_approval.tool_name === "screen.observe" ? "读取屏幕" : "允许打开"}</button>
+            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : snapshot.pending_tool_approval.tool_name === "timer.create" ? "设置提醒" : snapshot.pending_tool_approval.tool_name === "timer.cancel" ? "取消提醒" : snapshot.pending_tool_approval.tool_name === "memory.save" ? "保存记忆" : snapshot.pending_tool_approval.tool_name === "memory.delete" ? "删除记忆" : snapshot.pending_tool_approval.tool_name === "screen.observe" ? "读取屏幕" : snapshot.pending_tool_approval.tool_name === "vision.analyze" ? "发送并分析" : "允许打开"}</button>
           </div>
           {toolError && <p className="settings-error">{toolError}</p>}
         </section>
@@ -499,8 +500,8 @@ export function ChatPanel() {
               <span className="screen-preview-scope">范围：{formatScreenScope(snapshot.screen_observation.scope)}</span>
             </div>
             <div className="screen-preview-actions">
-              <button className="header-text-button" type="button" disabled={submitting || !isTauri()} onClick={() => void rereadScreen(snapshot.screen_observation?.scope)}>重新读取</button>
-              <button className="icon-button" type="button" disabled={screenPreviewBusy} onClick={() => void clearScreenPreview()} aria-label="清除屏幕预览">×</button>
+              <button className="header-text-button" type="button" disabled={submitting || toolBusy || !isTauri()} onClick={() => void rereadScreen(snapshot.screen_observation?.scope)}>重新读取</button>
+              <button className="icon-button" type="button" disabled={screenPreviewBusy || toolBusy} onClick={() => void clearScreenPreview()} aria-label="清除屏幕预览">×</button>
             </div>
           </div>
           {screenPreviewUrl ? <img className="screen-preview-image" src={screenPreviewUrl} alt="当前屏幕的本地临时预览" /> : <p className="timer-empty">正在准备本地预览…</p>}
@@ -510,7 +511,7 @@ export function ChatPanel() {
               <pre>{screenOcrText}</pre>
             </div>
           )}
-          <p className="screen-preview-note">截图只保存在当前应用进程内存中，未发送给聊天或视觉模型。{formatTimerRemaining(snapshot.screen_observation.expires_at_ms, clockMs)}后自动清除；也可以手动清除。</p>
+          <p className="screen-preview-note">{snapshot.screen_observation.sent_to_vision ? "截图已在单独确认后发送给 Vision Provider；不会写入本地数据库或长期记忆。" : "截图只保存在当前应用进程内存中，未发送给聊天或视觉模型。"}{formatTimerRemaining(snapshot.screen_observation.expires_at_ms, clockMs)}后自动清除；也可以手动清除。</p>
           {screenPreviewError && <p className="settings-error">{screenPreviewError}</p>}
         </section>
       )}
