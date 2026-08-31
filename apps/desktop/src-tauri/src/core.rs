@@ -24,11 +24,11 @@ use uuid::Uuid;
 use crate::{
     audio::{self, AudioWriter},
     contracts::{
-        AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, DataSummary, EventEnvelope,
-        GenerationState, InputState, ListeningMode, MemoryCandidate, MemoryItem, MouthLevelPayload,
-        PetSettings, PlaybackState, ProviderSettings, ScreenCaptureScope, ScreenObservation,
-        ScreenObservationPreview, TextDeltaPayload, TimerItem, ToolApproval, TurnEndedPayload,
-        TurnState, VoicePermissions, VoiceSettings,
+        AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, ChatMessage, DataSummary,
+        EventEnvelope, GenerationState, InputState, ListeningMode, MemoryCandidate, MemoryItem,
+        MouthLevelPayload, PetSettings, PlaybackState, ProviderSettings, ScreenCaptureScope,
+        ScreenObservation, ScreenObservationPreview, TextDeltaPayload, TimerItem, ToolApproval,
+        TurnEndedPayload, TurnState, VoicePermissions, VoiceSettings,
     },
     desktop::apply_pet_window_settings,
     notifications,
@@ -1651,6 +1651,12 @@ impl AppCore {
             .await;
             return;
         }
+        if let Ok(Some(user_message)) = self
+            .storage
+            .user_message_for_turn(&self.conversation_id, turn_id)
+        {
+            self.record_completed_interaction(&user_message, &character_id);
+        }
         {
             let mut runtime = self.runtime.write().await;
             runtime.revision += 1;
@@ -1673,6 +1679,60 @@ impl AppCore {
             .await;
         self.speak_response(app, turn_id, generation, response)
             .await;
+    }
+
+    fn record_completed_interaction(&self, user_message: &ChatMessage, character_id: &str) {
+        let text = user_message.canonical_text.trim();
+        if parse_explicit_memory_intent(text).is_none() {
+            if let Some(candidate) = extract_automatic_memory_candidate(text) {
+                match self.storage.has_duplicate_memory_or_candidate(
+                    &candidate.content,
+                    candidate.scope,
+                    character_id,
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        let id = Uuid::now_v7().to_string();
+                        if let Err(error) =
+                            self.storage.create_memory_candidate(MemoryCandidateInput {
+                                id: &id,
+                                source_turn_id: &user_message.turn_id,
+                                source_message_id: Some(&user_message.id),
+                                scope: candidate.scope,
+                                kind: candidate.kind,
+                                content: &candidate.content,
+                                confidence: candidate.confidence,
+                                sensitivity: "normal",
+                                created_at_ms: now_ms(),
+                            })
+                        {
+                            eprintln!(
+                                "automatic memory candidate unavailable [{}]: {error}",
+                                user_message.turn_id
+                            );
+                        }
+                    }
+                    Err(error) => eprintln!(
+                        "automatic memory duplicate check unavailable [{}]: {error}",
+                        user_message.turn_id
+                    ),
+                }
+            }
+        }
+        let (affinity_delta, summary) = derive_relationship_signal(text);
+        if affinity_delta != 0.0 {
+            if let Err(error) = self.storage.apply_relationship_signal(
+                character_id,
+                affinity_delta,
+                summary,
+                now_ms(),
+            ) {
+                eprintln!(
+                    "relationship signal unavailable [{}]: {error}",
+                    user_message.turn_id
+                );
+            }
+        }
     }
 
     async fn fail_turn(
@@ -3804,6 +3864,103 @@ struct ExplicitMemoryIntent {
     kind: &'static str,
 }
 
+struct AutomaticMemoryCandidate {
+    content: String,
+    scope: &'static str,
+    kind: &'static str,
+    confidence: f64,
+}
+
+fn extract_automatic_memory_candidate(text: &str) -> Option<AutomaticMemoryCandidate> {
+    let trimmed = text.trim();
+    if trimmed.chars().count() < 4
+        || trimmed.chars().count() > 1_000
+        || trimmed.ends_with('?')
+        || trimmed.ends_with('？')
+        || trimmed.ends_with('吗')
+        || [
+            "密码",
+            "口令",
+            "密钥",
+            "api key",
+            "apikey",
+            "token",
+            "sk-",
+            "身份证",
+            "银行卡",
+            "验证码",
+            "手机号",
+            "电话号码",
+            "住址",
+            "家庭住址",
+        ]
+        .iter()
+        .any(|marker| trimmed.to_ascii_lowercase().contains(marker))
+    {
+        return None;
+    }
+    let without_address = trimmed
+        .strip_prefix("老师")
+        .map(|value| value.trim_start_matches(['，', ',', '：', ':', ' ']))
+        .unwrap_or(trimmed);
+    let markers = [
+        ("我喜欢", "preference", "user", 0.66),
+        ("我不喜欢", "preference", "user", 0.66),
+        ("我偏好", "preference", "user", 0.66),
+        ("我习惯", "preference", "user", 0.64),
+        ("我的爱好是", "preference", "user", 0.68),
+        ("我的目标是", "goal", "user", 0.64),
+        ("我希望以后", "preference", "user", 0.64),
+        ("我目前在做", "project", "user", 0.60),
+        ("我正在做", "project", "user", 0.60),
+    ];
+    let (marker, kind, scope, confidence) = markers
+        .iter()
+        .find(|(marker, ..)| without_address.starts_with(marker))
+        .copied()?;
+    let content = validate_memory_content(trimmed).ok()?;
+    let remainder = without_address
+        .strip_prefix(marker)
+        .unwrap_or_default()
+        .trim_matches(|character: char| {
+            matches!(character, '：' | ':' | '，' | ',' | '。' | '！' | '!')
+        });
+    if remainder.is_empty() || remainder.chars().count() > 700 {
+        return None;
+    }
+    Some(AutomaticMemoryCandidate {
+        content,
+        scope,
+        kind,
+        confidence,
+    })
+}
+
+fn derive_relationship_signal(text: &str) -> (f64, &'static str) {
+    if ["讨厌", "失望", "生气", "别烦", "糟糕", "不想理"]
+        .iter()
+        .any(|marker| text.contains(marker))
+    {
+        return (
+            -0.04,
+            "近期互动出现了负面情绪，关系状态保持可修复。熟悉度不会因此下降。",
+        );
+    }
+    if ["谢谢", "太好了", "开心", "喜欢", "厉害", "帮到我"]
+        .iter()
+        .any(|marker| text.contains(marker))
+    {
+        if ["我们一起", "一起完成", "共同", "并肩", "一起做"]
+            .iter()
+            .any(|marker| text.contains(marker))
+        {
+            return (0.06, "最近与老师有共同完成事项的积极互动。");
+        }
+        return (0.03, "最近互动氛围偏积极。");
+    }
+    (0.0, "")
+}
+
 fn parse_explicit_memory_intent(text: &str) -> Option<ExplicitMemoryIntent> {
     if ["不要记住", "别记住", "不要保存", "别保存"]
         .iter()
@@ -5518,6 +5675,34 @@ mod tests {
                 .map(|intent| intent.content),
             Some("我们一起完成了任务".into())
         );
+    }
+
+    #[test]
+    fn extracts_only_conservative_automatic_memory_candidates() {
+        let candidate = extract_automatic_memory_candidate("老师，我喜欢蓝色。为我记住这个")
+            .expect("stable preference should be a candidate");
+        assert_eq!(candidate.scope, "user");
+        assert_eq!(candidate.kind, "preference");
+        assert!(candidate.confidence >= 0.6);
+        assert!(extract_automatic_memory_candidate("我喜欢什么颜色？").is_none());
+        assert!(extract_automatic_memory_candidate("我的 API key 是 sk-secret").is_none());
+        assert!(extract_automatic_memory_candidate("请记住我喜欢蓝色").is_none());
+    }
+
+    #[test]
+    fn derives_bounded_relationship_signals_without_lowering_familiarity() {
+        assert_eq!(
+            derive_relationship_signal("谢谢老师，我们一起完成任务了"),
+            (0.06, "最近与老师有共同完成事项的积极互动。")
+        );
+        assert_eq!(
+            derive_relationship_signal("我有点失望"),
+            (
+                -0.04,
+                "近期互动出现了负面情绪，关系状态保持可修复。熟悉度不会因此下降。"
+            )
+        );
+        assert_eq!(derive_relationship_signal("今天天气不错"), (0.0, ""));
     }
 
     #[test]

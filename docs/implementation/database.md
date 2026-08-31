@@ -179,7 +179,7 @@ CREATE TABLE app_settings (
 
 `scope='user'` 与具体角色无关，`character_id` 必须为空；`scope='relationship'` 必须带角色 ID。该约束由 repository 校验并由测试覆盖。角色核心设定和资源许可证属于版本控制内的角色包，不写入记忆表。
 
-当前 MVP 只在助手回复成功提交时更新 `relationship_state`：`interaction_count` 加 1，`familiarity` 以固定 0.02 步长增加并封顶为 1；取消、失败和应用中断不会计入。`affinity` 与 `summary` 暂不自动推断，避免把模型猜测当成关系事实；清空全部长期记忆时关系状态也会随之清空。
+当前 MVP 只在助手回复成功提交时更新 `relationship_state`：`interaction_count` 加 1，`familiarity` 以固定 0.02 步长增加并封顶为 1；取消、失败和应用中断不会计入。少量明确的正面/负面互动会由本地规则以每次最多 0.1 的步长更新 `affinity` 与 `summary`，且不会降低 `familiarity`，避免把模型猜测当成关系事实；清空全部长期记忆时关系状态也会随之清空。
 
 提醒事实保存在 `timers` 表中；主面板将 `pending` 投影为待处理列表，将 `fired`/`cancelled` 按完成时间投影为最近历史，不额外复制提醒状态，也不改变调度器的 claim 流程。
 
@@ -228,7 +228,7 @@ update 随后更新 `memories` 并插入新索引项；delete 随后删除 `memo
 
 确认路径在一个 SQLite 事务中读取 pending 候选、按当前角色绑定 relationship 记忆、创建正式 `memories` 行、写入 `memory_fts` 和 `memory_audit`，最后把候选标记为 `confirmed`。拒绝路径只把候选标记为 `rejected`，不会写入正式记忆，也不会进入检索。所有状态更新都带有 `status='pending'` 条件，重复确认或拒绝只返回冲突/无变化，不会重复生成记忆。
 
-未来的自动提取只有 `turn.status=completed` 才允许进入；当前自动提取尚未启用。互动计数同样只在助手回复成功提交时更新：
+自动提取只有 `turn.status=completed` 才允许进入；当前仅对明确的偏好、习惯、目标和项目表达生成低置信度 `pending` 候选，不调用模型做隐式推断。互动计数同样只在助手回复成功提交时更新：
 
 1. 读取该 turn 的 canonical user/assistant 文本。
 2. 提取最多 3 条候选，分为 user fact/preference 与 relationship event/summary。

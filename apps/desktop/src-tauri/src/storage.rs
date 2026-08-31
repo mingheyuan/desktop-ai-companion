@@ -374,6 +374,31 @@ impl Storage {
             })
     }
 
+    pub fn apply_relationship_signal(
+        &self,
+        character_id: &str,
+        affinity_delta: f64,
+        summary: &str,
+        now_ms: i64,
+    ) -> Result<(), rusqlite::Error> {
+        if !affinity_delta.is_finite() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let affinity_delta = affinity_delta.clamp(-0.1, 0.1);
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        connection.execute(
+            "INSERT INTO relationship_state(character_id, affinity, familiarity, interaction_count, summary, version, updated_at_ms)
+             VALUES(?1, MAX(-1.0, MIN(1.0, ?2)), 0, 0, ?3, 1, ?4)
+             ON CONFLICT(character_id) DO UPDATE SET
+               affinity=MAX(-1.0, MIN(1.0, relationship_state.affinity + ?2)),
+               summary=CASE WHEN ?3='' THEN relationship_state.summary ELSE ?3 END,
+               version=relationship_state.version + 1,
+               updated_at_ms=excluded.updated_at_ms",
+            params![character_id, affinity_delta, summary.trim(), now_ms],
+        )?;
+        Ok(())
+    }
+
     pub fn recover_interrupted_turns(&self, now_ms: i64) -> Result<(), rusqlite::Error> {
         let connection = self.connection.lock().expect("storage mutex poisoned");
         connection.execute(
@@ -448,6 +473,34 @@ impl Storage {
         let connection = self.connection.lock().expect("storage mutex poisoned");
         connection.execute("UPDATE turns SET status='active' WHERE id=?1", [turn_id])?;
         Ok(())
+    }
+
+    pub fn user_message_for_turn(
+        &self,
+        conversation_id: &str,
+        turn_id: &str,
+    ) -> Result<Option<ChatMessage>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        connection
+            .query_row(
+                "SELECT id, turn_id, canonical_text, created_at_ms
+                   FROM messages
+                  WHERE conversation_id=?1 AND turn_id=?2 AND role='user'
+                  ORDER BY ordinal ASC
+                  LIMIT 1",
+                params![conversation_id, turn_id],
+                |row| {
+                    Ok(ChatMessage {
+                        id: row.get(0)?,
+                        turn_id: row.get(1)?,
+                        role: MessageRole::User,
+                        canonical_text: row.get(2)?,
+                        status: MessageStatus::Completed,
+                        created_at_ms: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
     }
 
     pub fn complete_turn(
@@ -1056,6 +1109,39 @@ impl Storage {
         )?;
         load_memory_candidate(&connection, &candidate.id)?
             .ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
+    pub fn has_duplicate_memory_or_candidate(
+        &self,
+        content: &str,
+        scope: &str,
+        character_id: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let normalized_key = normalize_memory_text(content);
+        let found: i64 = connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                  FROM memory_candidates c
+                  JOIN turns t ON t.id=c.source_turn_id
+                  JOIN conversations conversation ON conversation.id=t.conversation_id
+                 WHERE c.status='pending'
+                   AND c.scope=?1
+                   AND c.normalized_key=?2
+                   AND (?1='user' OR conversation.character_id=?3)
+                UNION ALL
+                SELECT 1
+                  FROM memories m
+                 WHERE m.scope=?1
+                   AND m.normalized_key=?2
+                   AND ((?1='user' AND m.character_id IS NULL)
+                     OR (?1='relationship' AND m.character_id=?3))
+                   AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+            )",
+            params![scope, normalized_key, character_id],
+            |row| row.get(0),
+        )?;
+        Ok(found != 0)
     }
 
     pub fn list_pending_memory_candidates(
@@ -1699,6 +1785,61 @@ mod tests {
     }
 
     #[test]
+    fn relationship_signals_are_bounded_without_affecting_familiarity() {
+        let storage = Storage::open_in_memory().unwrap();
+
+        storage
+            .apply_relationship_signal("aris", 0.08, "最近互动积极", 10)
+            .unwrap();
+        let first = storage.load_relationship_state("aris").unwrap();
+        assert!((first.affinity - 0.08).abs() < f64::EPSILON);
+        assert_eq!(first.familiarity, 0.0);
+        assert_eq!(first.interaction_count, 0);
+        assert_eq!(first.summary, "最近互动积极");
+
+        storage
+            .apply_relationship_signal("aris", 2.0, "", 11)
+            .unwrap();
+        let upper = storage.load_relationship_state("aris").unwrap();
+        assert_eq!(upper.affinity, 0.18);
+        assert_eq!(upper.summary, "最近互动积极");
+
+        storage
+            .apply_relationship_signal("aris", -2.0, "最近出现负面情绪", 12)
+            .unwrap();
+        let lower = storage.load_relationship_state("aris").unwrap();
+        assert!((lower.affinity - 0.08).abs() < f64::EPSILON);
+        assert_eq!(lower.summary, "最近出现负面情绪");
+        assert_eq!(lower.familiarity, 0.0);
+    }
+
+    #[test]
+    fn user_message_for_turn_round_trips_the_original_input() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(1).unwrap();
+        let created = storage
+            .begin_turn(
+                &conversation,
+                "source-message-turn",
+                1,
+                "text",
+                "老师，我喜欢蓝色。",
+                10,
+            )
+            .unwrap();
+
+        let loaded = storage
+            .user_message_for_turn(&conversation, "source-message-turn")
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.id, created.id);
+        assert_eq!(loaded.turn_id, "source-message-turn");
+        assert_eq!(loaded.role, MessageRole::User);
+        assert_eq!(loaded.status, MessageStatus::Completed);
+        assert_eq!(loaded.canonical_text, "老师，我喜欢蓝色。");
+    }
+
+    #[test]
     fn scope_constraint_rejects_invalid_user_character_pair() {
         let storage = Storage::open_in_memory().unwrap();
         let connection = storage.connection.lock().unwrap();
@@ -1959,6 +2100,47 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status, "confirmed");
+    }
+
+    #[test]
+    fn duplicate_memory_or_candidate_detection_is_scoped_and_normalized() {
+        let storage = Storage::open_in_memory().unwrap();
+        assert!(!storage
+            .has_duplicate_memory_or_candidate("我喜欢蓝色", "user", "aris")
+            .unwrap());
+
+        storage.create_user_memory("我喜欢蓝色。", 1).unwrap();
+        assert!(storage
+            .has_duplicate_memory_or_candidate("  我喜欢蓝色。  ", "user", "aris")
+            .unwrap());
+
+        let conversation = storage.ensure_conversation(1).unwrap();
+        storage
+            .begin_turn(
+                &conversation,
+                "automatic-memory-turn",
+                1,
+                "text",
+                "我喜欢绿色",
+                2,
+            )
+            .unwrap();
+        storage
+            .create_memory_candidate(MemoryCandidateInput {
+                id: "automatic-memory-candidate",
+                source_turn_id: "automatic-memory-turn",
+                source_message_id: None,
+                scope: "user",
+                kind: "preference",
+                content: "我喜欢绿色",
+                confidence: 0.8,
+                sensitivity: "normal",
+                created_at_ms: 3,
+            })
+            .unwrap();
+        assert!(storage
+            .has_duplicate_memory_or_candidate("我喜欢绿色", "user", "another-character")
+            .unwrap());
     }
 
     #[test]
