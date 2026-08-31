@@ -168,6 +168,7 @@ pub struct AppCore {
     audio_launch: Mutex<()>,
     voice_command: Mutex<()>,
     listening_requested: AtomicBool,
+    audio_recovery_running: AtomicBool,
     audio_generation: AtomicU64,
     voice_final_tx: tokio::sync::mpsc::UnboundedSender<VoiceFinal>,
     audio_recovery_tx: tokio::sync::mpsc::UnboundedSender<AppHandle>,
@@ -216,6 +217,7 @@ impl AppCore {
             audio_launch: Mutex::new(()),
             voice_command: Mutex::new(()),
             listening_requested: AtomicBool::new(false),
+            audio_recovery_running: AtomicBool::new(false),
             audio_generation: AtomicU64::new(0),
             voice_final_tx,
             audio_recovery_tx,
@@ -3476,6 +3478,14 @@ impl AppCore {
     }
 
     async fn recover_requested_listening(self: Arc<Self>, app: AppHandle) {
+        if self.audio_recovery_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.recover_requested_listening_inner(&app).await;
+        self.audio_recovery_running.store(false, Ordering::SeqCst);
+    }
+
+    async fn recover_requested_listening_inner(self: &Arc<Self>, app: &AppHandle) {
         if !self.listening_requested.load(Ordering::SeqCst) {
             return;
         }
