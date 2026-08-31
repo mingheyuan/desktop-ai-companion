@@ -158,7 +158,7 @@ impl ToolRegistry {
         },
         ToolDefinition {
             name: "screen.observe".into(),
-            description: "在用户明确要求查看屏幕时，先生成一张只保存在本机进程内存中的临时预览；若启用 Vision，后续还会单独请求确认再上传截图分析。执行前会请求用户确认。".into(),
+            description: "当用户需要理解当前可见的页面、屏幕、界面或其中的内容时，先生成一张只保存在本机进程内存中的临时预览；例如用户让你评价当前页面的观点、总结眼前内容或识别界面。若启用 Vision，后续还会单独请求确认再上传截图分析。执行前会请求用户确认。".into(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -167,7 +167,7 @@ impl ToolRegistry {
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 500,
-                        "description": "用户当前明确要求查看屏幕的原始请求"
+                        "description": "用户当前请求中需要根据可见屏幕内容回答的问题"
                     },
                     "scope": {
                         "type": "string",

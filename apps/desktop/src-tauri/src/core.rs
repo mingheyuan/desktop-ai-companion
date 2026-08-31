@@ -1325,10 +1325,10 @@ impl AppCore {
                     json!({ "content": content, "scope": scope, "kind": kind }).to_string();
             }
         }
-        if call.name == "screen.observe" && !has_explicit_screen_observe_intent(context.messages) {
+        if call.name == "screen.observe" && has_explicit_screen_observe_refusal(context.messages) {
             return Err(AppError::new(
                 "screen_confirmation_required",
-                "只有用户明确要求查看当前屏幕时，模型才能提出本地屏幕观察。",
+                "用户已明确拒绝读取或上传屏幕内容，未创建屏幕观察请求。",
                 false,
             ));
         }
@@ -4903,17 +4903,31 @@ fn parse_explicit_screen_observe_request(text: &str) -> Option<ExplicitScreenObs
     })
 }
 
-fn has_explicit_screen_observe_intent(messages: &[LlmMessage]) -> bool {
-    messages
-        .iter()
-        .rev()
-        .find_map(|message| match message {
-            LlmMessage::User { content } => {
-                Some(parse_explicit_screen_observe_request(content).is_some())
-            }
-            _ => None,
-        })
-        .unwrap_or(false)
+fn has_explicit_screen_observe_refusal(messages: &[LlmMessage]) -> bool {
+    let Some(content) = messages.iter().rev().find_map(|message| match message {
+        LlmMessage::User { content } => Some(content.as_str()),
+        _ => None,
+    }) else {
+        return false;
+    };
+    [
+        "不要看屏幕",
+        "别看屏幕",
+        "不要读取屏幕",
+        "别读取屏幕",
+        "不要截图",
+        "别截图",
+        "不要上传截图",
+        "别上传截图",
+        "不需要读取屏幕",
+        "取消屏幕观察",
+        "停止屏幕观察",
+        "不要看当前页面",
+        "别看当前页面",
+        "不用看当前页面",
+    ]
+    .iter()
+    .any(|phrase| content.contains(phrase))
 }
 
 fn parse_relative_delay_ms(text: &str) -> Option<i64> {
@@ -5697,14 +5711,14 @@ mod tests {
     }
 
     #[test]
-    fn model_screen_observe_requires_latest_user_intent() {
-        assert!(has_explicit_screen_observe_intent(&[LlmMessage::User {
-            content: "请查看当前屏幕".into(),
+    fn model_screen_observe_honors_latest_user_refusal() {
+        assert!(!has_explicit_screen_observe_refusal(&[LlmMessage::User {
+            content: "请评价我当前页面的观点".into(),
         },]));
-        assert!(!has_explicit_screen_observe_intent(&[LlmMessage::User {
-            content: "你好吗".into(),
+        assert!(has_explicit_screen_observe_refusal(&[LlmMessage::User {
+            content: "不要读取屏幕".into(),
         },]));
-        assert!(!has_explicit_screen_observe_intent(&[
+        assert!(has_explicit_screen_observe_refusal(&[
             LlmMessage::User {
                 content: "请查看当前屏幕".into(),
             },
@@ -5713,7 +5727,7 @@ mod tests {
                 tool_calls: Vec::new(),
             },
             LlmMessage::User {
-                content: "不用了".into(),
+                content: "不要上传截图".into(),
             },
         ]));
     }

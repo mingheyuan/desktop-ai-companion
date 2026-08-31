@@ -2,7 +2,7 @@
 
 > 版本：v0.2 实现方案
 >
-> 状态：已完成参考项目调研和真实 Agent Loop。`system.open_url`、受限 `web.read`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete` 和需确认的本地 `screen.observe` 已支持显式意图；模型也可以在普通对话中按需提出工具调用，经过 Registry、Policy 和用户确认后执行，再把结果回传模型继续生成。当前保持单次一个 ToolCall、每轮最多 3 步，并对连接建立失败做有限重试。`memory.save` 候选已持久化并可在记忆面板审核；工具审计摘要已投影到主面板；独立 Vision Provider 已支持二次确认后的 PNG 请求和文本结果回传，模型发起的屏幕观察也会把 Vision 结果回到原 Agent Loop；本地 macOS Vision OCR 仍作为本地补充。网页点击/填表、GUI 自动化、重复提醒、Apple 提醒事项、多工具并行和 MCP 尚未进入实现。
+> 状态：已完成参考项目调研和真实 Agent Loop。`system.open_url`、受限 `web.read`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete` 和需确认的本地 `screen.observe` 已支持显式入口；模型也可以根据工具描述在普通对话中按需提出工具调用，经过 Registry、Policy 和用户确认后执行，再把结果回传模型继续生成。当前保持单次一个 ToolCall、每轮最多 3 步，并对连接建立失败做有限重试。`memory.save` 候选已持久化并可在记忆面板审核；工具审计摘要已投影到主面板；独立 Vision Provider 已支持二次确认后的 PNG 请求和文本结果回传，模型发起的屏幕观察也会把 Vision 结果回到原 Agent Loop；本地 macOS Vision OCR 仍作为本地补充。网页点击/填表、GUI 自动化、重复提醒、Apple 提醒事项、多工具并行和 MCP 尚未进入实现。
 >
 > 更新日期：2026-08-31
 
@@ -67,6 +67,8 @@ flowchart LR
 - `ToolExecutor`：只调用已经注册的执行器，不提供通用 Shell 逃生口。
 - `ToolRunStore`：记录调用来源、规范化参数、授权结果、开始/完成时间、结果摘要和错误。
 - `McpClientManager`：后续加载用户明确启用的本地 MCP Server；默认没有外部工具。
+
+工具选择采用模型优先路由：Provider 使用 `tool_choice=auto`，模型根据当前请求和工具描述决定直接回答还是提出 ToolCall。Rust 不用固定关键词替代模型判断，只在模型调用之后执行参数校验、用户明确拒绝拦截、系统权限、确认、取消、超时和审计；敏感读取和外部副作用仍不能绕过确认。
 
 内置工具保留 Rust trait，不直接依赖某个模型供应商：
 
@@ -243,7 +245,7 @@ screen.observe
 - 每次采集显示明显的“正在读取屏幕”状态；托盘提供立即暂停入口。
 - Tool MVP 不做连续录屏、历史回溯或后台自动截图。
 
-当前已实现的是上述范围的最小安全切片：仅接受显式中文观察意图，统一走 `screen.observe` 确认卡片；确认后使用 macOS `screencapture` 读取一次 PNG，支持默认的所有显示器或用户明确指定的主显示器范围，采集范围会显示在确认结果和本地预览中。截图暂存在 Rust 进程内存中，并交给随应用打包的 macOS Vision OCR 辅助程序在本地提取文字；OCR 只显示在当前预览区，不进入聊天或工具审计。启用 Vision Provider 后，预览完成会出现第二张 `vision.analyze` 出站确认卡；用户确认后才将 PNG 以 OpenAI-compatible `image_url` 发送。显式请求会将返回文本作为当前助手回复；模型提出的观察会将返回文本作为不可信 `tool_result` 回传原 Agent Loop，由模型继续生成自然回答和操作建议。界面显示自动清除倒计时，支持重新读取和手动清除，5 分钟后自动过期释放。当前还没有窗口/区域选择。
+当前已实现的是上述范围的最小安全切片：本地显式入口和模型根据工具描述提出的请求统一走 `screen.observe` 确认卡片；确认后使用 macOS `screencapture` 读取一次 PNG，支持默认的所有显示器或用户明确指定的主显示器范围，采集范围会显示在确认结果和本地预览中。截图暂存在 Rust 进程内存中，并交给随应用打包的 macOS Vision OCR 辅助程序在本地提取文字；OCR 只显示在当前预览区，不进入聊天或工具审计。启用 Vision Provider 后，预览完成会出现第二张 `vision.analyze` 出站确认卡；用户确认后才将 PNG 以 OpenAI-compatible `image_url` 发送。显式请求会将返回文本作为当前助手回复；模型提出的观察会将返回文本作为不可信 `tool_result` 回传原 Agent Loop，由模型继续生成自然回答和操作建议。界面显示自动清除倒计时，支持重新读取和手动清除，5 分钟后自动过期释放。当前还没有窗口/区域选择。
 
 ### 8.2 处理链路
 
@@ -280,7 +282,7 @@ vision.api_key (Keychain account: vision.default)
 - 当前配置使用独立的 `vision.default` Keychain 条目，不复用或暴露聊天 Key；设置页可以单独开启、修改 endpoint/model 和 Key。
 - Provider 必须声明 `image_input` 能力，不能只根据模型名称猜测。
 - 上传前显示采集范围、目标 Provider 和是否会离开本机。
-- 用户明确说“看一下屏幕”等请求后，应用先展示 `screen.observe` 确认卡片；允许后才调用 macOS `screencapture` 生成一次 PNG。默认范围为所有显示器；用户说“看主屏/主显示器”或模型在同一请求中指定 `main_display` 时，只读取主显示器。范围写入预览元数据并显示给用户。图片暂存在当前进程内存中供主面板预览，同时由本地 macOS Vision OCR 辅助程序提取文字；OCR 结果也只展示在当前临时预览中，不能进入聊天、模型请求或工具审计。图片可以手动清除，成功采集后 5 分钟自动过期，应用退出时也会随进程释放。
+- 用户明确说“看一下屏幕”等请求，或模型根据用户的“当前页面/当前界面/评价眼前内容”等请求提出 `screen.observe` 后，应用先展示确认卡片；允许后才调用 macOS `screencapture` 生成一次 PNG。默认范围为所有显示器；用户说“看主屏/主显示器”或模型在同一请求中指定 `main_display` 时，只读取主显示器。范围写入预览元数据并显示给用户。图片暂存在当前进程内存中供主面板预览，同时由本地 macOS Vision OCR 辅助程序提取文字；OCR 结果也只展示在当前临时预览中，不能进入聊天、模型请求或工具审计。图片可以手动清除，成功采集后 5 分钟自动过期，应用退出时也会随进程释放。
 - 本地预览不会调用聊天 Provider；OCR 只在本机进程内存中展示，正文不会进入工具审计。截图发送到 Vision Provider 采用当前 MVP 的 `ask_each_time` 语义：每次本地读取后都要单独确认，不提供会话级免确认；发送成功后只保存“已发送”状态，不保存 PNG。
 - 原始截图默认不写入聊天记录、记忆或诊断日志；模型结果也不会自动成为长期记忆。
 
@@ -321,7 +323,7 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 这组能力建议作为核心对话 MVP 后的 **Tool MVP**：
 
 1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust `tools.rs`、Provider 和 SQLite 审计实现，现有六种模型工具可做真实 ToolCall 循环。
-2. `system.open_url`、`web.read`、`timer.create`、`timer.cancel`、`memory.save` 和本地 `screen.observe` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；`web.read` 只读取用户当前请求明确给出的 HTTP(S) 地址，受大小、超时和文本长度限制；`screen.observe` 仍要求用户当前消息明确提出屏幕观察，图片先进入本机临时预览，之后只有第二次确认才进入 Vision Provider，模型发起的观察会继续原 Agent Loop；本地显式 `memory.delete` 也已接入确认、版本校验和审计。当前已完成单工具串行循环、工具结果回传和 3 步上限，后续再补多工具并行和更细的风险策略。
+2. `system.open_url`、`web.read`、`timer.create`、`timer.cancel`、`memory.save` 和本地 `screen.observe` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；`web.read` 只读取用户当前请求明确给出的 HTTP(S) 地址，受大小、超时和文本长度限制；`screen.observe` 由模型根据工具描述判断是否需要，图片先进入本机临时预览，之后只有第二次确认才进入 Vision Provider，模型发起的观察会继续原 Agent Loop；本地显式 `memory.delete` 也已接入确认、版本校验和审计。当前已完成单工具串行循环、工具结果回传和 3 步上限，后续再补多工具并行和更细的风险策略。
 3. 完善 `timer.create/list/cancel`，验证 LaunchAgent 在休眠、重启、时区变化、取消竞态和退出登录场景下的行为；后续再评估 UserNotifications/EventKit。
 4. `screen.observe` 本地单帧、所有显示器/主显示器范围和本地 Vision OCR 已完成最小切片；后续验证 ScreenCaptureKit 权限、窗口排除、区域选择和临时文件清理。
 5. 独立 Vision Provider 的实际图片请求已接入 OpenAI-compatible 协议，模型 ToolCall 的 Vision 结果回传也已接通；仍需用一个云端兼容模型和一个本地兼容模型分别做端到端验证。

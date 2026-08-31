@@ -236,6 +236,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 - 桌宠悬浮层与主面板分离，并使用 `ActivityStore + AttentionResolver` 处理多个活动的呈现优先级。
 - 播放中自然语音打断必须先验证 AEC；若不稳定，MVP 明确降级为快捷键和点击打断。
 - 工具由 Rust `ToolRuntime` 统一注册、授权、执行和审计；当前支持网页打开/读取、提醒和本地记忆三类模型 ToolCall，以及显式确认的本地屏幕预览，每次只接收一个调用、每轮最多连续 3 步，模型不能直接操作系统。
+- 工具意图采用模型优先路由：Provider 使用 `tool_choice=auto`，模型根据工具描述判断“直接回答”还是提出 ToolCall；Rust 只负责参数、否定意图、权限、确认、取消、超时和审计，不再把固定关键词作为模型调用的唯一入口。
 - 屏幕理解采用按需单帧和独立 Vision Provider，聊天 Key 与视觉 Key 默认隔离。
 
 上述细节已经写入 [`docs/implementation/`](docs/implementation/README.md)。其中目标规格与当前实现差异会明确记录；AudioHost 进程握手 Spike 已通过，持续监听稳定性、睡眠恢复、唤醒误触率和取消一致性仍需实机验收。
