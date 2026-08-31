@@ -83,6 +83,7 @@ pub fn run() {
             commands::timer_cancel,
             commands::screen_get_observation_preview,
             commands::screen_clear_observation,
+            commands::screen_set_understanding_mode,
             commands::settings_update_provider,
             commands::settings_test_provider,
             commands::pet_open_panel,

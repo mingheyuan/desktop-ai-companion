@@ -1,8 +1,9 @@
 import { create } from "zustand";
-import type { AppSnapshot, CharacterSettings, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
+import type { AppSnapshot, CharacterSettings, PetSettings, ProviderSettings, ScreenUnderstandingMode, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
 
 const emptySnapshot: AppSnapshot = {
   revision: 0,
+  screen_understanding_mode: "ask_each_time",
   listening_mode: "disabled",
   input_state: "stopped",
   turn_state: "idle",
@@ -78,6 +79,7 @@ interface AppStore {
   setProvider: (provider: ProviderSettings) => void;
   setPet: (pet: PetSettings) => void;
   setCharacter: (character: CharacterSettings) => void;
+  setScreenUnderstandingMode: (mode: ScreenUnderstandingMode) => void;
   setVoiceSettings: (settings: VoiceSettings) => void;
   setMouthLevel: (level: number, generation?: number) => void;
   appendDelta: (payload: TextDeltaPayload, turnId?: string) => void;
@@ -106,6 +108,8 @@ export const useAppStore = create<AppStore>((set) => ({
     set((state) => ({ snapshot: { ...state.snapshot, pet } })),
   setCharacter: (character) =>
     set((state) => ({ snapshot: { ...state.snapshot, character } })),
+  setScreenUnderstandingMode: (screen_understanding_mode) =>
+    set((state) => ({ snapshot: { ...state.snapshot, screen_understanding_mode } })),
   setVoiceSettings: (voice_settings) =>
     set((state) => ({ snapshot: { ...state.snapshot, voice_settings } })),
   setMouthLevel: (mouth_level, generation) =>

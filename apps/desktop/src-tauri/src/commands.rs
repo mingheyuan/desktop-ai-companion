@@ -8,10 +8,11 @@ use crate::{
         ActionRequest, AppError, AppSnapshot, CancelTimerRequest, CancelTurnRequest,
         CharacterSettings, CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryCandidate,
         MemoryItem, PetSettings, ProviderSettings, ReviewMemoryCandidateRequest,
-        ScreenObservationPreview, ScreenObservationRequest, SearchMemoriesRequest,
-        SetListeningRequest, SubmitTextRequest, ToolDecisionRequest, UpdateMemoryCandidateRequest,
-        UpdateMemoryRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
-        UpdateVoiceSettingsRequest, VisionProviderSettings, VoiceSettings,
+        ScreenObservationPreview, ScreenObservationRequest, ScreenUnderstandingMode,
+        SearchMemoriesRequest, SetListeningRequest, SetScreenUnderstandingModeRequest,
+        SubmitTextRequest, ToolDecisionRequest, UpdateMemoryCandidateRequest, UpdateMemoryRequest,
+        UpdatePetSettingsRequest, UpdateProviderRequest, UpdateVoiceSettingsRequest,
+        VisionProviderSettings, VoiceSettings,
     },
     core::AppCore,
     desktop,
@@ -102,6 +103,19 @@ pub async fn screen_clear_observation(
 ) -> Result<(), AppError> {
     validate_request_id(&request.request_id)?;
     state.0.clear_screen_observation(&app).await
+}
+
+#[tauri::command]
+pub async fn screen_set_understanding_mode(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: SetScreenUnderstandingModeRequest,
+) -> Result<ScreenUnderstandingMode, AppError> {
+    validate_request_id(&request.request_id)?;
+    state
+        .0
+        .set_screen_understanding_mode(&app, request.mode)
+        .await
 }
 
 #[tauri::command]

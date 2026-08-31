@@ -51,6 +51,13 @@ pub enum PlaybackState {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum ScreenUnderstandingMode {
+    AskEachTime,
+    SessionAllowed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AvatarSemanticState {
     Idle,
     Listening,
@@ -410,6 +417,7 @@ impl std::error::Error for AppError {}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSnapshot {
     pub revision: u64,
+    pub screen_understanding_mode: ScreenUnderstandingMode,
     pub listening_mode: ListeningMode,
     pub input_state: InputState,
     pub turn_state: TurnState,
@@ -592,6 +600,12 @@ pub struct CancelTimerRequest {
 pub struct ScreenObservationRequest {
     pub request_id: String,
     pub observation_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetScreenUnderstandingModeRequest {
+    pub request_id: String,
+    pub mode: ScreenUnderstandingMode,
 }
 
 #[derive(Debug, Clone, Deserialize)]

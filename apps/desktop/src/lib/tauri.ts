@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppSnapshot, CharacterSettings, DataSummary, EventEnvelope, MemoryCandidate, MemoryItem, MouthLevelPayload, PetSettings, ProviderSettings, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
+import type { AppSnapshot, CharacterSettings, DataSummary, EventEnvelope, MemoryCandidate, MemoryItem, MouthLevelPayload, PetSettings, ProviderSettings, ScreenUnderstandingMode, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
 
 export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
@@ -226,6 +226,12 @@ export async function getScreenObservationPreview(observationId: string): Promis
 export async function clearScreenObservation(): Promise<void> {
   await invoke("screen_clear_observation", {
     request: { request_id: crypto.randomUUID() },
+  });
+}
+
+export async function setScreenUnderstandingMode(mode: ScreenUnderstandingMode): Promise<ScreenUnderstandingMode> {
+  return invoke<ScreenUnderstandingMode>("screen_set_understanding_mode", {
+    request: { request_id: crypto.randomUUID(), mode },
   });
 }
 

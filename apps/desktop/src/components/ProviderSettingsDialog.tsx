@@ -1,14 +1,16 @@
 import { FormEvent, useState } from "react";
-import type { ProviderSettings } from "../contracts";
-import { testProvider, updateProvider } from "../lib/tauri";
+import type { ProviderSettings, ScreenUnderstandingMode } from "../contracts";
+import { setScreenUnderstandingMode, testProvider, updateProvider } from "../lib/tauri";
 
 interface ProviderSettingsDialogProps {
   initial: ProviderSettings;
+  screenUnderstandingMode: ScreenUnderstandingMode;
   onClose: () => void;
   onSaved: (settings: ProviderSettings) => void;
+  onScreenUnderstandingModeChanged: (mode: ScreenUnderstandingMode) => void;
 }
 
-export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSettingsDialogProps) {
+export function ProviderSettingsDialog({ initial, screenUnderstandingMode: initialScreenMode, onClose, onSaved, onScreenUnderstandingModeChanged }: ProviderSettingsDialogProps) {
   const [provider, setProvider] = useState(initial.provider);
   const [endpoint, setEndpoint] = useState(initial.endpoint);
   const [model, setModel] = useState(initial.model);
@@ -20,6 +22,9 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
   const [visionModel, setVisionModel] = useState(initial.vision.model);
   const [visionApiKey, setVisionApiKey] = useState("");
   const [clearVisionApiKey, setClearVisionApiKey] = useState(false);
+  const [screenMode, setScreenMode] = useState(initialScreenMode);
+  const [screenModeBusy, setScreenModeBusy] = useState(false);
+  const [screenModeError, setScreenModeError] = useState("");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState("");
@@ -46,6 +51,11 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
         },
         expected_revision: initial.revision,
       });
+      if (!visionEnabled && screenMode === "session_allowed") {
+        const resetMode = await setScreenUnderstandingMode("ask_each_time");
+        setScreenMode(resetMode);
+        onScreenUnderstandingModeChanged(resetMode);
+      }
       onSaved(updated);
       onClose();
     } catch (reason) {
@@ -74,6 +84,28 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
       else setError("Provider 连接测试失败。");
     } finally {
       setTesting(false);
+    }
+  };
+
+  const toggleScreenUnderstanding = async () => {
+    if (screenModeBusy) return;
+    const nextMode: ScreenUnderstandingMode = screenMode === "session_allowed" ? "ask_each_time" : "session_allowed";
+    if (nextMode === "session_allowed" && !initial.vision.enabled) {
+      setScreenModeError("请先保存并启用 Vision Provider，再开启本次会话自动理解屏幕。");
+      return;
+    }
+    setScreenModeBusy(true);
+    setScreenModeError("");
+    try {
+      const updated = await setScreenUnderstandingMode(nextMode);
+      setScreenMode(updated);
+      onScreenUnderstandingModeChanged(updated);
+    } catch (reason) {
+      if (typeof reason === "string") setScreenModeError(reason);
+      else if (reason && typeof reason === "object" && "message" in reason && typeof reason.message === "string") setScreenModeError(reason.message);
+      else setScreenModeError("更新屏幕理解权限失败。");
+    } finally {
+      setScreenModeBusy(false);
     }
   };
 
@@ -133,7 +165,7 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
         <section className="settings-section" aria-label="视觉 Provider 配置">
           <p className="eyebrow">VISION PROVIDER</p>
           <h3>屏幕理解配置</h3>
-          <p className="settings-hint">这里只保存独立的视觉模型连接信息，不会自动采集或上传屏幕。读取本地预览后，还会单独确认是否把截图发送到这里配置的 Endpoint。</p>
+          <p className="settings-hint">这里保存独立的视觉模型连接信息。默认不会自动采集或上传屏幕；启用下方的会话模式后，模型判断确实需要理解当前屏幕时才会自动执行。</p>
           <label className="check-row">
             <input type="checkbox" checked={visionEnabled} onChange={(event) => setVisionEnabled(event.target.checked)} />
             启用视觉 Provider 配置
@@ -165,6 +197,18 @@ export function ProviderSettingsDialog({ initial, onClose, onSaved }: ProviderSe
               </label>
             </>
           )}
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={screenMode === "session_allowed"}
+              disabled={screenModeBusy || saving || !initial.vision.enabled || !visionEnabled}
+              onChange={() => void toggleScreenUnderstanding()}
+            />
+            本次会话自动理解屏幕
+          </label>
+          <p className="settings-hint">默认每次读取屏幕和上传截图前都确认。开启后仅在本次应用运行期间生效：模型判断需要看屏幕时，会自动截图并发送到这里配置的 Vision Provider；重启应用后自动恢复逐次确认。</p>
+          {!initial.vision.enabled && <p className="settings-hint">请先保存已启用的 Vision Provider，才能开启自动模式。</p>}
+          {screenModeError && <p className="settings-error">{screenModeError}</p>}
         </section>
 
         <p className="settings-hint">连接测试只发送固定测试文本，不携带聊天记录、记忆或屏幕图片；如果刚修改了表单，请先保存后再测试。</p>

@@ -3,6 +3,7 @@ export type InputState = "stopped" | "wake_listening" | "capturing" | "recognizi
 export type TurnState = "idle" | "preparing" | "active" | "finalizing" | "completed" | "cancelled" | "failed";
 export type GenerationState = "not_started" | "streaming" | "finished" | "failed";
 export type PlaybackState = "idle" | "buffering" | "playing" | "stopping" | "failed";
+export type ScreenUnderstandingMode = "ask_each_time" | "session_allowed";
 export type AvatarSemanticState =
   | "idle"
   | "listening"
@@ -160,6 +161,7 @@ export interface ScreenObservation {
 
 export interface AppSnapshot {
   revision: number;
+  screen_understanding_mode: ScreenUnderstandingMode;
   listening_mode: ListeningMode;
   input_state: InputState;
   turn_state: TurnState;

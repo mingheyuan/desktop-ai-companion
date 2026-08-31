@@ -4,6 +4,7 @@ import { useAppStore } from "./app";
 
 const snapshot: AppSnapshot = {
   revision: 3,
+  screen_understanding_mode: "ask_each_time",
   listening_mode: "disabled",
   input_state: "stopped",
   turn_state: "active",

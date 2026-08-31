@@ -6,7 +6,7 @@ import { ProviderSettingsDialog } from "./ProviderSettingsDialog";
 import { MemoryPanel } from "./MemoryPanel";
 
 export function ChatPanel() {
-  const { snapshot, streamingText, booting, setProvider, setPet, setCharacter, setVoiceSettings } = useAppStore();
+  const { snapshot, streamingText, booting, setProvider, setPet, setCharacter, setScreenUnderstandingMode, setVoiceSettings } = useAppStore();
   const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -285,6 +285,12 @@ export function ChatPanel() {
         </div>
         <div className="header-actions">
           <span className="provider-badge">{browserPreview ? "浏览器预览" : snapshot.provider.provider === "mock" ? "MOCK" : snapshot.provider.model}</span>
+          <span
+            className="provider-badge"
+            title={snapshot.screen_understanding_mode === "session_allowed" ? "本次会话已允许自动截图并发送到 Vision；重启应用后恢复确认模式" : "读取屏幕和发送到 Vision 前需要逐次确认"}
+          >
+            {snapshot.screen_understanding_mode === "session_allowed" ? "屏幕自动理解" : "屏幕逐次确认"}
+          </span>
           <span
             className="relationship-badge"
             title={`已完成 ${snapshot.relationship.interaction_count} 次互动，熟悉度 ${Math.round(snapshot.relationship.familiarity * 100)}%`}
@@ -566,8 +572,10 @@ export function ChatPanel() {
       {settingsOpen && (
         <ProviderSettingsDialog
           initial={snapshot.provider}
+          screenUnderstandingMode={snapshot.screen_understanding_mode}
           onClose={() => setSettingsOpen(false)}
           onSaved={setProvider}
+          onScreenUnderstandingModeChanged={setScreenUnderstandingMode}
         />
       )}
       {memoryOpen && <MemoryPanel onClose={() => setMemoryOpen(false)} />}

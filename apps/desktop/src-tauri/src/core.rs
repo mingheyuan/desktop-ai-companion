@@ -27,8 +27,8 @@ use crate::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, ChatMessage, DataSummary,
         EventEnvelope, GenerationState, InputState, ListeningMode, MemoryCandidate, MemoryItem,
         MouthLevelPayload, PetSettings, PlaybackState, ProviderSettings, ScreenCaptureScope,
-        ScreenObservation, ScreenObservationPreview, TextDeltaPayload, TimerItem, ToolApproval,
-        TurnEndedPayload, TurnState, VoicePermissions, VoiceSettings,
+        ScreenObservation, ScreenObservationPreview, ScreenUnderstandingMode, TextDeltaPayload,
+        TimerItem, ToolApproval, TurnEndedPayload, TurnState, VoicePermissions, VoiceSettings,
     },
     desktop::apply_pet_window_settings,
     notifications,
@@ -47,6 +47,7 @@ type PendingToolAction = ToolAction;
 
 struct RuntimeState {
     revision: u64,
+    screen_understanding_mode: ScreenUnderstandingMode,
     listening_mode: ListeningMode,
     input_state: InputState,
     turn_state: TurnState,
@@ -75,6 +76,7 @@ impl Default for RuntimeState {
     fn default() -> Self {
         Self {
             revision: 1,
+            screen_understanding_mode: ScreenUnderstandingMode::AskEachTime,
             listening_mode: ListeningMode::Disabled,
             input_state: InputState::Stopped,
             turn_state: TurnState::Idle,
@@ -348,6 +350,7 @@ impl AppCore {
         };
         Ok(AppSnapshot {
             revision: runtime.revision,
+            screen_understanding_mode: runtime.screen_understanding_mode,
             listening_mode: runtime.listening_mode,
             input_state: runtime.input_state,
             turn_state: runtime.turn_state,
@@ -378,6 +381,75 @@ impl AppCore {
             screen_observation,
             last_error: runtime.last_error.clone(),
         })
+    }
+
+    pub async fn set_screen_understanding_mode(
+        &self,
+        app: &AppHandle,
+        mode: ScreenUnderstandingMode,
+    ) -> Result<ScreenUnderstandingMode, AppError> {
+        if matches!(mode, ScreenUnderstandingMode::SessionAllowed)
+            && !self.provider.read().await.vision.enabled
+        {
+            return Err(AppError::new(
+                "vision_disabled",
+                "请先启用 Vision Provider，再开启本次会话自动理解屏幕。",
+                false,
+            ));
+        }
+        let mut runtime = self.runtime.write().await;
+        runtime.screen_understanding_mode = mode;
+        runtime.revision += 1;
+        drop(runtime);
+        self.emit_snapshot(app).await?;
+        Ok(mode)
+    }
+
+    async fn should_auto_approve_screen_action(&self, action: &PendingToolAction) -> bool {
+        if !matches!(
+            action,
+            PendingToolAction::ObserveScreen { .. } | PendingToolAction::AnalyzeScreen { .. }
+        ) {
+            return false;
+        }
+        self.screen_automatic_mode_enabled().await
+    }
+
+    async fn screen_automatic_mode_enabled(&self) -> bool {
+        screen_mode_allows_automatic_analysis(
+            self.runtime.read().await.screen_understanding_mode,
+            self.provider.read().await.vision.enabled,
+        )
+    }
+
+    fn schedule_auto_approve_screen_tool(
+        self: &Arc<Self>,
+        app: AppHandle,
+        tool_call_id: String,
+        turn_id: String,
+        generation: u64,
+    ) {
+        let weak_core = Arc::downgrade(self);
+        tauri::async_runtime::spawn(async move {
+            // Let the caller release interaction_command before decide_tool
+            // acquires it again. This also keeps the regular approval path
+            // identical for explicit and model-suggested screen tools.
+            tokio::task::yield_now().await;
+            let Some(core) = weak_core.upgrade() else {
+                return;
+            };
+            if !core.screen_automatic_mode_enabled().await {
+                core.schedule_tool_approval_expiration(app, tool_call_id, turn_id, generation);
+                return;
+            }
+            if let Err(error) = core.decide_tool(&app, &tool_call_id, true).await {
+                let mut runtime = core.runtime.write().await;
+                runtime.revision += 1;
+                runtime.last_error = Some(error);
+                drop(runtime);
+                let _ = core.emit_snapshot(&app).await;
+            }
+        });
     }
 
     pub async fn import_character_vrm(
@@ -911,6 +983,18 @@ impl AppCore {
         self.emit_snapshot(&app).await?;
 
         if let Some(pending) = pending_tool.as_ref() {
+            if self
+                .should_auto_approve_screen_action(&pending.action)
+                .await
+            {
+                self.schedule_auto_approve_screen_tool(
+                    app.clone(),
+                    pending.approval.tool_call_id.clone(),
+                    pending.turn_id.clone(),
+                    pending.generation,
+                );
+                return Ok(());
+            }
             self.schedule_tool_approval_expiration(
                 app.clone(),
                 pending.approval.tool_call_id.clone(),
@@ -1464,6 +1548,9 @@ impl AppCore {
                 tool_steps: context.tool_steps + 1,
             },
         };
+        let auto_approve = self
+            .should_auto_approve_screen_action(&pending.action)
+            .await;
         {
             let mut runtime = self.runtime.write().await;
             runtime.revision += 1;
@@ -1472,12 +1559,21 @@ impl AppCore {
             runtime.pending_tool = Some(pending);
         }
         self.emit_snapshot(context.app).await?;
-        self.schedule_tool_approval_expiration(
-            context.app.clone(),
-            tool_call_id,
-            context.turn_id.to_owned(),
-            context.generation,
-        );
+        if auto_approve {
+            self.schedule_auto_approve_screen_tool(
+                context.app.clone(),
+                tool_call_id,
+                context.turn_id.to_owned(),
+                context.generation,
+            );
+        } else {
+            self.schedule_tool_approval_expiration(
+                context.app.clone(),
+                tool_call_id,
+                context.turn_id.to_owned(),
+                context.generation,
+            );
+        }
         Ok(())
     }
 
@@ -1576,6 +1672,9 @@ impl AppCore {
             },
             origin,
         };
+        let auto_approve = self
+            .should_auto_approve_screen_action(&pending.action)
+            .await;
         {
             let mut runtime = self.runtime.write().await;
             runtime.revision += 1;
@@ -1584,12 +1683,21 @@ impl AppCore {
             runtime.pending_tool = Some(pending);
         }
         self.emit_snapshot(app).await?;
-        self.schedule_tool_approval_expiration(
-            app.clone(),
-            tool_call_id,
-            turn_id.to_owned(),
-            generation,
-        );
+        if auto_approve {
+            self.schedule_auto_approve_screen_tool(
+                app.clone(),
+                tool_call_id,
+                turn_id.to_owned(),
+                generation,
+            );
+        } else {
+            self.schedule_tool_approval_expiration(
+                app.clone(),
+                tool_call_id,
+                turn_id.to_owned(),
+                generation,
+            );
+        }
         Ok(())
     }
 
@@ -4930,6 +5038,13 @@ fn has_explicit_screen_observe_refusal(messages: &[LlmMessage]) -> bool {
     .any(|phrase| content.contains(phrase))
 }
 
+fn screen_mode_allows_automatic_analysis(
+    mode: ScreenUnderstandingMode,
+    vision_enabled: bool,
+) -> bool {
+    matches!(mode, ScreenUnderstandingMode::SessionAllowed) && vision_enabled
+}
+
 fn parse_relative_delay_ms(text: &str) -> Option<i64> {
     let common_phrases = [
         ("半小时", 30 * 60 * 1_000_i64),
@@ -5730,6 +5845,26 @@ mod tests {
                 content: "不要上传截图".into(),
             },
         ]));
+    }
+
+    #[test]
+    fn screen_automatic_mode_requires_session_consent_and_vision() {
+        assert!(!screen_mode_allows_automatic_analysis(
+            ScreenUnderstandingMode::AskEachTime,
+            true
+        ));
+        assert!(!screen_mode_allows_automatic_analysis(
+            ScreenUnderstandingMode::SessionAllowed,
+            false
+        ));
+        assert!(screen_mode_allows_automatic_analysis(
+            ScreenUnderstandingMode::SessionAllowed,
+            true
+        ));
+        assert_eq!(
+            RuntimeState::default().screen_understanding_mode,
+            ScreenUnderstandingMode::AskEachTime
+        );
     }
 
     #[test]
