@@ -12,9 +12,9 @@ Example (run from the repository root):
     VRM_ADDON_ROOT=/path/to/VRM-Addon-for-Blender \
     BLENDER_VRM_AUTOMATIC_LICENSE_CONFIRMATION=true \
     "$BLENDER" --background --python scripts/character/generate_aris_vrm.py -- \
-      --out resources/characters/aris/model/aris-original.vrm \
-      --blend resources/characters/aris/model/aris-original.blend \
-      --render /tmp/aris-original-preview.png
+      --out /tmp/aris-authored-base.vrm \
+      --blend /tmp/aris-authored-base.blend \
+      --render /tmp/aris-authored-base-preview.png
 
 The generated .vrm/.blend files are local development artifacts and are
 ignored by Git. The model metadata deliberately says that it is an original
@@ -96,14 +96,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("resources/characters/aris/model/aris-original.vrm"),
+        default=Path("/tmp/aris-authored-base.vrm"),
     )
     parser.add_argument(
         "--blend",
         type=Path,
-        default=Path("resources/characters/aris/model/aris-original.blend"),
+        default=Path("/tmp/aris-authored-base.blend"),
     )
-    parser.add_argument("--render", type=Path, default=Path("/tmp/aris-original-preview.png"))
+    parser.add_argument("--render", type=Path, default=Path("/tmp/aris-authored-base-preview.png"))
     return parser.parse_args(blender_args)
 
 

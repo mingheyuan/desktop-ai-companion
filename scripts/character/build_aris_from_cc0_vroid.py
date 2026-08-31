@@ -51,6 +51,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--blend", type=Path, required=True)
     parser.add_argument("--render", type=Path, required=True)
     parser.add_argument("--hair-mode", choices=("base", "custom"), default="base")
+    parser.add_argument(
+        "--hair-source",
+        type=Path,
+        help="Optional local CC0 VRM whose Hair001 mesh replaces the base hairstyle",
+    )
     return parser.parse_args(blender_args)
 
 
@@ -129,10 +134,114 @@ def add_extruded_xz(
     return authored.smooth(obj)
 
 
+def add_tapered_lock(
+    name: str,
+    points: list[Point],
+    radii: list[float],
+    surface: bpy.types.Material,
+    *,
+    sides: int = 16,
+) -> bpy.types.Object:
+    """Build a smooth, tapered tubular hair lock along a 3D path."""
+    if len(points) < 2 or len(points) != len(radii):
+        raise ValueError("A tapered lock needs matching point and radius lists")
+
+    vertices: list[tuple[float, float, float]] = []
+    for index, raw_point in enumerate(points):
+        point = Vector(raw_point)
+        if index == 0:
+            tangent = Vector(points[1]) - point
+        elif index == len(points) - 1:
+            tangent = point - Vector(points[index - 1])
+        else:
+            tangent = Vector(points[index + 1]) - Vector(points[index - 1])
+        tangent.normalize()
+        reference = Vector((0.0, 1.0, 0.0))
+        if abs(tangent.dot(reference)) > 0.92:
+            reference = Vector((1.0, 0.0, 0.0))
+        side = tangent.cross(reference).normalized()
+        up = side.cross(tangent).normalized()
+        for segment in range(sides):
+            angle = (2.0 * math.pi * segment) / sides
+            offset = (side * math.cos(angle) + up * math.sin(angle)) * radii[index]
+            vertices.append(tuple(point + offset))
+
+    faces: list[tuple[int, ...]] = []
+    faces.append(tuple(range(sides - 1, -1, -1)))
+    for ring in range(len(points) - 1):
+        start = ring * sides
+        next_start = (ring + 1) * sides
+        for segment in range(sides):
+            next_segment = (segment + 1) % sides
+            faces.append((start + segment, start + next_segment, next_start + next_segment, next_start + segment))
+    last_start = (len(points) - 1) * sides
+    faces.append(tuple(last_start + segment for segment in range(sides)))
+
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+    authored.assign_material(obj, surface)
+    return authored.smooth(obj)
+
+
 def replace_slot(mesh: bpy.types.Mesh, slot_index: int, material: bpy.types.Material) -> None:
     while len(mesh.materials) <= slot_index:
         mesh.materials.append(None)
     mesh.materials[slot_index] = material
+
+
+def remove_material_faces(mesh: bpy.types.Mesh, material_index: int) -> None:
+    edit_mesh = bmesh.new()
+    edit_mesh.from_mesh(mesh)
+    faces = [face for face in edit_mesh.faces if face.material_index == material_index]
+    if faces:
+        bmesh.ops.delete(edit_mesh, geom=faces, context="FACES")
+    edit_mesh.to_mesh(mesh)
+    edit_mesh.free()
+
+
+def replace_hair_from_source(
+    base_hair: bpy.types.Object | None,
+    base_body: bpy.types.Object,
+    source_path: Path,
+    base_armature: bpy.types.Object,
+) -> bpy.types.Object:
+    """Copy only Hair001 from a compatible VRoid VRM onto the base rig."""
+    existing_objects = set(bpy.data.objects)
+    bpy.ops.import_scene.vrm(filepath=str(source_path))
+    imported_objects = [obj for obj in bpy.data.objects if obj not in existing_objects]
+    source_hair = next((obj for obj in imported_objects if obj.type == "MESH" and obj.name.startswith("Hair001")), None)
+    if source_hair is None:
+        raise RuntimeError("The hair source VRM did not contain a Hair001 mesh")
+
+    hair = source_hair.copy()
+    hair.data = source_hair.data.copy()
+    bpy.context.collection.objects.link(hair)
+    hair.matrix_world = source_hair.matrix_world.copy()
+    for modifier in hair.modifiers:
+        if modifier.type == "ARMATURE":
+            modifier.object = base_armature
+
+    if base_hair is not None:
+        bpy.data.objects.remove(base_hair, do_unlink=True)
+    else:
+        # Base_Female stores its short hair back in the Body mesh instead of
+        # a separate Hair001 node. Remove only that material's faces before
+        # attaching the detailed HairSample mesh.
+        hair_slot = next(
+            (index for index, material in enumerate(base_body.data.materials) if material and "Hair" in material.name),
+            None,
+        )
+        if hair_slot is not None:
+            remove_material_faces(base_body.data, hair_slot)
+    for obj in imported_objects:
+        if obj != source_hair:
+            bpy.data.objects.remove(obj, do_unlink=True)
+    bpy.data.objects.remove(source_hair, do_unlink=True)
+    hair.name = "Hair001"
+    return hair
 
 
 def tint_hair_texture(material: bpy.types.Material, hue: float) -> None:
@@ -195,7 +304,7 @@ def recolor_base(armature: bpy.types.Object, hair_mode: str) -> tuple[bpy.types.
     face = bpy.data.objects.get("Face")
     hair = bpy.data.objects.get("Hair001")
     if not body or not face or not hair:
-        raise RuntimeError("The CC0 VRM must contain Body, Face, and Hair001 meshes")
+        raise RuntimeError("The prepared CC0 VRM must contain Body, Face, and Hair001 meshes")
 
     navy_skirt = toon_material("ArisCC0_Navy_Skirt", (0.025, 0.055, 0.16, 1.0))
     navy_boot = toon_material("ArisCC0_Navy_Boot", (0.02, 0.035, 0.10, 1.0), metallic=0.08)
@@ -210,16 +319,26 @@ def recolor_base(armature: bpy.types.Object, hair_mode: str) -> tuple[bpy.types.
         bpy.data.objects.remove(hair, do_unlink=True)
     else:
         repair_base_hair(hair, deep_hair, blue_hair)
-    # The VRoid sample uses one clothing slot for top and skirt. Its skirt is
-    # below z≈1.05, so only that region receives the navy Aris palette; the
-    # white upper garment and original body texture remain intact.
+    # VRoid variants name their clothing slots differently. Their skirt/bottom
+    # is below z≈1.05, so only that region receives the navy Aris palette; the
+    # upper garment and original body texture remain intact.
     skirt_slot = len(body.data.materials)
     body.data.materials.append(navy_skirt)
+    clothing_slots = {
+        index
+        for index, material in enumerate(body.data.materials)
+        if material and ("Tops" in material.name or "Bottoms" in material.name)
+    }
     for polygon in body.data.polygons:
         center = body.matrix_world @ polygon.center
-        if polygon.material_index == 1 and center.z < 1.05:
+        if polygon.material_index in clothing_slots and center.z < 1.05:
             polygon.material_index = skirt_slot
-    replace_slot(body.data, 2, navy_boot)
+    shoe_slot = next(
+        (index for index, material in enumerate(body.data.materials) if material and "Shoes" in material.name),
+        None,
+    )
+    if shoe_slot is not None:
+        replace_slot(body.data, shoe_slot, navy_boot)
     return body, face
 
 
@@ -418,12 +537,21 @@ def main() -> None:
     args.render.parent.mkdir(parents=True, exist_ok=True)
     if not args.base.exists():
         raise FileNotFoundError(args.base)
+    if args.hair_source and not args.hair_source.exists():
+        raise FileNotFoundError(args.hair_source)
 
     clear_scene()
     bpy.ops.import_scene.vrm(filepath=str(args.base))
     armature = next((obj for obj in bpy.context.scene.objects if obj.type == "ARMATURE"), None)
     if armature is None:
         raise RuntimeError("Base VRM did not import an armature")
+
+    if args.hair_source:
+        base_hair = bpy.data.objects.get("Hair001")
+        base_body = bpy.data.objects.get("Body")
+        if base_body is None:
+            raise RuntimeError("The base VRM did not contain Body")
+        replace_hair_from_source(base_hair, base_body, args.hair_source, armature)
 
     recolor_base(armature, args.hair_mode)
     add_aris_details(armature, args.hair_mode)

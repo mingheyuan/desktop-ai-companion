@@ -8,10 +8,11 @@
 - 运行格式：VRM 0.x 或 VRM 1.0；桌面运行时使用 `three-vrm`。
 - 角色来源：必须是自制、用户拥有，或获得明确授权的资源。
 - 当前状态：等待已获授权的 `.vrm` 文件；不要把付费模型或受限模型复制到此目录后提交 Git。
+- 当前本地研究版：只保留 `model/aris-cc0-custom-v5.vrm` 及对应的 `model/aris-cc0-custom-v5.blend`；它们是当前个人本地验收版本，不是官方模型，也不会提交 Git。
 - 当前预览：应用内置一版无外部资产的程序化角色预览，代码位于 `apps/desktop/src/avatar/arisPreview.ts`；它不是正式 VRM 资源。
 - 正式制作：优先使用 Blender + [VRM Add-on for Blender](https://github.com/saturday06/VRM-Addon-for-Blender)，Unity 来源再考虑 [UniVRM](https://github.com/vrm-c/UniVRM)；运行时继续由 `three-vrm` 接入。
-- 原创生成器：`scripts/character/generate_aris_vrm.py` 会根据已记录的公开视觉规格生成一个无第三方资产的可编辑 VRM 原型，并写入本地 `model/`；它用于开发和回归，不宣称是官方模型。
-- CC0 底座研究：`scripts/character/build_aris_from_cc0_vroid.py` 可以在提供本地 CC0 VRM 时保留其脸部、身体和表情细节，默认修复并重映射原生发丝色调，再叠加本项目原创的爱丽丝风格制服配色、光环和掌机；也支持 `--hair-mode custom` 进行完全原创发型实验。它是候选研究版本，不是官方模型。
+- 共用建模基元：`scripts/character/generate_aris_vrm.py` 只作为当前构建脚本的 Blender/VRM authoring 依赖，不再保留它单独生成的模型文件。
+- 当前构建流程：`scripts/character/build_aris_from_cc0_vroid.py` 接收使用者自行取得并核对来源的 CC0 VRM，保留底座脸部、身体和表情细节，叠加本项目原创的爱丽丝风格制服配色、光环和掌机；当前输出统一命名为 `aris-cc0-custom-v5`。
 
 ## 本地目录约定
 
@@ -23,19 +24,7 @@ resources/characters/aris/
     └── avatar.vrm       # 本地文件，默认被 Git 忽略
 ```
 
-如果本机已安装 Blender 和官方 VRM Add-on，可从仓库根目录生成本地原型：
-
-```bash
-BLENDER=/path/to/Blender \
-VRM_ADDON_ROOT=/path/to/VRM-Addon-for-Blender \
-BLENDER_VRM_AUTOMATIC_LICENSE_CONFIRMATION=true \
-"$BLENDER" --background --python scripts/character/generate_aris_vrm.py -- \
-  --out resources/characters/aris/model/aris-original.vrm \
-  --blend resources/characters/aris/model/aris-original.blend \
-  --render /tmp/aris-original-preview.png
-```
-
-`.vrm`、`.blend` 和 Blender 的备份文件默认不提交；桌宠仍通过“导入 VRM”把本地模型复制到应用数据目录。
+`.vrm`、`.blend` 和 Blender 的备份文件默认不提交；桌宠仍通过“导入 VRM”把当前本地模型复制到应用数据目录。
 
 ## CC0 底座研究命令
 
@@ -47,12 +36,12 @@ VRM_ADDON_ROOT=/path/to/VRM-Addon-for-Blender \
 BLENDER_VRM_AUTOMATIC_LICENSE_CONFIRMATION=true \
 "$BLENDER" --background --python scripts/character/build_aris_from_cc0_vroid.py -- \
   --base /path/to/HairSample_Female.vrm \
-  --out resources/characters/aris/model/aris-cc0-study.vrm \
-  --blend resources/characters/aris/model/aris-cc0-study.blend \
-  --render /tmp/aris-cc0-study.png
+  --out resources/characters/aris/model/aris-cc0-custom-v5.vrm \
+  --blend resources/characters/aris/model/aris-cc0-custom-v5.blend \
+  --render /tmp/aris-cc0-custom-v5.png
 ```
 
-这个脚本不会联网下载模型，也不会把底座二进制提交到仓库；`--base` 必须由使用者自行取得并保留其来源记录。它只作为更高细节的本地候选，正式采用前仍需检查面部、动作、表情、春骨和《蔚蓝档案》二创授权范围。
+这个脚本不会联网下载模型，也不会把底座二进制提交到仓库；`--base` 必须由使用者自行取得并保留其来源记录。当前只保留上述 `custom-v5` 输出；重新生成前会覆盖同名当前版本，旧版本不在本地目录中保留。正式采用前仍需检查面部、动作、表情、春骨和《蔚蓝档案》二创授权范围。
 
 应用当前通过设置页的“导入 VRM”选择文件，然后由 Rust 复制到应用数据目录：
 
