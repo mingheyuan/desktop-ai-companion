@@ -17,6 +17,10 @@ pub(crate) enum ToolAction {
     OpenUrl {
         url: String,
     },
+    ReadWebpage {
+        url: String,
+        host: String,
+    },
     CreateTimer {
         title: String,
         due_at_ms: i64,
@@ -70,6 +74,21 @@ impl ToolRegistry {
         ToolDefinition {
             name: "system.open_url".into(),
             description: "使用系统默认浏览器打开一个 HTTP 或 HTTPS 网页。".into(),
+            parameters: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "完整的 HTTP 或 HTTPS URL"
+                    }
+                },
+                "required": ["url"]
+            }),
+        },
+        ToolDefinition {
+            name: "web.read".into(),
+            description: "读取一个 HTTP 或 HTTPS 网页的公开文字内容，并将其作为不可信资料返回给当前对话；执行前会请求用户确认。".into(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -139,7 +158,7 @@ impl ToolRegistry {
         },
         ToolDefinition {
             name: "screen.observe".into(),
-            description: "在用户明确要求查看屏幕时，生成一张只保存在本机进程内存中的临时预览；不会上传给模型。执行前会请求用户确认。".into(),
+            description: "在用户明确要求查看屏幕时，先生成一张只保存在本机进程内存中的临时预览；若启用 Vision，后续还会单独请求确认再上传截图分析。执行前会请求用户确认。".into(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -248,6 +267,29 @@ impl ToolPolicy {
                     },
                     display_name: "打开网页".into(),
                     summary: "模型请求使用系统默认浏览器打开此网址；执行前需要你的确认。".into(),
+                    url: Some(request.url.clone()),
+                    host: Some(request.host),
+                    title: None,
+                    due_at_ms: None,
+                    arguments_json: json!({ "url": request.url }).to_string(),
+                })
+            }
+            "web.read" => {
+                reject_unknown_tool_arguments(object, &["url"])?;
+                let url = object.get("url").and_then(Value::as_str).ok_or_else(|| {
+                    AppError::new("invalid_tool_arguments", "读取网页需要 url 参数。", false)
+                })?;
+                let request = normalize_open_url(url)?;
+                Ok(ModelToolCandidate {
+                    action: ToolAction::ReadWebpage {
+                        url: request.url.clone(),
+                        host: request.host.clone(),
+                    },
+                    display_name: "读取网页内容".into(),
+                    summary: format!(
+                        "模型请求读取 {} 的公开网页文字，并将内容返回给当前对话；网页内容不可信，执行前需要你的确认。",
+                        request.host
+                    ),
                     url: Some(request.url.clone()),
                     host: Some(request.host),
                     title: None,

@@ -32,7 +32,9 @@ use crate::{
     },
     desktop::apply_pet_window_settings,
     notifications,
-    provider::{analyze_image, create_provider, LlmEvent, LlmMessage, LlmRequest, ToolCall},
+    provider::{
+        analyze_image, create_provider, read_webpage, LlmEvent, LlmMessage, LlmRequest, ToolCall,
+    },
     secret::SecretStore,
     storage::{MemoryCandidateInput, Storage, TimerInput, ToolRunInput},
     tools::{
@@ -527,32 +529,42 @@ impl AppCore {
             ));
         }
         let open_url = parse_open_url_request(&text)?;
-        let timer_request = if open_url.is_none() {
+        let read_webpage = if open_url.is_none() {
+            parse_read_webpage_request(&text)?
+        } else {
+            None
+        };
+        let timer_request = if open_url.is_none() && read_webpage.is_none() {
             parse_timer_request(&text, now_ms())?
         } else {
             None
         };
-        let memory_intent = if open_url.is_none() && timer_request.is_none() {
-            parse_explicit_memory_intent(&text)
-                .map(|intent| {
-                    Ok(ExplicitMemoryIntent {
-                        content: validate_memory_content(&intent.content)?,
-                        scope: intent.scope,
-                        kind: intent.kind,
+        let memory_intent =
+            if open_url.is_none() && read_webpage.is_none() && timer_request.is_none() {
+                parse_explicit_memory_intent(&text)
+                    .map(|intent| {
+                        Ok(ExplicitMemoryIntent {
+                            content: validate_memory_content(&intent.content)?,
+                            scope: intent.scope,
+                            kind: intent.kind,
+                        })
                     })
-                })
-                .transpose()?
-        } else {
-            None
-        };
-        let memory_content = memory_intent.as_ref().map(|intent| intent.content.as_str());
-        let memory_delete =
-            if open_url.is_none() && timer_request.is_none() && memory_content.is_none() {
-                self.resolve_explicit_memory_delete(&text).await?
+                    .transpose()?
             } else {
                 None
             };
+        let memory_content = memory_intent.as_ref().map(|intent| intent.content.as_str());
+        let memory_delete = if open_url.is_none()
+            && read_webpage.is_none()
+            && timer_request.is_none()
+            && memory_content.is_none()
+        {
+            self.resolve_explicit_memory_delete(&text).await?
+        } else {
+            None
+        };
         let screen_request = if open_url.is_none()
+            && read_webpage.is_none()
             && timer_request.is_none()
             && memory_content.is_none()
             && memory_delete.is_none()
@@ -562,6 +574,7 @@ impl AppCore {
             None
         };
         let timer_cancel = if open_url.is_none()
+            && read_webpage.is_none()
             && timer_request.is_none()
             && memory_content.is_none()
             && memory_delete.is_none()
@@ -575,6 +588,7 @@ impl AppCore {
             None
         };
         let timer_list_request = open_url.is_none()
+            && read_webpage.is_none()
             && timer_request.is_none()
             && memory_content.is_none()
             && memory_delete.is_none()
@@ -619,6 +633,34 @@ impl AppCore {
                     action: PendingToolAction::OpenUrl { url: request.url },
                     origin: PendingToolOrigin::Explicit,
                 }
+            })
+            .or_else(|| {
+                read_webpage.map(|request| {
+                    let tool_call_id = Uuid::now_v7().to_string();
+                    PendingTool {
+                        approval: ToolApproval {
+                            tool_call_id,
+                            tool_name: "web.read".into(),
+                            display_name: "读取网页内容".into(),
+                            summary: format!(
+                                "只会读取 {} 的公开文字，不执行网页脚本或提交表单。网页内容会作为不可信资料返回。",
+                                request.host
+                            ),
+                            url: Some(request.url.clone()),
+                            host: Some(request.host.clone()),
+                            title: None,
+                            due_at_ms: None,
+                            expires_at_ms: Self::tool_approval_expiry_ms(),
+                        },
+                        turn_id: turn_id.clone(),
+                        generation,
+                        action: PendingToolAction::ReadWebpage {
+                            url: request.url,
+                            host: request.host,
+                        },
+                        origin: PendingToolOrigin::Explicit,
+                    }
+                })
             })
             .or_else(|| {
                 timer_request.map(|request| {
@@ -757,6 +799,9 @@ impl AppCore {
         if let Some(tool) = pending_tool.as_ref() {
             let arguments_json = match &tool.action {
                 PendingToolAction::OpenUrl { url } => json!({ "url": url }).to_string(),
+                PendingToolAction::ReadWebpage { url, host } => {
+                    json!({ "url": url, "host": host }).to_string()
+                }
                 PendingToolAction::CreateTimer {
                     title, due_at_ms, ..
                 } => json!({
@@ -805,7 +850,11 @@ impl AppCore {
                         turn_id: &turn_id,
                         tool_name: &tool.approval.tool_name,
                         arguments_json: &arguments_json,
-                        origin: "user_explicit",
+                        origin: if matches!(&tool.origin, PendingToolOrigin::Model { .. }) {
+                            "model_suggested"
+                        } else {
+                            "user_explicit"
+                        },
                     },
                     now_ms(),
                 )
@@ -1283,6 +1332,24 @@ impl AppCore {
                 false,
             ));
         }
+        if let PendingToolAction::ReadWebpage { url, host } = &candidate.action {
+            let user_request = context
+                .messages
+                .iter()
+                .rev()
+                .find_map(|message| match message {
+                    LlmMessage::User { content } => Some(content.as_str()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if !user_request.contains(url) && !user_request.contains(host) {
+                return Err(AppError::new(
+                    "web_confirmation_required",
+                    "模型只能读取用户当前请求中明确给出的网页地址。",
+                    false,
+                ));
+            }
+        }
         if let PendingToolAction::CreateTimer {
             original_request, ..
         } = &mut candidate.action
@@ -1421,6 +1488,7 @@ impl AppCore {
         generation: u64,
         observation_id: String,
         question: String,
+        origin: PendingToolOrigin,
     ) -> Result<(), AppError> {
         let question = question.trim().to_owned();
         if question.is_empty() || question.chars().count() > 500 {
@@ -1459,6 +1527,11 @@ impl AppCore {
             ));
         }
         let tool_call_id = Uuid::now_v7().to_string();
+        let origin_label = if matches!(&origin, PendingToolOrigin::Model { .. }) {
+            "model_suggested"
+        } else {
+            "user_explicit"
+        };
         let arguments_json = json!({
             "observation_id": observation_id,
             "question": question,
@@ -1473,7 +1546,7 @@ impl AppCore {
                     turn_id,
                     tool_name: "vision.analyze",
                     arguments_json: &arguments_json,
-                    origin: "user_explicit",
+                    origin: origin_label,
                 },
                 now_ms(),
             )
@@ -1501,7 +1574,7 @@ impl AppCore {
                 observation_id,
                 question,
             },
-            origin: PendingToolOrigin::Explicit,
+            origin,
         };
         {
             let mut runtime = self.runtime.write().await;
@@ -1884,6 +1957,9 @@ impl AppCore {
         if !approved {
             let message = match &pending.action {
                 PendingToolAction::OpenUrl { url } => format!("好的，老师，已取消打开网页：{url}"),
+                PendingToolAction::ReadWebpage { url, .. } => {
+                    format!("好的，老师，已取消读取网页：{url}")
+                }
                 PendingToolAction::CreateTimer { title, .. } => {
                     format!("好的，老师，已取消提醒：{title}")
                 }
@@ -1946,6 +2022,16 @@ impl AppCore {
                     Ok(()) => Ok(format!("已交给系统默认浏览器打开网页：{url}")),
                     Err(error) => Err(error),
                 }
+            }
+            PendingToolAction::ReadWebpage { url, .. } => {
+                let cancel = self
+                    .active_turn
+                    .lock()
+                    .await
+                    .as_ref()
+                    .map(|active| active.cancel.clone())
+                    .unwrap_or_else(CancellationToken::new);
+                read_webpage(&url, cancel).await
             }
             PendingToolAction::CreateTimer {
                 title,
@@ -2115,36 +2201,39 @@ impl AppCore {
                         now_ms(),
                     )
                     .map_err(storage_error)?;
-                if matches!(&pending.origin, PendingToolOrigin::Model { .. }) {
-                    self.resume_model_tool(app, pending, result).await?;
-                } else if matches!(&pending.action, PendingToolAction::AnalyzeScreen { .. }) {
-                    if let PendingToolAction::AnalyzeScreen { observation_id, .. } = &pending.action
-                    {
-                        self.mark_screen_observation_sent(observation_id, app).await;
-                    }
-                    self.complete_turn(app, &pending.turn_id, pending.generation, &result)
-                        .await;
-                } else {
-                    if let PendingToolAction::ObserveScreen { request, .. } = &pending.action {
-                        let vision_enabled = self.provider.read().await.vision.enabled;
-                        if vision_enabled {
-                            let observation_id = self
-                                .screen_observation
-                                .read()
+                if let PendingToolAction::ObserveScreen { request, .. } = &pending.action {
+                    let vision_enabled = self.provider.read().await.vision.enabled;
+                    if vision_enabled {
+                        let observation_id = self
+                            .screen_observation
+                            .read()
+                            .await
+                            .as_ref()
+                            .map(|record| record.metadata.id.clone());
+                        if let Some(observation_id) = observation_id {
+                            let origin = pending.origin.clone();
+                            if let Err(error) = self
+                                .queue_vision_analysis(
+                                    app,
+                                    &pending.turn_id,
+                                    pending.generation,
+                                    observation_id,
+                                    request.clone(),
+                                    origin,
+                                )
                                 .await
-                                .as_ref()
-                                .map(|record| record.metadata.id.clone());
-                            if let Some(observation_id) = observation_id {
-                                if let Err(error) = self
-                                    .queue_vision_analysis(
+                            {
+                                if matches!(&pending.origin, PendingToolOrigin::Model { .. }) {
+                                    self.resume_model_tool(
                                         app,
-                                        &pending.turn_id,
-                                        pending.generation,
-                                        observation_id,
-                                        request.clone(),
+                                        pending,
+                                        format!(
+                                            "{result}（无法准备视觉模型确认：{}）",
+                                            error.message
+                                        ),
                                     )
-                                    .await
-                                {
+                                    .await?;
+                                } else {
                                     self.complete_turn(
                                         app,
                                         &pending.turn_id,
@@ -2156,12 +2245,27 @@ impl AppCore {
                                     )
                                     .await;
                                 }
-                                return Ok(());
                             }
+                            return Ok(());
                         }
                     }
+                }
+                let is_analyze = matches!(&pending.action, PendingToolAction::AnalyzeScreen { .. });
+                if is_analyze {
+                    if let PendingToolAction::AnalyzeScreen { observation_id, .. } = &pending.action
+                    {
+                        self.mark_screen_observation_sent(observation_id, app).await;
+                    }
+                }
+                if matches!(&pending.origin, PendingToolOrigin::Model { .. }) {
+                    self.resume_model_tool(app, pending, result).await?;
+                } else if is_analyze {
+                    self.complete_turn(app, &pending.turn_id, pending.generation, &result)
+                        .await;
+                } else {
                     let message = match &pending.action {
                         PendingToolAction::OpenUrl { url } => format!("网页已打开，老师：{url}"),
+                        PendingToolAction::ReadWebpage { .. } => result,
                         PendingToolAction::CreateTimer {
                             title, due_at_ms, ..
                         } => format!(
@@ -4233,6 +4337,66 @@ fn parse_open_url_request(text: &str) -> Result<Option<OpenUrlRequest>, AppError
     Ok(Some(normalize_open_url(&candidate)?))
 }
 
+fn parse_read_webpage_request(text: &str) -> Result<Option<OpenUrlRequest>, AppError> {
+    let has_read_intent = ["网页", "页面", "网站"]
+        .iter()
+        .any(|target| text.contains(target))
+        && ["读取", "阅读", "查看", "看看", "分析", "获取"]
+            .iter()
+            .any(|verb| text.contains(verb));
+    if !has_read_intent
+        || ["不要读取", "别读取", "不要查看", "别查看", "不需要读取"]
+            .iter()
+            .any(|phrase| text.contains(phrase))
+    {
+        return Ok(None);
+    }
+
+    let candidate = text.split_whitespace().find_map(|token| {
+        let trimmed = token.trim_matches(|character: char| {
+            matches!(
+                character,
+                '，' | '。'
+                    | '！'
+                    | '？'
+                    | '；'
+                    | ','
+                    | '.'
+                    | '!'
+                    | '?'
+                    | ';'
+                    | ':'
+                    | '：'
+                    | '“'
+                    | '”'
+                    | '"'
+                    | '\''
+                    | '`'
+                    | '<'
+                    | '>'
+                    | '('
+                    | ')'
+                    | '（'
+                    | '）'
+                    | '['
+                    | ']'
+                    | '【'
+                    | '】'
+            )
+        });
+        let lower = trimmed.to_ascii_lowercase();
+        (lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("www.")
+            || (trimmed.contains('.') && !trimmed.contains(' ')))
+        .then_some(trimmed.to_owned())
+    });
+    let Some(candidate) = candidate else {
+        return Ok(None);
+    };
+    Ok(Some(normalize_open_url(&candidate)?))
+}
+
 struct TimerRequest {
     title: String,
     due_at_ms: i64,
@@ -5360,6 +5524,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_explicit_read_webpage_request() {
+        let request =
+            parse_read_webpage_request("老师，请读取 https://example.com/docs 页面内容。")
+                .unwrap()
+                .unwrap();
+        assert_eq!(request.url, "https://example.com/docs");
+        assert_eq!(request.host, "example.com");
+        assert!(parse_read_webpage_request("不要读取 https://example.com")
+            .unwrap()
+            .is_none());
+        assert!(parse_read_webpage_request("请读取网页但没有网址")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn rejects_unsafe_open_url_request() {
         assert!(parse_open_url_request("打开 file:///tmp/secret.txt").is_err());
         assert!(parse_open_url_request("打开 https://user:password@example.com").is_err());
@@ -5561,6 +5741,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(url.host.as_deref(), Some("example.com"));
+
+        let web = ToolPolicy::validate_model_call(
+            &ToolCall {
+                id: "call-web-read".into(),
+                name: "web.read".into(),
+                arguments: r#"{"url":"https://example.com/docs"}"#.into(),
+            },
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(web.url.as_deref(), Some("https://example.com/docs"));
+        assert_eq!(web.host.as_deref(), Some("example.com"));
 
         let timer = ToolPolicy::validate_model_call(
             &ToolCall {

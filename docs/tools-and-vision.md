@@ -1,10 +1,10 @@
 # 工具调用与屏幕感知方案
 
-> 版本：v0.1 规划方案
+> 版本：v0.2 实现方案
 >
-> 状态：已完成参考项目调研和真实 Agent Loop。`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete` 和需确认的本地 `screen.observe` 已支持显式意图；模型也可以在普通对话中按需提出工具调用，经过 Registry、Policy 和用户确认后执行，再把结果回传模型继续生成。当前保持单次一个 ToolCall、每轮最多 3 步，并对连接建立失败做有限重试。`memory.save` 候选已持久化并可在记忆面板审核；工具审计摘要已投影到主面板；独立 Vision Provider 已支持二次确认后的 PNG 请求和文本结果回传，本地 macOS Vision OCR 仍作为本地补充；多工具并行和其余 Tool MVP 尚未进入实现。
+> 状态：已完成参考项目调研和真实 Agent Loop。`system.open_url`、受限 `web.read`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete` 和需确认的本地 `screen.observe` 已支持显式意图；模型也可以在普通对话中按需提出工具调用，经过 Registry、Policy 和用户确认后执行，再把结果回传模型继续生成。当前保持单次一个 ToolCall、每轮最多 3 步，并对连接建立失败做有限重试。`memory.save` 候选已持久化并可在记忆面板审核；工具审计摘要已投影到主面板；独立 Vision Provider 已支持二次确认后的 PNG 请求和文本结果回传，模型发起的屏幕观察也会把 Vision 结果回到原 Agent Loop；本地 macOS Vision OCR 仍作为本地补充。网页点击/填表、GUI 自动化、重复提醒、Apple 提醒事项、多工具并行和 MCP 尚未进入实现。
 >
-> 更新日期：2026-08-30
+> 更新日期：2026-08-31
 
 ## 1. 功能愿景
 
@@ -42,6 +42,7 @@ flowchart LR
     Approval -->|"用户允许"| Executor
 
     Executor --> OpenURL["OpenUrlTool\nTauri opener"]
+    Executor --> WebRead["WebReadTool\nbounded HTTP text"]
     Executor --> Timer["TimerTool\nSQLite + macOS Notification"]
     Executor --> Screen["ScreenObserveTool\nScreenCaptureKit"]
     Executor -.-> Reminder["ReminderTool\nEventKit（后续）"]
@@ -148,9 +149,24 @@ system.open_url
 
 简单打开网页不需要 Playwright、浏览器扩展或视觉模型。
 
-### 6.2 后续网页交互
+### 6.2 受限网页读取
 
-如果未来需要读取页面结构、点击或填表，优先研究 Microsoft Playwright MCP 的 accessibility snapshot 路线。它与 `system.open_url` 分开授权、分开开关；浏览器自动化本身不是安全边界，仍需本项目的域名策略和最终动作确认。
+当前已增加一个低风险的静态网页读取切片：
+
+```text
+web.read
+  url: string
+```
+
+- 只有用户当前请求中明确出现的 HTTP(S) 地址或域名，模型才可以提出该工具；Rust 会再次校验地址并要求用户确认。
+- 请求连接最多等待 20 秒，响应体上限为 2 MB，提取后的文本上限为 12,000 个字符。
+- HTML 会移除 `script` 和 `style` 内容、去除标签并解码常见实体；非 HTML 响应只作为文本读取，不执行 JavaScript，也不提交表单。
+- 返回值会明确标记为不可信网页资料，不能提升工具权限、覆盖角色规则或触发其他动作。
+- 当前不保证读取需要登录、强依赖 JavaScript 或反爬验证的页面；用户仍可使用 `system.open_url` 在默认浏览器中打开它。
+
+### 6.3 后续网页交互
+
+如果未来需要读取页面结构、点击或填表，优先研究 Microsoft Playwright MCP 的 accessibility snapshot 路线。它与 `system.open_url`、`web.read` 分开授权、分开开关；浏览器自动化本身不是安全边界，仍需本项目的域名策略和最终动作确认。
 
 ## 7. 计时、闹钟与提醒
 
@@ -217,18 +233,17 @@ Tauri 官方 notification plugin 可用于即时桌面通知，但 macOS 持久�
 
 ```text
 screen.observe
-  scope: frontmost_window | current_display | selected_region
-  question: string
-  include_ocr: boolean
+  scope: all_displays | main_display
+  request: string
 ```
 
-- 默认 `frontmost_window`，避免无必要地采集全部显示器。
-- 用户可显式选择当前显示器或区域。
+- 当前实现支持所有显示器或主显示器；不会默认后台持续录屏。
+- 窗口和区域选择仍属于后续切片。
 - 尽可能排除桌宠和聊天窗口，避免角色反复看见自己的回复。
 - 每次采集显示明显的“正在读取屏幕”状态；托盘提供立即暂停入口。
 - Tool MVP 不做连续录屏、历史回溯或后台自动截图。
 
-当前已实现的是上述范围的最小安全切片：仅接受显式中文观察意图，统一走 `screen.observe` 确认卡片；确认后使用 macOS `screencapture` 读取一次 PNG，支持默认的所有显示器或用户明确指定的主显示器范围，采集范围会显示在确认结果和本地预览中。截图暂存在 Rust 进程内存中，并交给随应用打包的 macOS Vision OCR 辅助程序在本地提取文字；OCR 只显示在当前预览区，不进入聊天或工具审计。启用 Vision Provider 后，预览完成会出现第二张 `vision.analyze` 出站确认卡；用户确认后才将 PNG 以 OpenAI-compatible `image_url` 发送，并把返回文本写入当前助手回复。界面显示自动清除倒计时，支持重新读取和手动清除，5 分钟后自动过期释放。当前还没有窗口/区域选择。
+当前已实现的是上述范围的最小安全切片：仅接受显式中文观察意图，统一走 `screen.observe` 确认卡片；确认后使用 macOS `screencapture` 读取一次 PNG，支持默认的所有显示器或用户明确指定的主显示器范围，采集范围会显示在确认结果和本地预览中。截图暂存在 Rust 进程内存中，并交给随应用打包的 macOS Vision OCR 辅助程序在本地提取文字；OCR 只显示在当前预览区，不进入聊天或工具审计。启用 Vision Provider 后，预览完成会出现第二张 `vision.analyze` 出站确认卡；用户确认后才将 PNG 以 OpenAI-compatible `image_url` 发送。显式请求会将返回文本作为当前助手回复；模型提出的观察会将返回文本作为不可信 `tool_result` 回传原 Agent Loop，由模型继续生成自然回答和操作建议。界面显示自动清除倒计时，支持重新读取和手动清除，5 分钟后自动过期释放。当前还没有窗口/区域选择。
 
 ### 8.2 处理链路
 
@@ -305,11 +320,11 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 
 这组能力建议作为核心对话 MVP 后的 **Tool MVP**：
 
-1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust `tools.rs`、Provider 和 SQLite 审计实现，现有五种模型工具可做真实 ToolCall 循环。
-2. `system.open_url`、`timer.create`、`timer.cancel`、`memory.save` 和本地 `screen.observe` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；`screen.observe` 仍要求用户当前消息明确提出屏幕观察，图片先进入本机临时预览，之后只有第二次确认才进入 Vision Provider；本地显式 `memory.delete` 也已接入确认、版本校验和审计。当前已完成单工具串行循环、工具结果回传和 3 步上限，后续再补多工具并行和更细的风险策略。
+1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust `tools.rs`、Provider 和 SQLite 审计实现，现有六种模型工具可做真实 ToolCall 循环。
+2. `system.open_url`、`web.read`、`timer.create`、`timer.cancel`、`memory.save` 和本地 `screen.observe` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；`web.read` 只读取用户当前请求明确给出的 HTTP(S) 地址，受大小、超时和文本长度限制；`screen.observe` 仍要求用户当前消息明确提出屏幕观察，图片先进入本机临时预览，之后只有第二次确认才进入 Vision Provider，模型发起的观察会继续原 Agent Loop；本地显式 `memory.delete` 也已接入确认、版本校验和审计。当前已完成单工具串行循环、工具结果回传和 3 步上限，后续再补多工具并行和更细的风险策略。
 3. 完善 `timer.create/list/cancel`，验证 LaunchAgent 在休眠、重启、时区变化、取消竞态和退出登录场景下的行为；后续再评估 UserNotifications/EventKit。
 4. `screen.observe` 本地单帧、所有显示器/主显示器范围和本地 Vision OCR 已完成最小切片；后续验证 ScreenCaptureKit 权限、窗口排除、区域选择和临时文件清理。
-5. 独立 Vision Provider 的实际图片请求已接入 OpenAI-compatible 协议；仍需用一个云端兼容模型和一个本地兼容模型分别做端到端验证。
+5. 独立 Vision Provider 的实际图片请求已接入 OpenAI-compatible 协议，模型 ToolCall 的 Vision 结果回传也已接通；仍需用一个云端兼容模型和一个本地兼容模型分别做端到端验证。
 6. EventKit 提醒事项。
 7. 可选本地 MCP Client。
 8. 浏览器或 GUI 自动化必须另行评审，不随 Tool MVP 自动获得授权。
