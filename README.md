@@ -4,7 +4,7 @@
 
 项目希望结合“钢琴女友”类产品的陪伴感、记忆管理和低频互动，以及桌宠应用的便捷性、可移动性和可动表现，再加入自然的语音交互能力。
 
-当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线，并已进入业务实现。现有代码可以启动 Tauri 双窗口应用，运行透明桌宠、受控 VRM 导入、文字流式对话、可取消 turn、mock/OpenAI-compatible LLM Provider、SQLite 会话与显式记忆管理，以及由 Rust 管理的桌宠显示、缩放、点击穿透、托盘和全局快捷键。已完成的对话会按当前角色持久化基础互动次数与封顶熟悉度，并在主面板展示。首个 macOS 语音切片也已接入：独立签名 `AudioHost.app`、显式权限申请、PTT、Apple Speech partial/final、设备端持续唤醒和系统 TTS。工具侧已接入 `system.open_url`、一次性本地计时提醒、需确认的 `memory.save` 和需确认的本地 `screen.observe` 预览；为优先保证自然对话，普通聊天暂不向模型发送工具 schema，显式中文工具请求仍由 Rust 本地确认和执行，模型主动 ToolCall 待后续重新开启。
+当前阶段已确定 MVP 的产品范围、技术选型和 v0.4 实现基线，并已进入业务实现。现有代码可以启动 Tauri 双窗口应用，运行透明桌宠、受控 VRM 导入、文字流式对话、可取消 turn、mock/OpenAI-compatible LLM Provider、SQLite 会话与显式记忆管理，以及由 Rust 管理的桌宠显示、缩放、点击穿透、托盘和全局快捷键。已完成的对话会按当前角色持久化基础互动次数与封顶熟悉度，并在主面板展示。首个 macOS 语音切片也已接入：独立签名 `AudioHost.app`、显式权限申请、PTT、Apple Speech partial/final、设备端持续唤醒和系统 TTS。工具侧已接入 `system.open_url`、一次性本地计时提醒、需确认的 `memory.save` 和需确认的本地 `screen.observe` 预览；真实 LLM 对话已进入 Agent Loop，支持模型按需提出单个 ToolCall、经 Rust 校验和用户确认后执行，并把结果回传给模型继续生成，单轮最多 3 步。
 
 ## 初始角色设定
 

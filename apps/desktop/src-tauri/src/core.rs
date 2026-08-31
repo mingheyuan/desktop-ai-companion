@@ -142,9 +142,10 @@ struct ExplicitScreenObserveRequest {
 }
 
 const MAX_TOOL_STEPS: u8 = 3;
-// 普通对话先不向模型暴露工具 schema。显式中文工具请求仍由 start_input_turn
-// 在本地完成确认和执行；待自然对话稳定后，再单独恢复模型主动提议工具。
-const MODEL_TOOL_CALLS_ENABLED: bool = false;
+// 模型可以在自然语言对话中按需提出工具调用；每次只允许一个调用，并且
+// 仍然必须经过 ToolPolicy 和用户确认。这样普通聊天仍由模型直接回答。
+const MODEL_TOOL_CALLS_ENABLED: bool = true;
+const MAX_PROVIDER_START_ATTEMPTS: u8 = 3;
 const SCREEN_OBSERVATION_TTL_MS: i64 = 5 * 60 * 1_000;
 const TOOL_APPROVAL_TIMEOUT_MS: i64 = 2 * 60 * 1_000;
 const TOOL_APPROVAL_TIMEOUT: Duration = Duration::from_millis(TOOL_APPROVAL_TIMEOUT_MS as u64);
@@ -1030,37 +1031,54 @@ impl AppCore {
                 return;
             }
         };
-        let mut stream = match tokio::time::timeout(
-            Duration::from_secs(15),
-            provider.start(request.clone(), cancel.clone()),
-        )
-        .await
-        {
-            Ok(Ok(stream)) => stream,
-            Ok(Err(error)) => {
-                self.fail_turn(
-                    &app,
-                    &turn_id,
-                    generation,
-                    "provider_unavailable",
-                    error,
-                    "",
-                )
-                .await;
-                return;
+        let mut stream = None;
+        let mut last_start_error = None;
+        for attempt in 0..MAX_PROVIDER_START_ATTEMPTS {
+            match tokio::time::timeout(
+                Duration::from_secs(15),
+                provider.start(request.clone(), cancel.clone()),
+            )
+            .await
+            {
+                Ok(Ok(value)) => {
+                    stream = Some(value);
+                    break;
+                }
+                Ok(Err(error)) if error.code == "cancelled" => return,
+                Ok(Err(error)) => {
+                    let should_retry = error.retryable && attempt + 1 < MAX_PROVIDER_START_ATTEMPTS;
+                    last_start_error = Some(error);
+                    if !should_retry {
+                        break;
+                    }
+                }
+                Err(_) => {
+                    let error = AppError::new("timeout", "LLM 在 15 秒内未建立连接。", true);
+                    let should_retry = attempt + 1 < MAX_PROVIDER_START_ATTEMPTS;
+                    last_start_error = Some(error);
+                    if !should_retry {
+                        break;
+                    }
+                }
             }
-            Err(_) => {
-                self.fail_turn(
-                    &app,
-                    &turn_id,
-                    generation,
-                    "timeout",
-                    AppError::new("timeout", "LLM 在 15 秒内未建立连接。", true),
-                    "",
-                )
-                .await;
-                return;
+            let backoff_ms = 250_u64.saturating_mul(2_u64.saturating_pow(attempt as u32));
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_millis(backoff_ms)) => {}
             }
+        }
+        let Some(mut stream) = stream else {
+            let error = last_start_error.unwrap_or_else(|| {
+                AppError::new("provider_unavailable", "LLM 未能建立连接。", true)
+            });
+            let failure_code = if error.code == "timeout" {
+                "timeout"
+            } else {
+                "provider_unavailable"
+            };
+            self.fail_turn(&app, &turn_id, generation, failure_code, error, "")
+                .await;
+            return;
         };
         if !self.is_current(&turn_id, generation).await {
             return;

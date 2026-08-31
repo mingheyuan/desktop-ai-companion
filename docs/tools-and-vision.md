@@ -2,7 +2,7 @@
 
 > 版本：v0.1 规划方案
 >
-> 状态：已完成参考项目调研；为优先保证自然对话，普通聊天暂不向模型发送工具 schema。`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete` 和需确认的本地 `screen.observe` 已支持显式意图；模型 ToolCall 的 Registry、Policy、SSE 解析和确认回传实现保留，待对话质量稳定后再开启。`memory.save` 候选已持久化并可在记忆面板审核；工具审计摘要已投影到主面板；独立 Vision Provider 配置和本地 macOS Vision OCR 已落地，但截图发送、视觉模型分析、多工具并行和其余 Tool MVP 尚未进入实现
+> 状态：已完成参考项目调研和首个真实 Agent Loop。`system.open_url`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete` 和需确认的本地 `screen.observe` 已支持显式意图；模型也可以在普通对话中按需提出工具调用，经过 Registry、Policy 和用户确认后执行，再把结果回传模型继续生成。当前保持单次一个 ToolCall、每轮最多 3 步，并对连接建立失败做有限重试。`memory.save` 候选已持久化并可在记忆面板审核；工具审计摘要已投影到主面板；独立 Vision Provider 配置和本地 macOS Vision OCR 已落地，但截图发送、视觉模型分析、多工具并行和其余 Tool MVP 尚未进入实现。
 >
 > 更新日期：2026-08-30
 
@@ -306,7 +306,7 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 这组能力建议作为核心对话 MVP 后的 **Tool MVP**：
 
 1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust `tools.rs`、Provider 和 SQLite 审计实现，现有五种模型工具可做真实 ToolCall 循环。
-2. `system.open_url`、`timer.create`、`timer.cancel`、`memory.save` 和本地 `screen.observe` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；`screen.observe` 仍要求用户当前消息明确提出屏幕观察，图片只进入本机临时预览，不进入模型请求；本地显式 `memory.delete` 也已接入确认、版本校验和审计；Registry/Policy 边界已抽出，仍需补多工具循环和更细的风险策略。
+2. `system.open_url`、`timer.create`、`timer.cancel`、`memory.save` 和本地 `screen.observe` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；`screen.observe` 仍要求用户当前消息明确提出屏幕观察，图片只进入本机临时预览，不进入模型请求；本地显式 `memory.delete` 也已接入确认、版本校验和审计。当前已完成单工具串行循环、工具结果回传和 3 步上限，后续再补多工具并行和更细的风险策略。
 3. 完善 `timer.create/list/cancel`，验证 LaunchAgent 在休眠、重启、时区变化、取消竞态和退出登录场景下的行为；后续再评估 UserNotifications/EventKit。
 4. `screen.observe` 本地单帧、所有显示器/主显示器范围和本地 Vision OCR 已完成最小切片；后续验证 ScreenCaptureKit 权限、窗口排除、区域选择和临时文件清理。
 5. 独立 Vision Provider 的实际图片请求，先接一个云端兼容模型和一个本地兼容模型；当前仅完成配置与 Keychain 隔离。

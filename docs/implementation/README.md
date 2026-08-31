@@ -72,7 +72,7 @@ Rust 是业务状态的唯一写入者。React 只渲染快照和发送意图；
 
 当前落地映射：1、2 已完成首个闭环；3 已完成权限、UDS、PTT、Apple Speech、系统 TTS 和显式打断；4 暂用 Apple Speech 设备端短语检测 fallback，Rust PCM KWS/VAD 尚未接入；5 已完成用户显式 CRUD、FTS + 中文片段回退、opt-in 上下文注入，以及 `memory.save` 候选的持久化、确认/拒绝和重启后审核，更主动的自动提取仍属于后续增强；6 已完成窗口、角色本体拖拽/单击、导入、程序化姿态、近似口型和控制基础，正式 VRMA 与真实 RMS 口型属于后续增强。详见 [AudioHost 当前可运行切片](audio-host.md#0-当前可运行切片)。
 
-屏幕理解继续通过独立 Tool Runtime 接入，不进入本轮核心 MVP 的完成条件；当前已落地低风险 `system.open_url`、一次性 `timer.create/list/cancel` 和本地 `memory.save` 的显式切片。普通聊天暂不向模型发送工具 schema，显式中文工具请求仍由 Rust 本地完成确认、执行、持久化和审计；模型主动 ToolCall 的单次循环实现保留，待自然对话稳定后再恢复。
+屏幕理解继续通过独立 Tool Runtime 接入，不进入本轮核心 MVP 的完成条件；当前已落地低风险 `system.open_url`、一次性 `timer.create/list/cancel` 和本地 `memory.save` 的显式切片。普通聊天已向真实 LLM 开启受控工具 schema，模型主动 ToolCall 经过 Rust 本地确认、执行、持久化和审计后继续生成；当前限制为单次一个调用、每轮最多 3 步。显式中文工具请求仍由 Rust 本地完成确认、执行、持久化和审计。
 
 ## 编码前必须通过的 Spike
 

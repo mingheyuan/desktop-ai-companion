@@ -44,7 +44,7 @@
 | 音频恢复 | control socket 每 2 秒 heartbeat；当前连接连续 6 秒无 pong 或写入失败会在用户仍期望持续监听时做三次退避重启，主动关闭/权限错误会取消恢复；仍无设备切换和睡眠恢复 | 完成半开故障、30 分钟/睡眠/外设验收 |
 | 角色表现 | 已有原创程序化爱丽丝预览、idle/listen/think/speak 姿态、眨眼、呼吸和近似口型；授权 VRM 加载后优先替换 | 授权 VRM + 正式 VRMA 动作验收 |
 | 记忆候选 | 用户可显式 CRUD；模型或明确保存请求会先创建 `pending` 候选；普通保存生成 user note，明确“记住我们/记录这次”等关系表达生成 relationship event；记忆面板可编辑候选正文并在应用重启后继续审核，确认通过以事务方式写入长期记忆、FTS 和审计，拒绝只标记候选状态；候选列表会标出与已有候选/长期记忆完全相同的内容，直接保存和候选确认均不会生成第二条相同长期记忆，编辑正式记忆时也会阻止精确重复 | 更主动的自动提取、语义级冲突识别和候选合并仍待补齐 |
-| 模型工具循环 | 为优先保证自然对话，普通聊天暂不向模型发送工具 schema，也不进入模型工具循环；显式中文意图仍由 Rust 本地解析、确认、执行并审计，保留 `system.open_url`、`timer.create/list/cancel`、`memory.save`、`memory.delete` 和本地 `screen.observe`；模型 ToolCall 的 Registry、Policy、SSE 解析和确认回传代码暂时保留，待对话质量稳定后再单独开启 | 已有本地 HTTP Provider、集中参数安全校验和 ToolCall 消息测试；模型主动 ToolCall、Vision 图片出站授权、多工具并行、更细风险分级和完整端到端 UI 验收仍待补齐 |
+| 模型工具循环 | 普通聊天已进入真实 Agent Loop：模型可按需提出单个 ToolCall，Rust 负责参数校验、风险确认、执行和审计，再把结果回传模型；每轮最多连续 3 步，连接建立失败做有限重试。显式中文意图仍由 Rust 本地解析、确认、执行并审计，保留 `system.open_url`、`timer.create/list/cancel`、`memory.save`、`memory.delete` 和本地 `screen.observe` | 已有本地 HTTP Provider、集中参数安全校验和 ToolCall 消息测试；Vision 图片出站授权、多工具并行、更细风险分级和完整端到端 UI 验收仍待补齐 |
 
 ## 当前验证命令
 
