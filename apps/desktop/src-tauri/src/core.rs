@@ -3517,7 +3517,7 @@ impl AppCore {
                 return;
             }
 
-            match self.ensure_audio_host(&app).await {
+            match self.ensure_audio_host(app).await {
                 Ok(writer) => {
                     match audio::send(&writer, json!({"type": "listening.set", "enabled": true}))
                         .await
@@ -3537,7 +3537,7 @@ impl AppCore {
                             runtime.input_state = InputState::WakeListening;
                             runtime.last_error = None;
                             drop(runtime);
-                            let _ = self.emit_snapshot(&app).await;
+                            let _ = self.emit_snapshot(app).await;
                             return;
                         }
                         Err(error) => {
@@ -3572,7 +3572,7 @@ impl AppCore {
             true,
         ));
         drop(runtime);
-        let _ = self.emit_snapshot(&app).await;
+        let _ = self.emit_snapshot(app).await;
     }
 
     async fn speak_response(
