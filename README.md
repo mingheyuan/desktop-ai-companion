@@ -132,7 +132,7 @@ MVP 包含唤醒词和持续监听，并满足以下边界：
 ## 项目文档
 
 - [`docs/architecture.md`](docs/architecture.md)：MVP 内部架构、数据所有权、状态模型、语音与记忆流程。
-- [`docs/memory-v2.md`](docs/memory-v2.md)：Memory V2 设计与冻结规则；当前为待确认方案，尚未修改数据库和业务代码。
+- [`docs/memory-v2.md`](docs/memory-v2.md)：Memory V2 设计与冻结规则及当前落地状态。
 - [`docs/implementation/README.md`](docs/implementation/README.md)：可直接指导编码的状态机、协议、数据库、Provider、AudioHost、时序和 VRM 规格索引。
 - [`docs/implementation/status.md`](docs/implementation/status.md)：当前已实现代码事实、验证结果与目标规格差距。
 - [`docs/tools-and-vision.md`](docs/tools-and-vision.md)：工具调用、闹钟/提醒、屏幕观察、独立多模态 Provider 与真实参考项目。
@@ -303,7 +303,7 @@ MVP 目标是先完成一个可日常使用的桌面 AI 伙伴闭环，默认首
 
 桌宠表现已补充鼠标注视：程序化预览使用平滑头部转向，正式 VRM 优先使用 three-vrm 的 `lookAt` 目标；鼠标离开桌宠区域后自动回到正视位置。
 
-已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。成功完成的对话会在同一 SQLite 事务中更新当前角色的基础互动状态，并投影到主面板；少量明确的用户偏好、习惯、目标和项目表达会在本地生成 `pending` 记忆候选，需用户审核后才进入长期记忆；明确的正面/负面互动会用封顶规则信号更新关系好感度与摘要，不降低熟悉度。`memory.save` 现在会先形成持久化待确认候选，用户可在确认卡或记忆面板审核，并可在记忆面板确认前编辑候选正文；确认后才原子写入长期记忆、FTS 和审计，拒绝或取消不会自动落库。候选列表会提示与已有候选或长期记忆完全重复的内容，直接保存、候选确认和正式记忆编辑都会阻止产生精确重复。记忆面板还提供本地数据摘要与二次确认入口，可独立清空聊天记录或全部长期记忆，不影响 Provider、角色模型和桌宠设置。`system.open_url`、受限 `web.read`、一次性本地提醒、`memory.save`、显式 `memory.delete` 和本地 `screen.observe` 已形成确认卡片、执行、结果回传和 `tool_runs` 审计闭环；主面板可查看最近工具调用的本地审计摘要，不展示原始参数。提醒支持相对时间和明确绝对日期/时间、主面板实时倒计时、待处理/最近历史查看、聊天中唯一匹配后确认取消、重启恢复和 macOS 用户级离线通知，屏幕观察支持双重确认、本地预览、本地 OCR，以及经第二次授权后发送到独立 Vision Provider；模型发起的观察还会将 Vision 结果回传 Agent Loop 生成自然回答和操作建议，截图和 OCR 不写入数据库或长期记忆。当前限制是单次单工具调用、每轮最多 3 步、绝对时间仅限未来 7 天内的一次性提醒、网页暂不支持 JavaScript/点击/填表，尚未接入重复提醒、贪睡、Apple 提醒事项、MCP、并行工具和 GUI 自动化。
+已实现并验证：React/Tauri 双窗口、three-vrm 运行时适配、受控 VRM 导入、Rust 状态核心、流式 LLM Provider、取消代次、SQLite 会话恢复、Provider/Keychain 设置、桌宠控制，以及显式长期记忆的保存、搜索、编辑、删除和可选上下文注入。成功完成的对话会在同一 SQLite 事务中更新当前角色的基础互动状态，并投影到主面板；少量明确的用户偏好、习惯、目标和项目表达会在本地生成 `pending` 记忆候选，需用户审核后才进入长期记忆；明确的正面/负面互动会用封顶规则信号更新关系好感度与摘要，不降低熟悉度。Memory V2 基础闭环已接入：数据库 v5 会兼容迁移记忆元数据，候选带来源/理由/事实键/过期时间，精确重复不会产生第二条 active memory；语义冲突不会静默覆盖，记忆面板提供替换旧记忆或保留两条的选择。自动候选可全局暂停，“不要记住/不要记录”会保护当前 turn；敏感记忆可本地管理但不会默认进入模型上下文，Provider 收到的是带元数据且受预算限制的结构化记忆条目。`memory.save` 仍先形成持久化待确认候选，用户可在确认卡或记忆面板审核，并可在记忆面板确认前编辑候选正文；确认后才原子写入长期记忆、FTS 和审计，拒绝或取消不会自动落库。候选列表会提示与已有候选或长期记忆完全重复的内容，直接保存、候选确认和正式记忆编辑都会阻止产生精确重复。记忆面板还提供本地数据摘要与二次确认入口，可独立清空聊天记录或全部长期记忆，不影响 Provider、角色模型和桌宠设置。`system.open_url`、受限 `web.read`、一次性本地提醒、`memory.save`、显式 `memory.delete` 和本地 `screen.observe` 已形成确认卡片、执行、结果回传和 `tool_runs` 审计闭环；主面板可查看最近工具调用的本地审计摘要，不展示原始参数。提醒支持相对时间和明确绝对日期/时间、主面板实时倒计时、待处理/最近历史查看、聊天中唯一匹配后确认取消、重启恢复和 macOS 用户级离线通知，屏幕观察支持双重确认、本地预览、本地 OCR，以及经第二次授权后发送到独立 Vision Provider；模型发起的观察还会将 Vision 结果回传 Agent Loop 生成自然回答和操作建议，截图和 OCR 不写入数据库或长期记忆。当前限制是单次单工具调用、每轮最多 3 步、绝对时间仅限未来 7 天内的一次性提醒、网页暂不支持 JavaScript/点击/填表，尚未接入重复提醒、贪睡、Apple 提醒事项、MCP、并行工具和 GUI 自动化。
 
 语音首个闭环已完成代码接入：Swift `AudioHost.app`、UDS 安全握手、control socket heartbeat、权限状态、PTT、Apple Speech partial/final、设备端“爱丽丝”及少量中文同音变体持续唤醒、`AVSpeechSynthesizer` 回复、停止朗读和新输入打断。发音区间事件会经过 `turn_id + generation` 过滤后驱动 VRM `aa` 表情；角色另有 idle/listening/thinking/speaking 基础程序化姿态、眨眼与呼吸。Rust、前端、Swift 编译均已通过，并有不请求权限的真实 `.app` 握手测试。MVP 正式验收仍需要稳定本地签名后的首次实机授权，以及 PTT、TTS、唤醒词和持续监听的长时间实测。Sherpa KWS/VAD、正式 VRMA 动作和真实 PCM/RMS 口型属于后续质量增强，不替代当前可运行 fallback 的验收。
 

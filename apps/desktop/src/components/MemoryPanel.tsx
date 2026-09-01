@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import type { DataSummary, MemoryCandidate, MemoryItem } from "../contracts";
-import { clearConversationData, clearMemoryData, createMemory, deleteMemory, getDataSummary, isTauri, listMemoryCandidates, reviewMemoryCandidate, searchMemories, updateMemory, updateMemoryCandidate } from "../lib/tauri";
+import type { DataSummary, MemoryCandidate, MemoryItem, MemorySettings } from "../contracts";
+import { clearConversationData, clearMemoryData, createMemory, deleteMemory, getDataSummary, getMemorySettings, isTauri, listMemoryCandidates, reviewMemoryCandidate, searchMemories, updateMemory, updateMemoryCandidate, updateMemorySettings } from "../lib/tauri";
 
 function errorMessage(reason: unknown, fallback: string) {
   if (typeof reason === "string") return reason;
@@ -14,6 +14,12 @@ function memoryScopeLabel(scope: string) {
   return scope === "relationship" ? "关系记忆" : "用户记忆";
 }
 
+function memoryOriginLabel(origin: string) {
+  if (origin === "user_explicit") return "用户明确请求";
+  if (origin === "model_suggested") return "模型提议（已由本地校验）";
+  return "自动候选";
+}
+
 export function MemoryPanel({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<MemoryItem[]>([]);
@@ -24,6 +30,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState<DataSummary | null>(null);
+  const [memorySettings, setMemorySettings] = useState<MemorySettings | null>(null);
   const [confirming, setConfirming] = useState<"conversation" | "memories" | null>(null);
   const requestSequence = useRef(0);
 
@@ -42,6 +49,15 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
       setCandidates(await listMemoryCandidates());
     } catch (reason) {
       setError(errorMessage(reason, "读取记忆候选失败。"));
+    }
+  };
+
+  const loadMemorySettings = async () => {
+    if (!isTauri()) return;
+    try {
+      setMemorySettings(await getMemorySettings());
+    } catch (reason) {
+      setError(errorMessage(reason, "读取记忆设置失败。"));
     }
   };
 
@@ -64,7 +80,22 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     void loadSummary();
     void loadCandidates();
+    void loadMemorySettings();
   }, []);
+
+  const toggleAutomaticCandidates = async (enabled: boolean) => {
+    if (!memorySettings || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      setMemorySettings(await updateMemorySettings(enabled, memorySettings.revision));
+    } catch (reason) {
+      setError(errorMessage(reason, "更新自动记忆设置失败。"));
+      await loadMemorySettings();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
@@ -115,12 +146,12 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const reviewCandidate = async (candidate: MemoryCandidate, approved: boolean) => {
+  const reviewCandidate = async (candidate: MemoryCandidate, approved: boolean, resolution?: "replace" | "keep_both") => {
     if (busy || !isTauri()) return;
     setBusy(true);
     setError("");
     try {
-      await reviewMemoryCandidate(candidate.id, approved);
+      await reviewMemoryCandidate(candidate.id, approved, resolution);
       if (editingCandidate?.id === candidate.id) setEditingCandidate(null);
       setCandidates((current) => current.filter((item) => item.id !== candidate.id));
       await loadSummary();
@@ -186,6 +217,15 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
         </header>
 
         <p className="memory-privacy">只有你确认过的内容才会进入长期记忆。关系记忆只绑定当前角色；发送给模型的开关在 Provider 设置中，默认关闭。</p>
+        <label className="memory-policy">
+          <input
+            type="checkbox"
+            checked={memorySettings?.automatic_candidates_enabled ?? true}
+            disabled={!memorySettings || busy || !isTauri()}
+            onChange={(event) => void toggleAutomaticCandidates(event.target.checked)}
+          />
+          <span><strong>允许自动生成记忆候选</strong><small>只生成待审核草案，不会自动写入长期记忆</small></span>
+        </label>
         <input className="memory-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索已保存记忆…" />
 
         <form className="memory-create" onSubmit={create}>
@@ -218,6 +258,12 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
                       与已有候选或长期记忆完全重复：{candidate.duplicate_content}。保存时不会创建第二条相同记忆。
                     </p>
                   )}
+                  {candidate.conflict_content && (
+                    <p className="memory-candidate-conflict">
+                      与已有记忆存在事实冲突：{candidate.conflict_content}。请选择替换旧记忆，或保留两条。
+                    </p>
+                  )}
+                  <p className="memory-candidate-reason">来源：{memoryOriginLabel(candidate.origin)} · {candidate.reason} · {candidate.kind} · {candidate.sensitivity === "normal" ? "普通" : candidate.sensitivity === "sensitive" ? "敏感（不会默认发送）" : "受限"}{candidate.expires_at_ms ? ` · 审核截止 ${new Date(candidate.expires_at_ms).toLocaleDateString()}` : ""}</p>
                   <footer>
                     <span>置信度 {Math.round(candidate.confidence * 100)}% · {new Date(candidate.created_at_ms).toLocaleDateString()}</span>
                     <div>
@@ -230,7 +276,14 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
                         <>
                           <button type="button" disabled={busy} onClick={() => setEditingCandidate({ id: candidate.id, content: candidate.content })}>编辑</button>
                           <button type="button" className="danger" disabled={busy} onClick={() => void reviewCandidate(candidate, false)}>拒绝</button>
-                          <button type="button" disabled={busy} onClick={() => void reviewCandidate(candidate, true)}>保存到记忆</button>
+                          {candidate.conflict_content ? (
+                            <>
+                              <button type="button" disabled={busy} onClick={() => void reviewCandidate(candidate, true, "replace")}>替换旧记忆</button>
+                              <button type="button" disabled={busy} onClick={() => void reviewCandidate(candidate, true, "keep_both")}>保留两条</button>
+                            </>
+                          ) : (
+                            <button type="button" disabled={busy} onClick={() => void reviewCandidate(candidate, true)}>保存到记忆</button>
+                          )}
                         </>
                       )}
                     </div>
@@ -249,7 +302,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
                 <p>{memory.content}</p>
               )}
               <footer>
-                <span>v{memory.version} · {new Date(memory.updated_at_ms).toLocaleDateString()}</span>
+                <span>v{memory.version} · {memory.kind} · {memory.sensitivity === "normal" ? "普通" : "敏感"} · {new Date(memory.updated_at_ms).toLocaleDateString()}</span>
                 <div>
                   {editing?.id === memory.id ? (
                     <>

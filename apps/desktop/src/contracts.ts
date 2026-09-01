@@ -48,6 +48,15 @@ export interface MemoryItem {
   kind: string;
   content: string;
   importance: number;
+  confidence: number;
+  sensitivity: "normal" | "sensitive" | "restricted";
+  origin: string;
+  fact_key?: string | null;
+  source_turn_id?: string | null;
+  source_message_id?: string | null;
+  valid_from_ms?: number | null;
+  valid_until_ms?: number | null;
+  last_confirmed_at_ms?: number | null;
   version: number;
   created_at_ms: number;
   updated_at_ms: number;
@@ -66,6 +75,18 @@ export interface MemoryCandidate {
   /** Exact normalized match found in an existing memory or earlier pending candidate. */
   duplicate_of?: string;
   duplicate_content?: string;
+  origin: string;
+  reason: string;
+  fact_key?: string | null;
+  proposed_action: "create" | "replace" | "append" | string;
+  expires_at_ms?: number | null;
+  conflict_of?: string | null;
+  conflict_content?: string | null;
+}
+
+export interface MemorySettings {
+  automatic_candidates_enabled: boolean;
+  revision: number;
 }
 
 export interface DataSummary {

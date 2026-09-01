@@ -5,9 +5,9 @@ use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 
 use crate::contracts::{
-    CharacterSettings, ChatMessage, DataSummary, MemoryCandidate, MemoryItem, MessageRole,
-    MessageStatus, PetSettings, ProviderSettings, RelationshipState, TimerHistoryItem, TimerItem,
-    ToolRunSummary, VoiceSettings,
+    CharacterSettings, ChatMessage, DataSummary, MemoryCandidate, MemoryItem, MemorySettings,
+    MessageRole, MessageStatus, PetSettings, ProviderSettings, RelationshipState, TimerHistoryItem,
+    TimerItem, ToolRunSummary, VoiceSettings,
 };
 
 pub struct Storage {
@@ -35,6 +35,7 @@ pub struct TimerInput<'a> {
 
 const RELATIONSHIP_FAMILIARITY_STEP: f64 = 0.02;
 
+#[allow(dead_code)]
 pub struct MemoryCandidateInput<'a> {
     pub id: &'a str,
     pub source_turn_id: &'a str,
@@ -47,9 +48,47 @@ pub struct MemoryCandidateInput<'a> {
     pub created_at_ms: i64,
 }
 
+pub struct MemoryCandidateV2Input<'a> {
+    pub id: &'a str,
+    pub source_turn_id: &'a str,
+    pub source_message_id: Option<&'a str>,
+    pub scope: &'a str,
+    pub kind: &'a str,
+    pub content: &'a str,
+    pub confidence: f64,
+    pub sensitivity: &'a str,
+    pub origin: &'a str,
+    pub reason: &'a str,
+    pub fact_key: Option<&'a str>,
+    pub proposed_action: &'a str,
+    pub expires_at_ms: Option<i64>,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryConflictResolution {
+    Replace,
+    KeepBoth,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemoryConfirmResult {
+    Saved(MemoryItem),
+    Duplicate(MemoryItem),
+    Conflict(MemoryItem),
+}
+
+const MEMORY_CANDIDATE_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
+const MEMORY_SELECT_COLUMNS: &str =
+    "m.id, m.scope, m.character_id, m.kind, m.content, m.importance,
+    m.confidence, m.sensitivity, m.origin, m.fact_key, m.source_turn_id,
+    m.source_message_id, m.valid_from_ms, m.valid_until_ms, m.last_confirmed_at_ms,
+    m.version, m.created_at_ms, m.updated_at_ms, m.last_used_at_ms";
+
 const MEMORY_CANDIDATE_SELECT: &str = r#"
     SELECT c.id, c.scope, c.kind, c.content, c.confidence, c.sensitivity, c.status,
            c.created_at_ms, c.reviewed_at_ms,
+           c.origin, c.reason, c.fact_key, c.proposed_action, c.expires_at_ms,
            (SELECT m.id
               FROM memories m
              WHERE m.scope=c.scope
@@ -94,6 +133,32 @@ const MEMORY_CANDIDATE_SELECT: &str = r#"
                     OR (other.created_at_ms = c.created_at_ms AND other.id < c.id))
              ORDER BY other.created_at_ms ASC, other.id ASC
              LIMIT 1) AS candidate_duplicate_content
+           ,(SELECT m.id
+              FROM memories m
+             WHERE c.fact_key IS NOT NULL
+               AND c.fact_key <> ''
+               AND m.scope=c.scope
+               AND ((c.scope='user' AND m.character_id IS NULL)
+                 OR (c.scope='relationship' AND m.character_id=source_conversation.character_id))
+               AND m.fact_key=c.fact_key
+               AND m.normalized_key<>c.normalized_key
+               AND (m.valid_until_ms IS NULL OR m.valid_until_ms > CAST(strftime('%s','now') AS INTEGER) * 1000)
+               AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+             ORDER BY m.updated_at_ms DESC, m.id DESC
+             LIMIT 1) AS conflict_memory_id
+           ,(SELECT m.content
+              FROM memories m
+             WHERE c.fact_key IS NOT NULL
+               AND c.fact_key <> ''
+               AND m.scope=c.scope
+               AND ((c.scope='user' AND m.character_id IS NULL)
+                 OR (c.scope='relationship' AND m.character_id=source_conversation.character_id))
+               AND m.fact_key=c.fact_key
+               AND m.normalized_key<>c.normalized_key
+               AND (m.valid_until_ms IS NULL OR m.valid_until_ms > CAST(strftime('%s','now') AS INTEGER) * 1000)
+               AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+             ORDER BY m.updated_at_ms DESC, m.id DESC
+             LIMIT 1) AS conflict_memory_content
       FROM memory_candidates c
       JOIN turns source_turn ON source_turn.id=c.source_turn_id
       JOIN conversations source_conversation ON source_conversation.id=source_turn.conversation_id"#;
@@ -137,7 +202,7 @@ impl Storage {
             [],
             |row| row.get(0),
         )?;
-        if current_version > 4 {
+        if current_version > 5 {
             return Err(rusqlite::Error::InvalidQuery);
         }
         if current_version == 0 {
@@ -314,6 +379,47 @@ impl Storage {
             )?;
             transaction.commit()?;
         }
+        if current_version < 5 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(
+                "ALTER TABLE memory_candidates ADD COLUMN origin TEXT NOT NULL DEFAULT 'automatic_candidate';
+                 ALTER TABLE memory_candidates ADD COLUMN reason TEXT NOT NULL DEFAULT '历史候选，等待老师确认。';
+                 ALTER TABLE memory_candidates ADD COLUMN fact_key TEXT;
+                 ALTER TABLE memory_candidates ADD COLUMN proposed_action TEXT NOT NULL DEFAULT 'create';
+                 ALTER TABLE memory_candidates ADD COLUMN expires_at_ms INTEGER;
+                 ALTER TABLE memories ADD COLUMN origin TEXT NOT NULL DEFAULT 'user_approved_candidate';
+                 ALTER TABLE memories ADD COLUMN fact_key TEXT;
+                 ALTER TABLE memories ADD COLUMN source_turn_id TEXT;
+                 ALTER TABLE memories ADD COLUMN valid_from_ms INTEGER;
+                 ALTER TABLE memories ADD COLUMN valid_until_ms INTEGER;
+                 ALTER TABLE memories ADD COLUMN last_confirmed_at_ms INTEGER;
+                 ALTER TABLE memory_audit ADD COLUMN actor TEXT NOT NULL DEFAULT 'system';
+                 ALTER TABLE memory_audit ADD COLUMN candidate_id TEXT;
+                 ALTER TABLE memory_audit ADD COLUMN previous_version INTEGER;
+                 ALTER TABLE memory_audit ADD COLUMN replacement_id TEXT;
+                 CREATE INDEX IF NOT EXISTS idx_memories_fact_key
+                   ON memories(scope, character_id, fact_key, updated_at_ms);
+                 CREATE INDEX IF NOT EXISTS idx_memories_expiry
+                   ON memories(valid_until_ms, updated_at_ms);",
+            )?;
+            transaction.execute(
+                "UPDATE memories
+                    SET source_turn_id=(SELECT turn_id FROM messages WHERE messages.id=memories.source_message_id)
+                  WHERE source_turn_id IS NULL AND source_message_id IS NOT NULL",
+                [],
+            )?;
+            transaction.execute(
+                "UPDATE memory_candidates
+                    SET expires_at_ms=created_at_ms + ?1
+                  WHERE expires_at_ms IS NULL AND status='pending'",
+                [MEMORY_CANDIDATE_RETENTION_MS],
+            )?;
+            transaction.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at_ms) VALUES(5, 'memory_v2_metadata', CAST(strftime('%s','now') AS INTEGER) * 1000)",
+                [],
+            )?;
+            transaction.commit()?;
+        }
         Ok(())
     }
 
@@ -421,12 +527,13 @@ impl Storage {
 
     pub fn latest_turn_generation(&self, conversation_id: &str) -> Result<u64, rusqlite::Error> {
         let connection = self.connection.lock().expect("storage mutex poisoned");
-        connection.query_row(
-            "SELECT COALESCE(MAX(generation), 0) FROM turns WHERE conversation_id=?1",
-            [conversation_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .map(|generation| generation.max(0) as u64)
+        connection
+            .query_row(
+                "SELECT COALESCE(MAX(generation), 0) FROM turns WHERE conversation_id=?1",
+                [conversation_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|generation| generation.max(0) as u64)
     }
 
     pub fn begin_turn(
@@ -749,26 +856,76 @@ impl Storage {
         Ok(())
     }
 
+    pub fn load_memory_settings(&self) -> Result<MemorySettings, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let stored = connection
+            .query_row(
+                "SELECT value_json, revision FROM app_settings WHERE key='memory.settings'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .optional()?;
+        match stored {
+            Some((json, revision)) => {
+                let mut value: MemorySettings = serde_json::from_str(&json).unwrap_or_default();
+                value.revision = revision;
+                Ok(value)
+            }
+            None => Ok(MemorySettings::default()),
+        }
+    }
+
+    pub fn save_memory_settings(
+        &self,
+        value: &MemorySettings,
+        now_ms: i64,
+    ) -> Result<(), rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let json = serde_json::to_string(value).expect("memory settings serialize");
+        connection.execute(
+            "INSERT INTO app_settings(key, value_json, revision, updated_at_ms) VALUES('memory.settings', ?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, revision=excluded.revision, updated_at_ms=excluded.updated_at_ms",
+            params![json, value.revision, now_ms],
+        )?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     pub fn create_user_memory(
         &self,
         content: &str,
         now_ms: i64,
     ) -> Result<MemoryItem, rusqlite::Error> {
+        self.create_user_memory_with_metadata(content, "note", "normal", None, now_ms)
+    }
+
+    pub fn create_user_memory_with_metadata(
+        &self,
+        content: &str,
+        kind: &str,
+        sensitivity: &str,
+        fact_key: Option<&str>,
+        now_ms: i64,
+    ) -> Result<MemoryItem, rusqlite::Error> {
         let mut connection = self.connection.lock().expect("storage mutex poisoned");
         let transaction = connection.transaction()?;
         let normalized_key = normalize_memory_text(content);
+        let valid_until_ms = memory_valid_until_for_kind(kind, now_ms);
+        let duplicate_query = format!(
+            "SELECT {MEMORY_SELECT_COLUMNS}
+               FROM memories m
+              WHERE m.scope='user'
+                AND m.character_id IS NULL
+                AND m.normalized_key=?1
+                AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?2)
+                AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+              ORDER BY m.updated_at_ms DESC, m.id DESC
+              LIMIT 1"
+        );
         if let Some(existing) = transaction
             .query_row(
-                "SELECT id, scope, character_id, kind, content, importance, version,
-                        created_at_ms, updated_at_ms
-                   FROM memories m
-                  WHERE m.scope='user'
-                    AND m.character_id IS NULL
-                    AND m.normalized_key=?1
-                    AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
-                  ORDER BY m.updated_at_ms DESC, m.id DESC
-                  LIMIT 1",
-                [&normalized_key],
+                &duplicate_query,
+                params![&normalized_key, now_ms],
                 map_memory_row,
             )
             .optional()?
@@ -780,17 +937,43 @@ impl Storage {
             id: Uuid::now_v7().to_string(),
             scope: "user".into(),
             character_id: None,
-            kind: "note".into(),
+            kind: kind.to_owned(),
             content: content.to_owned(),
             importance: 0.7,
+            confidence: 1.0,
+            sensitivity: sensitivity.to_owned(),
+            origin: "user_explicit".into(),
+            fact_key: fact_key.map(str::to_owned),
+            source_turn_id: None,
+            source_message_id: None,
+            valid_from_ms: None,
+            valid_until_ms,
+            last_confirmed_at_ms: Some(now_ms),
             version: 1,
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
         };
         transaction.execute(
-            "INSERT INTO memories(id, scope, character_id, kind, content, normalized_key, importance, confidence, sensitivity, version, created_at_ms, updated_at_ms)
-             VALUES(?1, 'user', NULL, 'note', ?2, ?3, ?4, 1, 'normal', 1, ?5, ?5)",
-            params![item.id, item.content, normalized_key, item.importance, now_ms],
+            "INSERT INTO memories(
+                id, scope, character_id, kind, content, normalized_key, importance,
+                confidence, sensitivity, origin, source_turn_id, fact_key,
+                valid_until_ms, last_confirmed_at_ms, version, created_at_ms, updated_at_ms
+             ) VALUES(?1, 'user', NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, ?13)",
+            params![
+                item.id,
+                item.kind,
+                item.content,
+                normalized_key,
+                item.importance,
+                item.confidence,
+                item.sensitivity,
+                item.origin,
+                item.source_turn_id,
+                item.fact_key,
+                item.valid_until_ms,
+                item.last_confirmed_at_ms,
+                now_ms,
+            ],
         )?;
         let rowid = transaction.last_insert_rowid();
         transaction.execute(
@@ -805,6 +988,7 @@ impl Storage {
         Ok(item)
     }
 
+    #[allow(dead_code)]
     pub fn update_memory(
         &self,
         id: &str,
@@ -812,11 +996,25 @@ impl Storage {
         expected_version: u64,
         now_ms: i64,
     ) -> Result<Option<MemoryItem>, rusqlite::Error> {
+        self.update_memory_with_metadata(id, content, expected_version, None, None, now_ms)
+    }
+
+    pub fn update_memory_with_metadata(
+        &self,
+        id: &str,
+        content: &str,
+        expected_version: u64,
+        next_fact_key: Option<&str>,
+        next_sensitivity: Option<&str>,
+        now_ms: i64,
+    ) -> Result<Option<MemoryItem>, rusqlite::Error> {
         let mut connection = self.connection.lock().expect("storage mutex poisoned");
         let transaction = connection.transaction()?;
         let previous = transaction
             .query_row(
-                "SELECT rowid, scope, character_id, kind, content, normalized_key, importance, version, created_at_ms
+                "SELECT rowid, scope, character_id, kind, content, normalized_key, importance, version, created_at_ms,
+                        confidence, sensitivity, origin, fact_key, source_turn_id, source_message_id,
+                        valid_from_ms, valid_until_ms, last_confirmed_at_ms
                  FROM memories WHERE id=?1",
                 [id],
                 |row| {
@@ -830,6 +1028,15 @@ impl Storage {
                         row.get::<_, f64>(6)?,
                         row.get::<_, u64>(7)?,
                         row.get::<_, i64>(8)?,
+                        row.get::<_, f64>(9)?,
+                        row.get::<_, String>(10)?,
+                        row.get::<_, String>(11)?,
+                        row.get::<_, Option<String>>(12)?,
+                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, Option<String>>(14)?,
+                        row.get::<_, Option<i64>>(15)?,
+                        row.get::<_, Option<i64>>(16)?,
+                        row.get::<_, Option<i64>>(17)?,
                     ))
                 },
             )
@@ -844,6 +1051,15 @@ impl Storage {
             importance,
             version,
             created_at_ms,
+            confidence,
+            previous_sensitivity,
+            origin,
+            _previous_fact_key,
+            source_turn_id,
+            source_message_id,
+            valid_from_ms,
+            valid_until_ms,
+            _last_confirmed_at_ms,
         )) = previous
         else {
             return Ok(None);
@@ -857,8 +1073,20 @@ impl Storage {
             params![rowid, old_content, old_key],
         )?;
         transaction.execute(
-            "UPDATE memories SET content=?1, normalized_key=?2, version=version+1, updated_at_ms=?3 WHERE id=?4 AND version=?5",
-            params![content, normalized_key, now_ms, id, expected_version],
+            "UPDATE memories
+                SET content=?1, normalized_key=?2, fact_key=?3,
+                    sensitivity=COALESCE(?4, sensitivity), version=version+1,
+                    updated_at_ms=?5, last_confirmed_at_ms=?5
+              WHERE id=?6 AND version=?7",
+            params![
+                content,
+                normalized_key,
+                next_fact_key,
+                next_sensitivity,
+                now_ms,
+                id,
+                expected_version
+            ],
         )?;
         transaction.execute(
             "INSERT INTO memory_fts(rowid, content, normalized_key) VALUES(?1, ?2, ?3)",
@@ -876,10 +1104,69 @@ impl Storage {
             kind,
             content: content.to_owned(),
             importance,
+            confidence,
+            sensitivity: next_sensitivity
+                .map(str::to_owned)
+                .unwrap_or(previous_sensitivity),
+            origin,
+            fact_key: next_fact_key.map(str::to_owned),
+            source_turn_id,
+            source_message_id,
+            valid_from_ms,
+            valid_until_ms,
+            last_confirmed_at_ms: Some(now_ms),
             version: version + 1,
             created_at_ms,
             updated_at_ms: now_ms,
         }))
+    }
+
+    pub fn memory_by_id(&self, id: &str) -> Result<Option<MemoryItem>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let query = format!("SELECT {MEMORY_SELECT_COLUMNS} FROM memories m WHERE m.id=?1");
+        connection
+            .query_row(&query, [id], map_memory_row)
+            .optional()
+    }
+
+    pub fn find_active_memory_conflict(
+        &self,
+        scope: &str,
+        character_id: Option<&str>,
+        fact_key: Option<&str>,
+        content: &str,
+        now_ms: i64,
+    ) -> Result<Option<MemoryItem>, rusqlite::Error> {
+        let Some(fact_key) = fact_key.filter(|value| !value.trim().is_empty()) else {
+            return Ok(None);
+        };
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let query = format!(
+            "SELECT {MEMORY_SELECT_COLUMNS}
+               FROM memories m
+              WHERE m.scope=?1
+                AND ((m.scope='user' AND m.character_id IS NULL)
+                  OR (m.scope='relationship' AND m.character_id=?2))
+                AND m.fact_key=?3
+                AND m.normalized_key<>?4
+                AND (m.valid_until_ms IS NULL OR m.valid_until_ms>?5)
+                AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+              ORDER BY m.updated_at_ms DESC, m.id DESC
+              LIMIT 1"
+        );
+        connection
+            .query_row(
+                &query,
+                params![
+                    scope,
+                    character_id,
+                    fact_key,
+                    normalize_memory_text(content),
+                    now_ms
+                ],
+                map_memory_row,
+            )
+            .optional()
     }
 
     pub fn has_duplicate_user_memory(
@@ -897,9 +1184,10 @@ impl Storage {
                    AND m.character_id IS NULL
                    AND m.normalized_key=?1
                    AND m.id<>?2
+                   AND (m.valid_until_ms IS NULL OR m.valid_until_ms>?3)
                    AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
             )",
-            params![normalized_key, excluded_id],
+            params![normalized_key, excluded_id, unix_now_ms()],
             |row| row.get(0),
         )?;
         Ok(found != 0)
@@ -955,50 +1243,92 @@ impl Storage {
         character_id: &str,
         limit: usize,
     ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
+        self.search_memories_internal(query, character_id, limit, false)
+    }
+
+    pub fn search_memories_for_context(
+        &self,
+        query: &str,
+        character_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
+        self.search_memories_internal(query, character_id, limit, true)
+    }
+
+    fn search_memories_internal(
+        &self,
+        query: &str,
+        character_id: &str,
+        limit: usize,
+        normal_only: bool,
+    ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
         let connection = self.connection.lock().expect("storage mutex poisoned");
         let limit = limit.clamp(1, 20) as i64;
+        let now_ms = unix_now_ms();
+        let sensitivity_clause = if normal_only {
+            "AND m.sensitivity='normal'"
+        } else {
+            ""
+        };
         let normalized = normalize_memory_text(query);
         let fts = memory_fts_query(&normalized);
         let mut items = if normalized.is_empty() {
-            let mut statement = connection.prepare(
-                "SELECT id, scope, character_id, kind, content, importance, version, created_at_ms, updated_at_ms
-                 FROM memories m
-                 WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
-                   AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
-                 ORDER BY m.updated_at_ms DESC LIMIT ?2",
-            )?;
-            let rows = statement.query_map(params![character_id, limit], map_memory_row)?;
+            let query = format!(
+                "SELECT {MEMORY_SELECT_COLUMNS}
+                   FROM memories m
+                  WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
+                    AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?2)
+                    {sensitivity_clause}
+                    AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+                  ORDER BY m.updated_at_ms DESC LIMIT ?3"
+            );
+            let mut statement = connection.prepare(&query)?;
+            let rows = statement.query_map(params![character_id, now_ms, limit], map_memory_row)?;
             rows.collect::<Result<Vec<_>, _>>()?
         } else if let Some(fts) = fts {
-            let mut statement = connection.prepare(
-                "SELECT m.id, m.scope, m.character_id, m.kind, m.content, m.importance, m.version, m.created_at_ms, m.updated_at_ms
-                 FROM memory_fts JOIN memories m ON m.rowid=memory_fts.rowid
-                 WHERE memory_fts MATCH ?1
-                   AND (m.scope='user' OR (m.scope='relationship' AND m.character_id=?2))
-                   AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
-                 ORDER BY bm25(memory_fts), m.importance DESC, m.updated_at_ms DESC LIMIT ?3",
-            )?;
-            let rows = statement.query_map(params![fts, character_id, limit], map_memory_row)?;
+            let query = format!(
+                "SELECT {MEMORY_SELECT_COLUMNS}
+                   FROM memory_fts JOIN memories m ON m.rowid=memory_fts.rowid
+                  WHERE memory_fts MATCH ?1
+                    AND (m.scope='user' OR (m.scope='relationship' AND m.character_id=?2))
+                    AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?3)
+                    {sensitivity_clause}
+                    AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+                  ORDER BY bm25(memory_fts), m.importance DESC, m.updated_at_ms DESC LIMIT ?4"
+            );
+            let mut statement = connection.prepare(&query)?;
+            let rows =
+                statement.query_map(params![fts, character_id, now_ms, limit], map_memory_row)?;
             rows.collect::<Result<Vec<_>, _>>()?
         } else {
             let prefix = format!("{normalized}%");
             let contains = format!("%{normalized}%");
-            let mut statement = connection.prepare(
-                "SELECT id, scope, character_id, kind, content, importance, version, created_at_ms, updated_at_ms
-                 FROM memories m
-                 WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
-                   AND (m.normalized_key LIKE ?2 ESCAPE '\\' OR lower(m.content) LIKE ?3 ESCAPE '\\')
-                   AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
-                 ORDER BY m.importance DESC, m.updated_at_ms DESC LIMIT ?4",
-            )?;
+            let query = format!(
+                "SELECT {MEMORY_SELECT_COLUMNS}
+                   FROM memories m
+                  WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
+                    AND (m.normalized_key LIKE ?2 ESCAPE '\\' OR lower(m.content) LIKE ?3 ESCAPE '\\')
+                    AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?4)
+                    {sensitivity_clause}
+                    AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+                  ORDER BY m.importance DESC, m.updated_at_ms DESC LIMIT ?5"
+            );
+            let mut statement = connection.prepare(&query)?;
             let rows = statement.query_map(
-                params![character_id, prefix, contains, limit],
+                params![character_id, prefix, contains, now_ms, limit],
                 map_memory_row,
             )?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
         if !normalized.is_empty() && items.is_empty() {
-            items = lexical_memory_fallback(&connection, &normalized, character_id, limit)?;
+            items = lexical_memory_fallback(
+                &connection,
+                &normalized,
+                character_id,
+                limit,
+                normal_only,
+                now_ms,
+            )?;
         }
         items.truncate(limit as usize);
         Ok(items)
@@ -1070,10 +1400,44 @@ impl Storage {
         transaction.commit()
     }
 
+    #[allow(dead_code)]
     pub fn create_memory_candidate(
         &self,
         input: MemoryCandidateInput<'_>,
     ) -> Result<MemoryCandidate, rusqlite::Error> {
+        self.create_memory_candidate_with_metadata(MemoryCandidateV2Input {
+            id: input.id,
+            source_turn_id: input.source_turn_id,
+            source_message_id: input.source_message_id,
+            scope: input.scope,
+            kind: input.kind,
+            content: input.content,
+            confidence: input.confidence,
+            sensitivity: input.sensitivity,
+            origin: "automatic_candidate",
+            reason: "从本轮用户消息中识别出的候选，仍需老师确认。",
+            fact_key: None,
+            proposed_action: "create",
+            // The compatibility helper is also used by deterministic storage tests and
+            // older callers. New production candidates set an explicit expiry through
+            // `MemoryCandidateV2Input`.
+            expires_at_ms: None,
+            created_at_ms: input.created_at_ms,
+        })
+    }
+
+    pub fn create_memory_candidate_with_metadata(
+        &self,
+        input: MemoryCandidateV2Input<'_>,
+    ) -> Result<MemoryCandidate, rusqlite::Error> {
+        if !matches!(
+            input.origin,
+            "user_explicit" | "model_suggested" | "automatic_candidate"
+        ) || !matches!(input.proposed_action, "create" | "replace" | "append")
+            || !matches!(input.sensitivity, "normal" | "sensitive" | "restricted")
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let connection = self.connection.lock().expect("storage mutex poisoned");
         let candidate = MemoryCandidate {
             id: input.id.to_owned(),
@@ -1087,13 +1451,21 @@ impl Storage {
             reviewed_at_ms: None,
             duplicate_of: None,
             duplicate_content: None,
+            origin: input.origin.to_owned(),
+            reason: input.reason.to_owned(),
+            fact_key: input.fact_key.map(str::to_owned),
+            proposed_action: input.proposed_action.to_owned(),
+            expires_at_ms: input.expires_at_ms,
+            conflict_of: None,
+            conflict_content: None,
         };
         let normalized_key = normalize_memory_text(&candidate.content);
         connection.execute(
             "INSERT INTO memory_candidates(
                 id, source_turn_id, source_message_id, scope, kind, content,
-                normalized_key, confidence, sensitivity, status, created_at_ms
-             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10)",
+                normalized_key, confidence, sensitivity, status, created_at_ms,
+                origin, reason, fact_key, proposed_action, expires_at_ms
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 candidate.id,
                 input.source_turn_id,
@@ -1105,10 +1477,25 @@ impl Storage {
                 candidate.confidence,
                 candidate.sensitivity,
                 candidate.created_at_ms,
+                candidate.origin,
+                candidate.reason,
+                candidate.fact_key,
+                candidate.proposed_action,
+                candidate.expires_at_ms,
             ],
         )?;
         load_memory_candidate(&connection, &candidate.id)?
             .ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
+    pub fn expire_stale_memory_candidates(&self, now_ms: i64) -> Result<usize, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        connection.execute(
+            "UPDATE memory_candidates
+                SET status='expired', reviewed_at_ms=?1
+              WHERE status='pending' AND expires_at_ms IS NOT NULL AND expires_at_ms<=?1",
+            [now_ms],
+        )
     }
 
     pub fn has_duplicate_memory_or_candidate(
@@ -1117,6 +1504,7 @@ impl Storage {
         scope: &str,
         character_id: &str,
     ) -> Result<bool, rusqlite::Error> {
+        self.expire_stale_memory_candidates(unix_now_ms())?;
         let connection = self.connection.lock().expect("storage mutex poisoned");
         let normalized_key = normalize_memory_text(content);
         let found: i64 = connection.query_row(
@@ -1129,6 +1517,7 @@ impl Storage {
                    AND c.scope=?1
                    AND c.normalized_key=?2
                    AND (?1='user' OR conversation.character_id=?3)
+                   AND (c.expires_at_ms IS NULL OR c.expires_at_ms > ?4)
                 UNION ALL
                 SELECT 1
                   FROM memories m
@@ -1136,9 +1525,10 @@ impl Storage {
                    AND m.normalized_key=?2
                    AND ((?1='user' AND m.character_id IS NULL)
                      OR (?1='relationship' AND m.character_id=?3))
+                   AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?4)
                    AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
             )",
-            params![scope, normalized_key, character_id],
+            params![scope, normalized_key, character_id, unix_now_ms()],
             |row| row.get(0),
         )?;
         Ok(found != 0)
@@ -1148,6 +1538,7 @@ impl Storage {
         &self,
         limit: usize,
     ) -> Result<Vec<MemoryCandidate>, rusqlite::Error> {
+        self.expire_stale_memory_candidates(unix_now_ms())?;
         let connection = self.connection.lock().expect("storage mutex poisoned");
         let query = format!(
             "{MEMORY_CANDIDATE_SELECT}
@@ -1160,18 +1551,31 @@ impl Storage {
         rows.collect()
     }
 
+    #[allow(dead_code)]
     pub fn update_memory_candidate(
         &self,
         candidate_id: &str,
         content: &str,
     ) -> Result<Option<MemoryCandidate>, rusqlite::Error> {
+        self.update_memory_candidate_with_metadata(candidate_id, content, None, None)
+    }
+
+    pub fn update_memory_candidate_with_metadata(
+        &self,
+        candidate_id: &str,
+        content: &str,
+        fact_key: Option<&str>,
+        sensitivity: Option<&str>,
+    ) -> Result<Option<MemoryCandidate>, rusqlite::Error> {
+        self.expire_stale_memory_candidates(unix_now_ms())?;
         let connection = self.connection.lock().expect("storage mutex poisoned");
         let normalized_key = normalize_memory_text(content);
         let changed = connection.execute(
             "UPDATE memory_candidates
-             SET content=?1, normalized_key=?2
-             WHERE id=?3 AND status='pending'",
-            params![content, normalized_key, candidate_id],
+             SET content=?1, normalized_key=?2, fact_key=?3,
+                 sensitivity=COALESCE(?4, sensitivity)
+             WHERE id=?5 AND status='pending'",
+            params![content, normalized_key, fact_key, sensitivity, candidate_id],
         )?;
         if changed != 1 {
             return Ok(None);
@@ -1179,21 +1583,48 @@ impl Storage {
         load_memory_candidate(&connection, candidate_id)
     }
 
+    #[allow(dead_code)]
     pub fn confirm_memory_candidate(
         &self,
         candidate_id: &str,
         character_id: &str,
         now_ms: i64,
     ) -> Result<Option<MemoryItem>, rusqlite::Error> {
+        let result = match self.confirm_memory_candidate_with_resolution(
+            candidate_id,
+            character_id,
+            None,
+            now_ms,
+        ) {
+            Ok(result) => result,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        match result {
+            MemoryConfirmResult::Saved(item) | MemoryConfirmResult::Duplicate(item) => {
+                Ok(Some(item))
+            }
+            MemoryConfirmResult::Conflict(_) => Ok(None),
+        }
+    }
+
+    pub fn confirm_memory_candidate_with_resolution(
+        &self,
+        candidate_id: &str,
+        character_id: &str,
+        resolution: Option<MemoryConflictResolution>,
+        now_ms: i64,
+    ) -> Result<MemoryConfirmResult, rusqlite::Error> {
         let mut connection = self.connection.lock().expect("storage mutex poisoned");
         let transaction = connection.transaction()?;
         let candidate = transaction
             .query_row(
                 "SELECT scope, kind, content, normalized_key, confidence, sensitivity,
-                        source_message_id, created_at_ms
+                        source_turn_id, source_message_id, created_at_ms, origin, fact_key
                  FROM memory_candidates
-                 WHERE id=?1 AND status='pending'",
-                [candidate_id],
+                 WHERE id=?1 AND status='pending'
+                   AND (expires_at_ms IS NULL OR expires_at_ms>?2)",
+                params![candidate_id, now_ms],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -1203,7 +1634,10 @@ impl Storage {
                         row.get::<_, f64>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, Option<String>>(6)?,
-                        row.get::<_, i64>(7)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, Option<String>>(10)?,
                     ))
                 },
             )
@@ -1215,30 +1649,36 @@ impl Storage {
             normalized_key,
             confidence,
             sensitivity,
+            source_turn_id,
             source_message_id,
             created_at_ms,
+            origin,
+            fact_key,
         )) = candidate
         else {
-            return Ok(None);
+            return Err(rusqlite::Error::QueryReturnedNoRows);
         };
         let memory_character_id = match scope.as_str() {
             "user" => None,
             "relationship" => Some(character_id),
             _ => return Err(rusqlite::Error::InvalidQuery),
         };
+        let duplicate_query = format!(
+            "SELECT {MEMORY_SELECT_COLUMNS}
+               FROM memories m
+              WHERE m.scope=?1
+                AND ((m.scope='user' AND m.character_id IS NULL)
+                  OR (m.scope='relationship' AND m.character_id=?2))
+                AND m.normalized_key=?3
+                AND (m.valid_until_ms IS NULL OR m.valid_until_ms>?4)
+                AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+              ORDER BY m.updated_at_ms DESC, m.id DESC
+              LIMIT 1"
+        );
         if let Some(existing) = transaction
             .query_row(
-                "SELECT id, scope, character_id, kind, content, importance, version,
-                        created_at_ms, updated_at_ms
-                   FROM memories m
-                  WHERE m.scope=?1
-                    AND ((m.scope='user' AND m.character_id IS NULL)
-                      OR (m.scope='relationship' AND m.character_id=?2))
-                    AND m.normalized_key=?3
-                    AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
-                  ORDER BY m.updated_at_ms DESC, m.id DESC
-                  LIMIT 1",
-                params![scope, character_id, normalized_key],
+                &duplicate_query,
+                params![scope, character_id, normalized_key, now_ms],
                 map_memory_row,
             )
             .optional()?
@@ -1249,8 +1689,40 @@ impl Storage {
                 params![now_ms, candidate_id],
             )?;
             transaction.commit()?;
-            return Ok(Some(existing));
+            return Ok(MemoryConfirmResult::Duplicate(existing));
         }
+        let conflict_query = format!(
+            "SELECT {MEMORY_SELECT_COLUMNS}
+               FROM memories m
+              WHERE ?1 IS NOT NULL AND ?1<>''
+                AND m.scope=?2
+                AND ((m.scope='user' AND m.character_id IS NULL)
+                  OR (m.scope='relationship' AND m.character_id=?3))
+                AND m.fact_key=?1
+                AND m.normalized_key<>?4
+                AND (m.valid_until_ms IS NULL OR m.valid_until_ms>?5)
+                AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+              ORDER BY m.updated_at_ms DESC, m.id DESC
+              LIMIT 1"
+        );
+        let conflict = transaction
+            .query_row(
+                &conflict_query,
+                params![fact_key, scope, character_id, normalized_key, now_ms],
+                map_memory_row,
+            )
+            .optional()?;
+        let (supersedes_id, previous_version) = match (conflict, resolution) {
+            (Some(existing), None) => {
+                transaction.commit()?;
+                return Ok(MemoryConfirmResult::Conflict(existing));
+            }
+            (Some(existing), Some(MemoryConflictResolution::Replace)) => {
+                (Some(existing.id.clone()), Some(existing.version))
+            }
+            (Some(_), Some(MemoryConflictResolution::KeepBoth)) | (None, _) => (None, None),
+        };
+        let valid_until_ms = memory_valid_until_for_kind(&kind, created_at_ms);
         let item = MemoryItem {
             id: Uuid::now_v7().to_string(),
             scope,
@@ -1258,6 +1730,15 @@ impl Storage {
             kind,
             content,
             importance: 0.7,
+            confidence,
+            sensitivity,
+            origin,
+            fact_key,
+            source_turn_id,
+            source_message_id,
+            valid_from_ms: Some(created_at_ms),
+            valid_until_ms,
+            last_confirmed_at_ms: Some(now_ms),
             version: 1,
             created_at_ms,
             updated_at_ms: now_ms,
@@ -1265,9 +1746,11 @@ impl Storage {
         transaction.execute(
             "INSERT INTO memories(
                 id, scope, character_id, kind, content, normalized_key, importance,
-                confidence, sensitivity, source_message_id, source_candidate_id,
+                confidence, sensitivity, origin, fact_key, source_turn_id,
+                source_message_id, source_candidate_id, supersedes_id,
+                valid_from_ms, valid_until_ms, last_confirmed_at_ms,
                 version, created_at_ms, updated_at_ms
-             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12, ?13)",
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, 1, ?19, ?20)",
             params![
                 item.id,
                 item.scope,
@@ -1276,10 +1759,17 @@ impl Storage {
                 item.content,
                 normalized_key,
                 item.importance,
-                confidence,
-                sensitivity,
-                source_message_id,
+                item.confidence,
+                item.sensitivity,
+                item.origin,
+                item.fact_key,
+                item.source_turn_id,
+                item.source_message_id,
                 candidate_id,
+                supersedes_id,
+                item.valid_from_ms,
+                item.valid_until_ms,
+                item.last_confirmed_at_ms,
                 item.created_at_ms,
                 item.updated_at_ms,
             ],
@@ -1290,9 +1780,18 @@ impl Storage {
             params![rowid, item.content, normalized_key],
         )?;
         transaction.execute(
-            "INSERT INTO memory_audit(id, memory_id, action, occurred_at_ms)
-             VALUES(?1, ?2, 'confirmed', ?3)",
-            params![Uuid::now_v7().to_string(), item.id, now_ms],
+            "INSERT INTO memory_audit(
+                id, memory_id, action, occurred_at_ms, actor, candidate_id,
+                previous_version, replacement_id
+             ) VALUES(?1, ?2, 'confirmed', ?3, 'user', ?4, ?5, ?6)",
+            params![
+                Uuid::now_v7().to_string(),
+                item.id,
+                now_ms,
+                candidate_id,
+                previous_version,
+                supersedes_id,
+            ],
         )?;
         transaction.execute(
             "UPDATE memory_candidates SET status='confirmed', reviewed_at_ms=?1
@@ -1300,7 +1799,7 @@ impl Storage {
             params![now_ms, candidate_id],
         )?;
         transaction.commit()?;
-        Ok(Some(item))
+        Ok(MemoryConfirmResult::Saved(item))
     }
 
     pub fn reject_memory_candidate(
@@ -1517,17 +2016,26 @@ fn map_memory_row(row: &rusqlite::Row<'_>) -> Result<MemoryItem, rusqlite::Error
         kind: row.get(3)?,
         content: row.get(4)?,
         importance: row.get(5)?,
-        version: row.get(6)?,
-        created_at_ms: row.get(7)?,
-        updated_at_ms: row.get(8)?,
+        confidence: row.get(6)?,
+        sensitivity: row.get(7)?,
+        origin: row.get(8)?,
+        fact_key: row.get(9)?,
+        source_turn_id: row.get(10)?,
+        source_message_id: row.get(11)?,
+        valid_from_ms: row.get(12)?,
+        valid_until_ms: row.get(13)?,
+        last_confirmed_at_ms: row.get(14)?,
+        version: row.get(15)?,
+        created_at_ms: row.get(16)?,
+        updated_at_ms: row.get(17)?,
     })
 }
 
 fn map_memory_candidate_row(row: &rusqlite::Row<'_>) -> Result<MemoryCandidate, rusqlite::Error> {
-    let memory_duplicate_id = row.get::<_, Option<String>>(9)?;
-    let memory_duplicate_content = row.get::<_, Option<String>>(10)?;
-    let candidate_duplicate_id = row.get::<_, Option<String>>(11)?;
-    let candidate_duplicate_content = row.get::<_, Option<String>>(12)?;
+    let memory_duplicate_id = row.get::<_, Option<String>>(14)?;
+    let memory_duplicate_content = row.get::<_, Option<String>>(15)?;
+    let candidate_duplicate_id = row.get::<_, Option<String>>(16)?;
+    let candidate_duplicate_content = row.get::<_, Option<String>>(17)?;
     Ok(MemoryCandidate {
         id: row.get(0)?,
         scope: row.get(1)?,
@@ -1538,8 +2046,15 @@ fn map_memory_candidate_row(row: &rusqlite::Row<'_>) -> Result<MemoryCandidate, 
         status: row.get(6)?,
         created_at_ms: row.get(7)?,
         reviewed_at_ms: row.get(8)?,
+        origin: row.get(9)?,
+        reason: row.get(10)?,
+        fact_key: row.get(11)?,
+        proposed_action: row.get(12)?,
+        expires_at_ms: row.get(13)?,
         duplicate_of: memory_duplicate_id.or(candidate_duplicate_id),
         duplicate_content: memory_duplicate_content.or(candidate_duplicate_content),
+        conflict_of: row.get(18)?,
+        conflict_content: row.get(19)?,
     })
 }
 
@@ -1601,6 +2116,22 @@ fn normalize_memory_text(value: &str) -> String {
         .join(" ")
 }
 
+fn unix_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+fn memory_valid_until_for_kind(kind: &str, created_at_ms: i64) -> Option<i64> {
+    let ttl_ms = match kind {
+        "goal" => Some(90 * 24 * 60 * 60 * 1_000),
+        "project" => Some(180 * 24 * 60 * 60 * 1_000),
+        _ => None,
+    }?;
+    Some(created_at_ms.saturating_add(ttl_ms))
+}
+
 fn memory_fts_query(value: &str) -> Option<String> {
     let mut terms = Vec::<String>::new();
     for segment in value.split(|character: char| !character.is_alphanumeric()) {
@@ -1638,21 +2169,31 @@ fn lexical_memory_fallback(
     query: &str,
     character_id: &str,
     limit: i64,
+    normal_only: bool,
+    now_ms: i64,
 ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
     let query_terms = memory_lexical_terms(query);
     if query_terms.is_empty() {
         return Ok(Vec::new());
     }
     let minimum_overlap = if query_terms.len() >= 4 { 2 } else { 1 };
-    let mut statement = connection.prepare(
-        "SELECT id, scope, character_id, kind, content, importance, version, created_at_ms, updated_at_ms
-         FROM memories m
-         WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
-           AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
-         ORDER BY m.importance DESC, m.updated_at_ms DESC
-         LIMIT 200",
-    )?;
-    let rows = statement.query_map([character_id], map_memory_row)?;
+    let sensitivity_clause = if normal_only {
+        "AND m.sensitivity='normal'"
+    } else {
+        ""
+    };
+    let query = format!(
+        "SELECT {MEMORY_SELECT_COLUMNS}
+           FROM memories m
+          WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
+            AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?2)
+            {sensitivity_clause}
+            AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
+          ORDER BY m.importance DESC, m.updated_at_ms DESC
+          LIMIT 200"
+    );
+    let mut statement = connection.prepare(&query)?;
+    let rows = statement.query_map(params![character_id, now_ms], map_memory_row)?;
     let mut scored = rows
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
@@ -1862,6 +2403,17 @@ mod tests {
         };
         storage.save_pet_settings(&settings, 10).unwrap();
         assert_eq!(storage.load_pet_settings().unwrap(), settings);
+    }
+
+    #[test]
+    fn memory_settings_round_trip() {
+        let storage = Storage::open_in_memory().unwrap();
+        let settings = MemorySettings {
+            automatic_candidates_enabled: false,
+            revision: 4,
+        };
+        storage.save_memory_settings(&settings, 10).unwrap();
+        assert_eq!(storage.load_memory_settings().unwrap(), settings);
     }
 
     #[test]
@@ -2100,6 +2652,175 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status, "confirmed");
+    }
+
+    #[test]
+    fn memory_v2_candidate_conflict_requires_an_explicit_resolution() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(unix_now_ms()).unwrap();
+        storage
+            .begin_turn(
+                &conversation,
+                "v2-memory-turn-1",
+                1,
+                "text",
+                "我喜欢咖啡",
+                unix_now_ms(),
+            )
+            .unwrap();
+        storage
+            .create_memory_candidate_with_metadata(MemoryCandidateV2Input {
+                id: "v2-candidate-1",
+                source_turn_id: "v2-memory-turn-1",
+                source_message_id: None,
+                scope: "user",
+                kind: "preference",
+                content: "我喜欢咖啡",
+                confidence: 0.9,
+                sensitivity: "normal",
+                origin: "user_explicit",
+                reason: "用户明确要求保存",
+                fact_key: Some("user:preference:咖啡"),
+                proposed_action: "create",
+                expires_at_ms: Some(unix_now_ms() + 60_000),
+                created_at_ms: unix_now_ms(),
+            })
+            .unwrap();
+        let first = storage
+            .confirm_memory_candidate_with_resolution("v2-candidate-1", "aris", None, unix_now_ms())
+            .unwrap();
+        assert!(matches!(first, MemoryConfirmResult::Saved(_)));
+
+        storage
+            .begin_turn(
+                &conversation,
+                "v2-memory-turn-2",
+                2,
+                "text",
+                "我不喜欢咖啡",
+                unix_now_ms(),
+            )
+            .unwrap();
+        let second = storage
+            .create_memory_candidate_with_metadata(MemoryCandidateV2Input {
+                id: "v2-candidate-2",
+                source_turn_id: "v2-memory-turn-2",
+                source_message_id: None,
+                scope: "user",
+                kind: "preference",
+                content: "我不喜欢咖啡",
+                confidence: 0.9,
+                sensitivity: "normal",
+                origin: "user_explicit",
+                reason: "用户明确要求保存",
+                fact_key: Some("user:preference:咖啡"),
+                proposed_action: "replace",
+                expires_at_ms: Some(unix_now_ms() + 60_000),
+                created_at_ms: unix_now_ms(),
+            })
+            .unwrap();
+        assert!(second.conflict_of.is_some());
+        let conflict = storage
+            .confirm_memory_candidate_with_resolution("v2-candidate-2", "aris", None, unix_now_ms())
+            .unwrap();
+        assert!(matches!(conflict, MemoryConfirmResult::Conflict(_)));
+
+        let replaced = storage
+            .confirm_memory_candidate_with_resolution(
+                "v2-candidate-2",
+                "aris",
+                Some(MemoryConflictResolution::Replace),
+                unix_now_ms(),
+            )
+            .unwrap();
+        let MemoryConfirmResult::Saved(replaced) = replaced else {
+            panic!("expected replacement to save");
+        };
+        assert_eq!(replaced.content, "我不喜欢咖啡");
+        let memories = storage.search_memories("咖啡", "aris", 20).unwrap();
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0].content, "我不喜欢咖啡");
+    }
+
+    #[test]
+    fn expired_candidates_and_sensitive_context_are_filtered() {
+        let storage = Storage::open_in_memory().unwrap();
+        let now = unix_now_ms();
+        let conversation = storage.ensure_conversation(now).unwrap();
+        storage
+            .begin_turn(&conversation, "v2-expiry-turn", 1, "text", "过期候选", now)
+            .unwrap();
+        storage
+            .create_memory_candidate_with_metadata(MemoryCandidateV2Input {
+                id: "v2-expired-candidate",
+                source_turn_id: "v2-expiry-turn",
+                source_message_id: None,
+                scope: "user",
+                kind: "note",
+                content: "过期候选",
+                confidence: 0.5,
+                sensitivity: "normal",
+                origin: "automatic_candidate",
+                reason: "过期测试",
+                fact_key: None,
+                proposed_action: "create",
+                expires_at_ms: Some(now - 1),
+                created_at_ms: now - 2,
+            })
+            .unwrap();
+        assert!(storage
+            .list_pending_memory_candidates(20)
+            .unwrap()
+            .is_empty());
+
+        storage
+            .begin_turn(
+                &conversation,
+                "v2-sensitive-turn",
+                2,
+                "text",
+                "我的住址是某地",
+                now,
+            )
+            .unwrap();
+        storage
+            .create_memory_candidate_with_metadata(MemoryCandidateV2Input {
+                id: "v2-sensitive-candidate",
+                source_turn_id: "v2-sensitive-turn",
+                source_message_id: None,
+                scope: "user",
+                kind: "note",
+                content: "我的住址是某地",
+                confidence: 1.0,
+                sensitivity: "sensitive",
+                origin: "user_explicit",
+                reason: "用户明确要求保存",
+                fact_key: None,
+                proposed_action: "create",
+                expires_at_ms: Some(now + 60_000),
+                created_at_ms: now,
+            })
+            .unwrap();
+        let MemoryConfirmResult::Saved(sensitive) = storage
+            .confirm_memory_candidate_with_resolution(
+                "v2-sensitive-candidate",
+                "aris",
+                None,
+                now + 1,
+            )
+            .unwrap()
+        else {
+            panic!("expected sensitive memory to save");
+        };
+        assert_eq!(
+            storage.search_memories("住址", "aris", 20).unwrap().len(),
+            1
+        );
+        assert!(storage
+            .search_memories_for_context("住址", "aris", 20)
+            .unwrap()
+            .is_empty());
+        assert_eq!(sensitive.sensitivity, "sensitive");
     }
 
     #[test]

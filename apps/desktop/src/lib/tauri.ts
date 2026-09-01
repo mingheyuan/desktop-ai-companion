@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppSnapshot, CharacterSettings, DataSummary, EventEnvelope, MemoryCandidate, MemoryItem, MouthLevelPayload, PetSettings, ProviderSettings, ScreenUnderstandingMode, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
+import type { AppSnapshot, CharacterSettings, DataSummary, EventEnvelope, MemoryCandidate, MemoryItem, MemorySettings, MouthLevelPayload, PetSettings, ProviderSettings, ScreenUnderstandingMode, TextDeltaPayload, TurnEndedPayload, VoiceSettings } from "../contracts";
 
 export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
@@ -87,12 +87,36 @@ export async function listMemoryCandidates(): Promise<MemoryCandidate[]> {
   });
 }
 
-export async function reviewMemoryCandidate(candidateId: string, approved: boolean): Promise<MemoryItem | null> {
+export async function getMemorySettings(): Promise<MemorySettings> {
+  return invoke<MemorySettings>("memory_get_settings", {
+    request: { request_id: crypto.randomUUID() },
+  });
+}
+
+export async function updateMemorySettings(
+  automaticCandidatesEnabled: boolean,
+  expectedRevision: number,
+): Promise<MemorySettings> {
+  return invoke<MemorySettings>("memory_update_settings", {
+    request: {
+      request_id: crypto.randomUUID(),
+      automatic_candidates_enabled: automaticCandidatesEnabled,
+      expected_revision: expectedRevision,
+    },
+  });
+}
+
+export async function reviewMemoryCandidate(
+  candidateId: string,
+  approved: boolean,
+  resolution?: "replace" | "keep_both",
+): Promise<MemoryItem | null> {
   return invoke<MemoryItem | null>("memory_review_candidate", {
     request: {
       request_id: crypto.randomUUID(),
       candidate_id: candidateId,
       approved,
+      resolution,
     },
   });
 }

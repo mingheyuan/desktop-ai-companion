@@ -7,12 +7,12 @@ use crate::{
     contracts::{
         ActionRequest, AppError, AppSnapshot, CancelTimerRequest, CancelTurnRequest,
         CharacterSettings, CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryCandidate,
-        MemoryItem, PetSettings, ProviderSettings, ReviewMemoryCandidateRequest,
+        MemoryItem, MemorySettings, PetSettings, ProviderSettings, ReviewMemoryCandidateRequest,
         ScreenObservationPreview, ScreenObservationRequest, ScreenUnderstandingMode,
         SearchMemoriesRequest, SetListeningRequest, SetScreenUnderstandingModeRequest,
         SubmitTextRequest, ToolDecisionRequest, UpdateMemoryCandidateRequest, UpdateMemoryRequest,
-        UpdatePetSettingsRequest, UpdateProviderRequest, UpdateVoiceSettingsRequest,
-        VisionProviderSettings, VoiceSettings,
+        UpdateMemorySettingsRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
+        UpdateVoiceSettingsRequest, VisionProviderSettings, VoiceSettings,
     },
     core::AppCore,
     desktop,
@@ -241,6 +241,27 @@ pub fn memory_list_candidates(
 }
 
 #[tauri::command]
+pub fn memory_get_settings(
+    state: State<'_, CoreState>,
+    request: ActionRequest,
+) -> Result<MemorySettings, AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.memory_settings()
+}
+
+#[tauri::command]
+pub fn memory_update_settings(
+    state: State<'_, CoreState>,
+    request: UpdateMemorySettingsRequest,
+) -> Result<MemorySettings, AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.update_memory_settings(
+        request.automatic_candidates_enabled,
+        request.expected_revision,
+    )
+}
+
+#[tauri::command]
 pub async fn memory_review_candidate(
     state: State<'_, CoreState>,
     request: ReviewMemoryCandidateRequest,
@@ -248,7 +269,11 @@ pub async fn memory_review_candidate(
     validate_request_id(&request.request_id)?;
     state
         .0
-        .review_memory_candidate(&request.candidate_id, request.approved)
+        .review_memory_candidate(
+            &request.candidate_id,
+            request.approved,
+            request.resolution.as_deref(),
+        )
         .await
 }
 

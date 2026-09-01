@@ -229,9 +229,43 @@ pub struct MemoryItem {
     pub kind: String,
     pub content: String,
     pub importance: f64,
+    pub confidence: f64,
+    pub sensitivity: String,
+    pub origin: String,
+    pub fact_key: Option<String>,
+    pub source_turn_id: Option<String>,
+    pub source_message_id: Option<String>,
+    pub valid_from_ms: Option<i64>,
+    pub valid_until_ms: Option<i64>,
+    pub last_confirmed_at_ms: Option<i64>,
     pub version: u64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryContextEntry {
+    pub id: String,
+    pub scope: String,
+    pub kind: String,
+    pub content: String,
+    pub sensitivity: String,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemorySettings {
+    pub automatic_candidates_enabled: bool,
+    pub revision: u64,
+}
+
+impl Default for MemorySettings {
+    fn default() -> Self {
+        Self {
+            automatic_candidates_enabled: true,
+            revision: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -251,6 +285,20 @@ pub struct MemoryCandidate {
     pub duplicate_of: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duplicate_content: Option<String>,
+    #[serde(default)]
+    pub origin: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fact_key: Option<String>,
+    #[serde(default)]
+    pub proposed_action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict_of: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -565,6 +613,15 @@ pub struct ReviewMemoryCandidateRequest {
     pub request_id: String,
     pub candidate_id: String,
     pub approved: bool,
+    #[serde(default)]
+    pub resolution: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateMemorySettingsRequest {
+    pub request_id: String,
+    pub automatic_candidates_enabled: bool,
+    pub expected_revision: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

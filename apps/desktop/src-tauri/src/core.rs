@@ -25,10 +25,11 @@ use crate::{
     audio::{self, AudioWriter},
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, ChatMessage, DataSummary,
-        EventEnvelope, GenerationState, InputState, ListeningMode, MemoryCandidate, MemoryItem,
-        MouthLevelPayload, PetSettings, PlaybackState, ProviderSettings, ScreenCaptureScope,
-        ScreenObservation, ScreenObservationPreview, ScreenUnderstandingMode, TextDeltaPayload,
-        TimerItem, ToolApproval, TurnEndedPayload, TurnState, VoicePermissions, VoiceSettings,
+        EventEnvelope, GenerationState, InputState, ListeningMode, MemoryCandidate,
+        MemoryContextEntry, MemoryItem, MemorySettings, MouthLevelPayload, PetSettings,
+        PlaybackState, ProviderSettings, ScreenCaptureScope, ScreenObservation,
+        ScreenObservationPreview, ScreenUnderstandingMode, TextDeltaPayload, TimerItem,
+        ToolApproval, TurnEndedPayload, TurnState, VoicePermissions, VoiceSettings,
     },
     desktop::apply_pet_window_settings,
     notifications,
@@ -36,7 +37,10 @@ use crate::{
         analyze_image, create_provider, read_webpage, LlmEvent, LlmMessage, LlmRequest, ToolCall,
     },
     secret::SecretStore,
-    storage::{MemoryCandidateInput, Storage, TimerInput, ToolRunInput},
+    storage::{
+        MemoryCandidateV2Input, MemoryConfirmResult, MemoryConflictResolution, Storage, TimerInput,
+        ToolRunInput,
+    },
     tools::{
         normalize_open_url, validate_memory_content, OpenUrlRequest, ToolAction, ToolPolicy,
         ToolRegistry,
@@ -118,7 +122,7 @@ enum PendingToolOrigin {
     Model {
         call: ToolCall,
         messages: Vec<LlmMessage>,
-        memory_context: Vec<String>,
+        memory_context: Vec<MemoryContextEntry>,
         tool_steps: u8,
     },
 }
@@ -134,7 +138,7 @@ struct ModelToolContext<'a> {
     turn_id: &'a str,
     generation: u64,
     messages: &'a [LlmMessage],
-    memory_context: &'a [String],
+    memory_context: &'a [MemoryContextEntry],
     response: &'a str,
     tool_steps: u8,
 }
@@ -162,6 +166,7 @@ pub struct AppCore {
     pet: RwLock<PetSettings>,
     character: RwLock<CharacterSettings>,
     voice_settings: RwLock<VoiceSettings>,
+    automatic_memory_candidates_enabled: AtomicBool,
     secrets: SecretStore,
     active_turn: Mutex<Option<ActiveTurn>>,
     interaction_command: Mutex<()>,
@@ -200,6 +205,7 @@ impl AppCore {
         let pet = storage.load_pet_settings().map_err(storage_error)?;
         let character = storage.load_character_settings().map_err(storage_error)?;
         let voice_settings = storage.load_voice_settings().map_err(storage_error)?;
+        let memory_settings = storage.load_memory_settings().map_err(storage_error)?;
         let (voice_final_tx, mut voice_final_rx) = tokio::sync::mpsc::unbounded_channel();
         let (audio_recovery_tx, mut audio_recovery_rx) = tokio::sync::mpsc::unbounded_channel();
         let timer_notify = Arc::new(Notify::new());
@@ -211,6 +217,9 @@ impl AppCore {
             pet: RwLock::new(pet),
             character: RwLock::new(character),
             voice_settings: RwLock::new(voice_settings),
+            automatic_memory_candidates_enabled: AtomicBool::new(
+                memory_settings.automatic_candidates_enabled,
+            ),
             secrets,
             active_turn: Mutex::new(None),
             interaction_command: Mutex::new(()),
@@ -673,7 +682,8 @@ impl AppCore {
         self.cancel_active(&app, "superseded").await?;
         let generation = self.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let turn_id = Uuid::now_v7().to_string();
-        self.storage
+        let user_message = self
+            .storage
             .begin_turn(
                 &self.conversation_id,
                 &turn_id,
@@ -942,17 +952,52 @@ impl AppCore {
                 } else {
                     0.7
                 };
-                if let Err(error) = self.storage.create_memory_candidate(MemoryCandidateInput {
-                    id: &tool.approval.tool_call_id,
-                    source_turn_id: &turn_id,
-                    source_message_id: None,
-                    scope,
-                    kind,
-                    content,
-                    confidence,
-                    sensitivity: "normal",
-                    created_at_ms: now_ms(),
-                }) {
+                let sensitivity = classify_memory_sensitivity(content);
+                if sensitivity == "restricted" {
+                    let _ = self.storage.finish_tool_run(
+                        &tool.approval.tool_call_id,
+                        "failed",
+                        "拒绝把凭据或密钥写入长期记忆。",
+                        now_ms(),
+                    );
+                    return Err(AppError::new(
+                        "memory_restricted",
+                        "出于安全原因，密码、密钥、Token 等凭据不能写入长期记忆。",
+                        false,
+                    ));
+                }
+                let fact_key = derive_memory_fact_key(scope, kind, content);
+                if let Err(error) =
+                    self.storage
+                        .create_memory_candidate_with_metadata(MemoryCandidateV2Input {
+                            id: &tool.approval.tool_call_id,
+                            source_turn_id: &turn_id,
+                            source_message_id: Some(&user_message.id),
+                            scope,
+                            kind,
+                            content,
+                            confidence,
+                            sensitivity,
+                            origin: if matches!(&tool.origin, PendingToolOrigin::Explicit) {
+                                "user_explicit"
+                            } else {
+                                "model_suggested"
+                            },
+                            reason: if matches!(&tool.origin, PendingToolOrigin::Explicit) {
+                                "老师明确要求保存这段内容，仍保留审核记录。"
+                            } else {
+                                "模型依据已验证的用户保存意图提出候选，仍需老师确认。"
+                            },
+                            fact_key: fact_key.as_deref(),
+                            proposed_action: if fact_key.is_some() {
+                                "replace"
+                            } else {
+                                "create"
+                            },
+                            expires_at_ms: Some(now_ms() + 30 * 24 * 60 * 60 * 1_000),
+                            created_at_ms: now_ms(),
+                        })
+                {
                     let _ = self.storage.finish_tool_run(
                         &tool.approval.tool_call_id,
                         "failed",
@@ -1079,7 +1124,10 @@ impl AppCore {
         let settings = self.provider.read().await.clone();
         let memory_context = if settings.provider == "mock" || settings.allow_memory_context {
             let character_id = self.character.read().await.character_id.clone();
-            let memories = match self.storage.search_memories(&text, &character_id, 6) {
+            let memories = match self
+                .storage
+                .search_memories_for_context(&text, &character_id, 6)
+            {
                 Ok(memories) => memories,
                 Err(error) => {
                     self.fail_turn(
@@ -1501,17 +1549,44 @@ impl AppCore {
             kind,
         } = &candidate.action
         {
-            if let Err(error) = self.storage.create_memory_candidate(MemoryCandidateInput {
-                id: &tool_call_id,
-                source_turn_id: context.turn_id,
-                source_message_id: None,
-                scope,
-                kind,
-                content,
-                confidence: 0.7,
-                sensitivity: "normal",
-                created_at_ms: now_ms(),
-            }) {
+            let sensitivity = classify_memory_sensitivity(content);
+            if sensitivity == "restricted" {
+                let _ = self.storage.finish_tool_run(
+                    &tool_call_id,
+                    "failed",
+                    "拒绝把凭据或密钥写入长期记忆。",
+                    now_ms(),
+                );
+                return Err(AppError::new(
+                    "memory_restricted",
+                    "出于安全原因，密码、密钥、Token 等凭据不能写入长期记忆。",
+                    false,
+                ));
+            }
+            let fact_key = derive_memory_fact_key(scope, kind, content);
+            if let Err(error) =
+                self.storage
+                    .create_memory_candidate_with_metadata(MemoryCandidateV2Input {
+                        id: &tool_call_id,
+                        source_turn_id: context.turn_id,
+                        source_message_id: None,
+                        scope,
+                        kind,
+                        content,
+                        confidence: 0.7,
+                        sensitivity,
+                        origin: "model_suggested",
+                        reason: "模型依据已验证的用户保存意图提出候选，仍需老师确认。",
+                        fact_key: fact_key.as_deref(),
+                        proposed_action: if fact_key.is_some() {
+                            "replace"
+                        } else {
+                            "create"
+                        },
+                        expires_at_ms: Some(now_ms() + 30 * 24 * 60 * 60 * 1_000),
+                        created_at_ms: now_ms(),
+                    })
+            {
                 let _ = self.storage.finish_tool_run(
                     &tool_call_id,
                     "failed",
@@ -1866,39 +1941,60 @@ impl AppCore {
 
     fn record_completed_interaction(&self, user_message: &ChatMessage, character_id: &str) {
         let text = user_message.canonical_text.trim();
-        if parse_explicit_memory_intent(text).is_none() {
+        if self
+            .automatic_memory_candidates_enabled
+            .load(Ordering::Relaxed)
+            && !is_no_memory_request(text)
+            && parse_explicit_memory_intent(text).is_none()
+        {
             if let Some(candidate) = extract_automatic_memory_candidate(text) {
-                match self.storage.has_duplicate_memory_or_candidate(
-                    &candidate.content,
-                    candidate.scope,
-                    character_id,
-                ) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        let id = Uuid::now_v7().to_string();
-                        if let Err(error) =
-                            self.storage.create_memory_candidate(MemoryCandidateInput {
-                                id: &id,
-                                source_turn_id: &user_message.turn_id,
-                                source_message_id: Some(&user_message.id),
-                                scope: candidate.scope,
-                                kind: candidate.kind,
-                                content: &candidate.content,
-                                confidence: candidate.confidence,
-                                sensitivity: "normal",
-                                created_at_ms: now_ms(),
-                            })
-                        {
-                            eprintln!(
-                                "automatic memory candidate unavailable [{}]: {error}",
-                                user_message.turn_id
-                            );
+                let sensitivity = classify_memory_sensitivity(&candidate.content);
+                if sensitivity != "restricted" {
+                    let fact_key =
+                        derive_memory_fact_key(candidate.scope, candidate.kind, &candidate.content);
+                    let proposed_action = if fact_key.is_some() {
+                        "replace"
+                    } else {
+                        "create"
+                    };
+                    match self.storage.has_duplicate_memory_or_candidate(
+                        &candidate.content,
+                        candidate.scope,
+                        character_id,
+                    ) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            let id = Uuid::now_v7().to_string();
+                            if let Err(error) = self.storage.create_memory_candidate_with_metadata(
+                                MemoryCandidateV2Input {
+                                    id: &id,
+                                    source_turn_id: &user_message.turn_id,
+                                    source_message_id: Some(&user_message.id),
+                                    scope: candidate.scope,
+                                    kind: candidate.kind,
+                                    content: &candidate.content,
+                                    confidence: candidate.confidence,
+                                    sensitivity,
+                                    origin: "automatic_candidate",
+                                    reason: "从本轮用户消息中识别出偏好、目标或项目线索；是否长期保存由老师决定。",
+                                    fact_key: fact_key.as_deref(),
+                                    proposed_action,
+                                    expires_at_ms: Some(now_ms() + 30 * 24 * 60 * 60 * 1_000),
+                                    created_at_ms: now_ms(),
+                                },
+                            )
+                            {
+                                eprintln!(
+                                    "automatic memory candidate unavailable [{}]: {error}",
+                                    user_message.turn_id
+                                );
+                            }
                         }
+                        Err(error) => eprintln!(
+                            "automatic memory duplicate check unavailable [{}]: {error}",
+                            user_message.turn_id
+                        ),
                     }
-                    Err(error) => eprintln!(
-                        "automatic memory duplicate check unavailable [{}]: {error}",
-                        user_message.turn_id
-                    ),
                 }
             }
         }
@@ -2181,18 +2277,21 @@ impl AppCore {
             }
             PendingToolAction::SaveMemory { .. } => {
                 let character_id = self.character.read().await.character_id.clone();
-                match self.storage.confirm_memory_candidate(
+                match self.storage.confirm_memory_candidate_with_resolution(
                     &pending_tool_id,
                     &character_id,
+                    None,
                     now_ms(),
                 ) {
-                    Ok(Some(memory)) => Ok(format!(
+                    Ok(
+                        MemoryConfirmResult::Saved(memory) | MemoryConfirmResult::Duplicate(memory),
+                    ) => Ok(format!(
                         "已保存本地长期记忆：{}（记忆 ID：{}）",
                         memory.content, memory.id
                     )),
-                    Ok(None) => Err(AppError::new(
+                    Ok(MemoryConfirmResult::Conflict(existing)) => Err(AppError::new(
                         "conflict",
-                        "这条记忆候选已被处理，请刷新记忆面板。",
+                        format!("这条记忆与现有记忆冲突：{}", existing.content),
                         true,
                     )),
                     Err(error) => Err(AppError::new(
@@ -2876,10 +2975,38 @@ impl AppCore {
             .map_err(storage_error)
     }
 
+    pub fn memory_settings(&self) -> Result<MemorySettings, AppError> {
+        self.storage.load_memory_settings().map_err(storage_error)
+    }
+
+    pub fn update_memory_settings(
+        &self,
+        automatic_candidates_enabled: bool,
+        expected_revision: u64,
+    ) -> Result<MemorySettings, AppError> {
+        let mut settings = self.storage.load_memory_settings().map_err(storage_error)?;
+        if settings.revision != expected_revision {
+            return Err(AppError::new(
+                "conflict",
+                "记忆设置已在其他窗口更新，请刷新后重试。",
+                true,
+            ));
+        }
+        settings.automatic_candidates_enabled = automatic_candidates_enabled;
+        settings.revision += 1;
+        self.storage
+            .save_memory_settings(&settings, now_ms())
+            .map_err(storage_error)?;
+        self.automatic_memory_candidates_enabled
+            .store(settings.automatic_candidates_enabled, Ordering::Relaxed);
+        Ok(settings)
+    }
+
     pub async fn review_memory_candidate(
         &self,
         candidate_id: &str,
         approved: bool,
+        resolution: Option<&str>,
     ) -> Result<Option<MemoryItem>, AppError> {
         if candidate_id.trim().is_empty() {
             return Err(AppError::new(
@@ -2905,13 +3032,40 @@ impl AppCore {
         }
         if approved {
             let character_id = self.character.read().await.character_id.clone();
-            self.storage
-                .confirm_memory_candidate(candidate_id, &character_id, now_ms())
+            let resolution = match resolution {
+                None => None,
+                Some("replace") => Some(MemoryConflictResolution::Replace),
+                Some("keep_both") => Some(MemoryConflictResolution::KeepBoth),
+                Some(_) => {
+                    return Err(AppError::new(
+                        "invalid_request",
+                        "记忆冲突处理方式无效。",
+                        false,
+                    ));
+                }
+            };
+            match self
+                .storage
+                .confirm_memory_candidate_with_resolution(
+                    candidate_id,
+                    &character_id,
+                    resolution,
+                    now_ms(),
+                )
                 .map_err(storage_error)?
-                .ok_or_else(|| {
-                    AppError::new("conflict", "这条记忆候选已被处理，请刷新后重试。", true)
-                })
-                .map(Some)
+            {
+                MemoryConfirmResult::Saved(memory) | MemoryConfirmResult::Duplicate(memory) => {
+                    Ok(Some(memory))
+                }
+                MemoryConfirmResult::Conflict(existing) => Err(AppError::new(
+                    "memory_conflict",
+                    format!(
+                        "这条候选与现有记忆冲突：{}。请选择替换旧记忆或保留两条。",
+                        existing.content
+                    ),
+                    true,
+                )),
+            }
         } else if self
             .storage
             .reject_memory_candidate(candidate_id, now_ms())
@@ -2940,6 +3094,23 @@ impl AppCore {
             ));
         }
         let content = validate_memory_content(content)?;
+        let sensitivity = classify_memory_sensitivity(&content);
+        if sensitivity == "restricted" {
+            return Err(AppError::new(
+                "memory_restricted",
+                "出于安全原因，密码、密钥、Token 等凭据不能写入长期记忆。",
+                false,
+            ));
+        }
+        let fact_key = self
+            .storage
+            .list_pending_memory_candidates(50)
+            .map_err(storage_error)?
+            .into_iter()
+            .find(|candidate| candidate.id == candidate_id)
+            .and_then(|candidate| {
+                derive_memory_fact_key(&candidate.scope, &candidate.kind, &content)
+            });
         let _interaction_guard = self.interaction_command.lock().await;
         if self
             .runtime
@@ -2956,15 +3127,50 @@ impl AppCore {
             ));
         }
         self.storage
-            .update_memory_candidate(candidate_id, &content)
+            .update_memory_candidate_with_metadata(
+                candidate_id,
+                &content,
+                fact_key.as_deref(),
+                Some(sensitivity),
+            )
             .map_err(storage_error)?
             .ok_or_else(|| AppError::new("conflict", "这条记忆候选已被处理，请刷新后重试。", true))
     }
 
     pub fn create_memory(&self, content: &str) -> Result<MemoryItem, AppError> {
         let content = validate_memory_content(content)?;
+        let sensitivity = classify_memory_sensitivity(&content);
+        if sensitivity == "restricted" {
+            return Err(AppError::new(
+                "memory_restricted",
+                "出于安全原因，密码、密钥、Token 等凭据不能写入长期记忆。",
+                false,
+            ));
+        }
+        let kind = infer_memory_kind(&content, "note");
+        let fact_key = derive_memory_fact_key("user", kind, &content);
+        if let Some(existing) = self
+            .storage
+            .find_active_memory_conflict("user", None, fact_key.as_deref(), &content, now_ms())
+            .map_err(storage_error)?
+        {
+            return Err(AppError::new(
+                "memory_conflict",
+                format!(
+                    "这条内容与已有记忆冲突：{}。请先编辑旧记忆，或通过对话提交替换候选。",
+                    existing.content
+                ),
+                true,
+            ));
+        }
         self.storage
-            .create_user_memory(&content, now_ms())
+            .create_user_memory_with_metadata(
+                &content,
+                kind,
+                sensitivity,
+                fact_key.as_deref(),
+                now_ms(),
+            )
             .map_err(storage_error)
     }
 
@@ -2975,10 +3181,25 @@ impl AppCore {
         expected_version: u64,
     ) -> Result<MemoryItem, AppError> {
         let content = validate_memory_content(content)?;
-        if self
+        if classify_memory_sensitivity(&content) == "restricted" {
+            return Err(AppError::new(
+                "memory_restricted",
+                "出于安全原因，密码、密钥、Token 等凭据不能写入长期记忆。",
+                false,
+            ));
+        }
+        let current = self
             .storage
-            .has_duplicate_user_memory(&content, id)
+            .memory_by_id(id)
             .map_err(storage_error)?
+            .ok_or_else(|| AppError::new("conflict", "记忆已被修改或删除，请刷新后重试。", true))?;
+        let sensitivity = classify_memory_sensitivity(&content);
+        let fact_key = derive_memory_fact_key(&current.scope, &current.kind, &content);
+        if current.scope == "user"
+            && self
+                .storage
+                .has_duplicate_user_memory(&content, id)
+                .map_err(storage_error)?
         {
             return Err(AppError::new(
                 "duplicate_memory",
@@ -2987,7 +3208,14 @@ impl AppCore {
             ));
         }
         self.storage
-            .update_memory(id, &content, expected_version, now_ms())
+            .update_memory_with_metadata(
+                id,
+                &content,
+                expected_version,
+                fact_key.as_deref(),
+                Some(sensitivity),
+                now_ms(),
+            )
             .map_err(storage_error)?
             .ok_or_else(|| AppError::new("conflict", "记忆已被修改或删除，请刷新后重试。", true))
     }
@@ -4158,6 +4386,109 @@ fn extract_automatic_memory_candidate(text: &str) -> Option<AutomaticMemoryCandi
     })
 }
 
+fn is_no_memory_request(text: &str) -> bool {
+    [
+        "不要记住",
+        "别记住",
+        "这次不要记",
+        "这次别记",
+        "不需要记住",
+        "无需记住",
+        "不要保存",
+        "别保存",
+        "不要记录",
+        "别记录",
+    ]
+    .iter()
+    .any(|phrase| text.contains(phrase))
+}
+
+fn classify_memory_sensitivity(content: &str) -> &'static str {
+    let lowered = content.to_ascii_lowercase();
+    if [
+        "密码",
+        "口令",
+        "密钥",
+        "api key",
+        "apikey",
+        "token",
+        "sk-",
+        "secret",
+        "验证码",
+        "私钥",
+    ]
+    .iter()
+    .any(|marker| lowered.contains(marker))
+    {
+        return "restricted";
+    }
+    if [
+        "身份证",
+        "银行卡",
+        "信用卡",
+        "手机号",
+        "电话号码",
+        "住址",
+        "家庭住址",
+        "地址",
+        "邮箱",
+        "电子邮件",
+        "病史",
+        "疾病",
+        "用药",
+        "诊断",
+        "工资",
+        "收入",
+        "债务",
+        "财务",
+    ]
+    .iter()
+    .any(|marker| lowered.contains(marker))
+    {
+        return "sensitive";
+    }
+    "normal"
+}
+
+fn derive_memory_fact_key(scope: &str, kind: &str, content: &str) -> Option<String> {
+    if scope != "user" || kind != "preference" {
+        return None;
+    }
+    let prefixes = [
+        "我喜欢",
+        "我不喜欢",
+        "我偏好",
+        "我习惯",
+        "我的爱好是",
+        "我希望以后",
+    ];
+    let remainder = prefixes
+        .iter()
+        .find_map(|prefix| content.trim().strip_prefix(prefix))?
+        .trim_matches(|character: char| {
+            matches!(character, '：' | ':' | '，' | ',' | '。' | '！' | '!')
+        })
+        .trim();
+    if remainder.is_empty() {
+        return None;
+    }
+    let normalized = remainder
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| {
+            if character.is_alphanumeric() || !character.is_ascii_punctuation() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!normalized.is_empty()).then(|| format!("{scope}:{kind}:{normalized}"))
+}
+
 fn derive_relationship_signal(text: &str) -> (f64, &'static str) {
     if ["讨厌", "失望", "生气", "别烦", "糟糕", "不想理"]
         .iter()
@@ -4184,10 +4515,7 @@ fn derive_relationship_signal(text: &str) -> (f64, &'static str) {
 }
 
 fn parse_explicit_memory_intent(text: &str) -> Option<ExplicitMemoryIntent> {
-    if ["不要记住", "别记住", "不要保存", "别保存"]
-        .iter()
-        .any(|phrase| text.contains(phrase))
-    {
+    if is_no_memory_request(text) {
         return None;
     }
     let (markers, scope, kind) = if [
@@ -4243,9 +4571,31 @@ fn parse_explicit_memory_intent(text: &str) -> Option<ExplicitMemoryIntent> {
             (!content.is_empty()).then(|| ExplicitMemoryIntent {
                 content: content.to_owned(),
                 scope,
-                kind,
+                kind: infer_memory_kind(content, kind),
             })
         })
+}
+
+fn infer_memory_kind(content: &str, fallback: &'static str) -> &'static str {
+    if [
+        "我喜欢",
+        "我不喜欢",
+        "我偏好",
+        "我习惯",
+        "我的爱好是",
+        "我希望以后",
+    ]
+    .iter()
+    .any(|marker| content.starts_with(marker))
+    {
+        "preference"
+    } else if content.starts_with("我的目标是") {
+        "goal"
+    } else if content.starts_with("我目前在做") || content.starts_with("我正在做") {
+        "project"
+    } else {
+        fallback
+    }
 }
 
 fn memory_scope_label(scope: &str) -> &'static str {
@@ -5359,7 +5709,7 @@ async fn run_local_screen_ocr(app: &AppHandle, png: &[u8]) -> Result<Option<Stri
     }
 }
 
-fn memory_context_with_budget(memories: Vec<MemoryItem>, budget: usize) -> Vec<String> {
+fn memory_context_with_budget(memories: Vec<MemoryItem>, budget: usize) -> Vec<MemoryContextEntry> {
     let mut remaining = budget;
     memories
         .into_iter()
@@ -5373,7 +5723,14 @@ fn memory_context_with_budget(memories: Vec<MemoryItem>, budget: usize) -> Vec<S
                 .take(remaining.min(600))
                 .collect::<String>();
             remaining = remaining.saturating_sub(content.chars().count());
-            (!content.is_empty()).then_some(content)
+            (!content.is_empty()).then_some(MemoryContextEntry {
+                id: memory.id,
+                scope: memory.scope,
+                kind: memory.kind,
+                content,
+                sensitivity: memory.sensitivity,
+                updated_at_ms: memory.updated_at_ms,
+            })
         })
         .collect()
 }
@@ -6041,6 +6398,30 @@ mod tests {
     }
 
     #[test]
+    fn memory_policy_detects_no_memory_and_sensitive_content() {
+        assert!(is_no_memory_request("这次不要记住我喜欢蓝色"));
+        assert!(is_no_memory_request("别记录这段信息"));
+        assert!(!is_no_memory_request("不要忘记我喜欢蓝色"));
+        assert_eq!(classify_memory_sensitivity("我的住址是某地"), "sensitive");
+        assert_eq!(
+            classify_memory_sensitivity("API key 是 sk-secret"),
+            "restricted"
+        );
+        assert_eq!(classify_memory_sensitivity("我喜欢蓝色"), "normal");
+    }
+
+    #[test]
+    fn preference_fact_key_normalizes_opposite_statements() {
+        assert_eq!(
+            derive_memory_fact_key("user", "preference", "我喜欢  咖啡"),
+            derive_memory_fact_key("user", "preference", "我不喜欢咖啡")
+        );
+        assert!(derive_memory_fact_key("user", "note", "我喜欢咖啡").is_none());
+        assert!(parse_explicit_memory_intent("请记住我喜欢咖啡")
+            .is_some_and(|intent| intent.kind == "preference"));
+    }
+
+    #[test]
     fn derives_bounded_relationship_signals_without_lowering_familiarity() {
         assert_eq!(
             derive_relationship_signal("谢谢老师，我们一起完成任务了"),
@@ -6084,6 +6465,15 @@ mod tests {
             kind: "note".into(),
             content: content.into(),
             importance: 0.7,
+            confidence: 1.0,
+            sensitivity: "normal".into(),
+            origin: "user_explicit".into(),
+            fact_key: None,
+            source_turn_id: None,
+            source_message_id: None,
+            valid_from_ms: None,
+            valid_until_ms: None,
+            last_confirmed_at_ms: Some(1),
             version: 1,
             created_at_ms: 1,
             updated_at_ms: 1,

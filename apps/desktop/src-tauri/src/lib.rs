@@ -91,6 +91,8 @@ pub fn run() {
             commands::character_import_vrm,
             commands::memory_search,
             commands::memory_list_candidates,
+            commands::memory_get_settings,
+            commands::memory_update_settings,
             commands::memory_review_candidate,
             commands::memory_update_candidate,
             commands::memory_create,
