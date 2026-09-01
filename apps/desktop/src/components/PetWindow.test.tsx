@@ -34,6 +34,19 @@ describe("PetWindow subtitles", () => {
     expect(buildPetSubtitle(messages, ""))
       .toEqual({ previous: "第二句。", current: "第三句。" });
   });
+
+  it("does not surface a failed assistant partial as the current subtitle", () => {
+    const messages = [{
+      id: "assistant-failed",
+      turn_id: "turn-failed",
+      role: "assistant" as const,
+      canonical_text: "这段话没有完成。",
+      status: "failed" as const,
+      created_at_ms: 1,
+    }];
+    expect(buildPetSubtitle(messages, ""))
+      .toEqual({ previous: null, current: "老师，爱丽丝已就绪。" });
+  });
 });
 
 describe("PetWindow interaction surface", () => {

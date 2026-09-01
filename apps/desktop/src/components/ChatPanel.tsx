@@ -265,6 +265,7 @@ export function ChatPanel() {
   const formatToolName = (name: string) => ({
     "system.open_url": "打开网页",
     "web.read": "读取网页内容",
+    "browser.interact": "操作当前网页",
     "timer.create": "创建提醒",
     "timer.cancel": "取消提醒",
     "memory.save": "保存记忆",
@@ -429,11 +430,11 @@ export function ChatPanel() {
           <p className={`tool-approval-expiry ${snapshot.pending_tool_approval.expires_at_ms - clockMs <= 15_000 ? "urgent" : ""}`} aria-live="polite">确认有效期：{formatTimerRemaining(snapshot.pending_tool_approval.expires_at_ms, clockMs)}</p>
           {snapshot.pending_tool_approval.url && <code className="tool-url">{snapshot.pending_tool_approval.url}</code>}
           {snapshot.pending_tool_approval.host && <p className="tool-host">目标域名：{snapshot.pending_tool_approval.host}</p>}
-          {snapshot.pending_tool_approval.title && <p className="tool-host">{snapshot.pending_tool_approval.tool_name === "memory.save" || snapshot.pending_tool_approval.tool_name === "memory.delete" ? "记忆内容" : snapshot.pending_tool_approval.tool_name === "vision.analyze" ? "分析问题" : "提醒内容"}：{snapshot.pending_tool_approval.title}</p>}
+          {snapshot.pending_tool_approval.title && <p className="tool-host">{snapshot.pending_tool_approval.tool_name === "memory.save" || snapshot.pending_tool_approval.tool_name === "memory.delete" ? "记忆内容" : snapshot.pending_tool_approval.tool_name === "vision.analyze" ? "分析问题" : snapshot.pending_tool_approval.tool_name === "browser.interact" ? "网页目标" : "提醒内容"}：{snapshot.pending_tool_approval.title}</p>}
           {snapshot.pending_tool_approval.due_at_ms && <p className="tool-host">提醒时间：{formatTimerDue(snapshot.pending_tool_approval.due_at_ms)}</p>}
           <div className="tool-approval-actions">
             <button type="button" className="secondary" disabled={toolBusy} onClick={() => void decidePendingTool(false)}>取消</button>
-            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : snapshot.pending_tool_approval.tool_name === "timer.create" ? "设置提醒" : snapshot.pending_tool_approval.tool_name === "timer.cancel" ? "取消提醒" : snapshot.pending_tool_approval.tool_name === "memory.save" ? "保存记忆" : snapshot.pending_tool_approval.tool_name === "memory.delete" ? "删除记忆" : snapshot.pending_tool_approval.tool_name === "screen.observe" ? "读取屏幕" : snapshot.pending_tool_approval.tool_name === "vision.analyze" ? "发送并分析" : snapshot.pending_tool_approval.tool_name === "web.read" ? "读取网页" : "允许打开"}</button>
+            <button type="button" disabled={toolBusy} onClick={() => void decidePendingTool(true)}>{toolBusy ? "处理中…" : snapshot.pending_tool_approval.tool_name === "timer.create" ? "设置提醒" : snapshot.pending_tool_approval.tool_name === "timer.cancel" ? "取消提醒" : snapshot.pending_tool_approval.tool_name === "memory.save" ? "保存记忆" : snapshot.pending_tool_approval.tool_name === "memory.delete" ? "删除记忆" : snapshot.pending_tool_approval.tool_name === "screen.observe" ? "读取屏幕" : snapshot.pending_tool_approval.tool_name === "vision.analyze" ? "发送并分析" : snapshot.pending_tool_approval.tool_name === "web.read" ? "读取网页" : snapshot.pending_tool_approval.tool_name === "browser.interact" ? "允许操作" : "允许打开"}</button>
           </div>
           {toolError && <p className="settings-error">{toolError}</p>}
         </section>

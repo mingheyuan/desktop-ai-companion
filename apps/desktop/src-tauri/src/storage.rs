@@ -2447,6 +2447,45 @@ mod tests {
     }
 
     #[test]
+    fn reopening_database_resumes_generation_after_an_interrupted_turn() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("restart.sqlite3");
+        let conversation = {
+            let storage = Storage::open(&path).unwrap();
+            let conversation = storage.ensure_conversation(1).unwrap();
+            storage
+                .begin_turn(&conversation, "restart-turn-1", 1, "text", "第一轮", 2)
+                .unwrap();
+            conversation
+        };
+
+        let storage = Storage::open(&path).unwrap();
+        storage.recover_interrupted_turns(3).unwrap();
+        assert_eq!(storage.latest_turn_generation(&conversation).unwrap(), 1);
+        storage
+            .begin_turn(&conversation, "restart-turn-2", 2, "text", "第二轮", 4)
+            .unwrap();
+        assert_eq!(storage.latest_turn_generation(&conversation).unwrap(), 2);
+        let connection = storage.connection.lock().unwrap();
+        let first_status: String = connection
+            .query_row(
+                "SELECT status FROM turns WHERE id='restart-turn-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let second_status: String = connection
+            .query_row(
+                "SELECT status FROM turns WHERE id='restart-turn-2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(first_status, "failed");
+        assert_eq!(second_status, "preparing");
+    }
+
+    #[test]
     fn relationship_state_counts_completed_turns_and_caps_familiarity() {
         let storage = Storage::open_in_memory().unwrap();
         let conversation = storage.ensure_conversation(1).unwrap();

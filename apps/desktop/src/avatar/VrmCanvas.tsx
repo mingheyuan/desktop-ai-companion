@@ -64,8 +64,11 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
     camera.position.set(0, useReferencePreview ? 1.02 : 0.95, useReferencePreview ? 3.8 : 3.45);
     camera.lookAt(0, useReferencePreview ? 0.88 : useBlockPreview ? 0.72 : 0.9, 0);
 
-    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "high-performance" });
+    // The pet window is small and always-on-top. Capping the backing canvas
+    // keeps 2x/3x Retina displays from spending most of their time shading a
+    // transparent window while preserving a crisp model.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = useReferencePreview ? 1.0 : 1.12;
@@ -183,9 +186,6 @@ export function VrmCanvas({ state, mouthLevel, modelUrl }: VrmCanvasProps) {
           VRMUtils.deepDispose(loaded.scene);
           return;
         }
-        loaded.scene.traverse((object) => {
-          object.frustumCulled = false;
-        });
         const bounds = new THREE.Box3().setFromObject(loaded.scene);
         const size = bounds.getSize(new THREE.Vector3());
         if (size.y > 0) loaded.scene.scale.setScalar(1.7 / size.y);

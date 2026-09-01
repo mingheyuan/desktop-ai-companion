@@ -860,7 +860,7 @@ mod tests {
         assert_eq!(serialized["role"], "assistant");
         assert_eq!(serialized["tool_calls"][0]["function"]["name"], call.name);
         let tool_definitions = ToolRegistry::definitions();
-        assert_eq!(tool_definitions.len(), 6);
+        assert_eq!(tool_definitions.len(), 7);
         assert!(tool_definitions
             .iter()
             .any(|tool| tool.name == "screen.observe"));
@@ -993,7 +993,7 @@ mod tests {
             let body = request.split("\r\n\r\n").nth(1).expect("HTTP request body");
             let body: Value = serde_json::from_str(body).unwrap();
             let tools = body["tools"].as_array().unwrap();
-            assert_eq!(tools.len(), 6);
+            assert_eq!(tools.len(), 7);
             assert!(tools
                 .iter()
                 .any(|tool| tool["function"]["name"] == "screen.observe"));

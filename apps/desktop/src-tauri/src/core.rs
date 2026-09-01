@@ -42,8 +42,8 @@ use crate::{
         ToolRunInput,
     },
     tools::{
-        normalize_open_url, validate_memory_content, OpenUrlRequest, ToolAction, ToolPolicy,
-        ToolRegistry,
+        browser_interaction_audit_arguments_json, normalize_open_url, validate_memory_content,
+        BrowserInteractionKind, OpenUrlRequest, ToolAction, ToolPolicy, ToolRegistry,
     },
 };
 
@@ -884,6 +884,11 @@ impl AppCore {
                 PendingToolAction::ReadWebpage { url, host } => {
                     json!({ "url": url, "host": host }).to_string()
                 }
+                PendingToolAction::BrowserInteract {
+                    action,
+                    target,
+                    value,
+                } => browser_interaction_audit_arguments_json(*action, target, value.as_deref()),
                 PendingToolAction::CreateTimer {
                     title, due_at_ms, ..
                 } => json!({
@@ -1478,6 +1483,24 @@ impl AppCore {
                 return Err(AppError::new(
                     "web_confirmation_required",
                     "模型只能读取用户当前请求中明确给出的网页地址。",
+                    false,
+                ));
+            }
+        }
+        if matches!(&candidate.action, PendingToolAction::BrowserInteract { .. }) {
+            let user_request = context
+                .messages
+                .iter()
+                .rev()
+                .find_map(|message| match message {
+                    LlmMessage::User { content } => Some(content.as_str()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if !has_explicit_browser_action_request(user_request) {
+                return Err(AppError::new(
+                    "browser_confirmation_required",
+                    "模型只能在用户明确要求操作当前网页时提出点击或填写请求。",
                     false,
                 ));
             }
@@ -2164,6 +2187,13 @@ impl AppCore {
                 PendingToolAction::ReadWebpage { url, .. } => {
                     format!("好的，老师，已取消读取网页：{url}")
                 }
+                PendingToolAction::BrowserInteract { action, target, .. } => {
+                    let verb = match action {
+                        BrowserInteractionKind::ClickText => "点击",
+                        BrowserInteractionKind::FillField => "填写",
+                    };
+                    format!("好的，老师，已取消在当前网页{verb}“{target}”。")
+                }
                 PendingToolAction::CreateTimer { title, .. } => {
                     format!("好的，老师，已取消提醒：{title}")
                 }
@@ -2237,6 +2267,11 @@ impl AppCore {
                     .unwrap_or_else(CancellationToken::new);
                 read_webpage(&url, cancel).await
             }
+            PendingToolAction::BrowserInteract {
+                action,
+                target,
+                value,
+            } => interact_with_active_browser(action, &target, value.as_deref()).await,
             PendingToolAction::CreateTimer {
                 title,
                 due_at_ms,
@@ -2477,6 +2512,7 @@ impl AppCore {
                     let message = match &pending.action {
                         PendingToolAction::OpenUrl { url } => format!("网页已打开，老师：{url}"),
                         PendingToolAction::ReadWebpage { .. } => result,
+                        PendingToolAction::BrowserInteract { .. } => result,
                         PendingToolAction::CreateTimer {
                             title, due_at_ms, ..
                         } => format!(
@@ -3706,6 +3742,15 @@ impl AppCore {
                     runtime.active_voice_source = None;
                     runtime.asr_partial.clear();
                     runtime.voice_input_route = "unknown".into();
+                } else if runtime
+                    .last_error
+                    .as_ref()
+                    .is_some_and(|error| is_recoverable_voice_error(error.code.as_str()))
+                {
+                    // A user can enable Siri/Dictation or repair TCC permissions
+                    // while the app is open. The next explicit refresh must clear
+                    // the stale error so the controls become usable again.
+                    runtime.last_error = None;
                 }
                 drop(runtime);
                 if !permissions_authorized {
@@ -3909,13 +3954,7 @@ impl AppCore {
                 runtime.asr_partial.clear();
                 runtime.voice_input_route = "unknown".into();
                 runtime.mouth_level = 0.0;
-                if matches!(
-                    code,
-                    "on_device_wake_unavailable"
-                        | "wake_recognition_unavailable"
-                        | "system_speech_disabled"
-                        | "permission_denied"
-                ) {
+                if is_recoverable_voice_error(code) {
                     self.listening_requested.store(false, Ordering::SeqCst);
                     runtime.listening_mode = ListeningMode::Disabled;
                 }
@@ -4283,6 +4322,17 @@ fn vision_endpoint_label(endpoint: &str) -> String {
 
 fn storage_error(error: rusqlite::Error) -> AppError {
     AppError::new("storage_error", format!("本地数据库错误：{error}"), false)
+}
+
+fn is_recoverable_voice_error(code: &str) -> bool {
+    matches!(
+        code,
+        "system_speech_disabled"
+            | "permission_denied"
+            | "asr_unavailable"
+            | "wake_recognition_unavailable"
+            | "on_device_wake_unavailable"
+    )
 }
 
 fn secret_task_error(error: tokio::task::JoinError) -> AppError {
@@ -5468,6 +5518,47 @@ fn has_explicit_screen_observe_refusal(messages: &[LlmMessage]) -> bool {
     .any(|phrase| content.contains(phrase))
 }
 
+fn has_explicit_browser_action_request(text: &str) -> bool {
+    let page_reference = [
+        "当前页面",
+        "当前网页",
+        "这个页面",
+        "这个网页",
+        "网页上",
+        "页面上",
+        "浏览器页面",
+        "浏览器里",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker));
+    let action_request = ["点击", "填入", "填写", "输入到", "按下", "提交", "选择"]
+        .iter()
+        .any(|marker| text.contains(marker))
+        && !has_explicit_browser_action_refusal(text);
+    page_reference && action_request
+}
+
+fn has_explicit_browser_action_refusal(text: &str) -> bool {
+    [
+        "不要点击",
+        "别点击",
+        "不要填入",
+        "别填入",
+        "不要填写",
+        "别填写",
+        "不要输入",
+        "别输入",
+        "不要操作",
+        "别操作",
+        "不要提交",
+        "别提交",
+        "不要选择",
+        "别选择",
+    ]
+    .iter()
+    .any(|phrase| text.contains(phrase))
+}
+
 fn screen_mode_allows_automatic_analysis(
     mode: ScreenUnderstandingMode,
     vision_enabled: bool,
@@ -5607,6 +5698,157 @@ async fn open_url_in_default_browser(url: &str) -> Result<(), AppError> {
         Err(AppError::new(
             "tool_unavailable",
             "当前版本的打开网页工具仅支持 macOS。",
+            false,
+        ))
+    }
+}
+
+fn browser_interaction_javascript(
+    action: BrowserInteractionKind,
+    target: &str,
+    value: Option<&str>,
+) -> String {
+    let target = serde_json::to_string(target).unwrap_or_else(|_| "\"\"".into());
+    let value = serde_json::to_string(value.unwrap_or_default()).unwrap_or_else(|_| "\"\"".into());
+    match action {
+        BrowserInteractionKind::ClickText => format!(
+            r#"(function() {{
+                const normalize = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+                const target = {target};
+                const candidates = [...document.querySelectorAll('button,a,[role="button"],input[type="submit"],input[type="button"]')];
+                const element = candidates.find((item) => item.offsetParent !== null && !item.disabled && [item.innerText, item.value, item.getAttribute('aria-label')].some((value) => normalize(value) === target));
+                if (!element) return JSON.stringify({{status: 'not_found', target}});
+                element.click();
+                return JSON.stringify({{status: 'clicked', target}});
+            }})()"#,
+            target = target
+        ),
+        BrowserInteractionKind::FillField => format!(
+            r#"(function() {{
+                const normalize = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+                const target = {target};
+                const value = {value};
+                const fields = [...document.querySelectorAll('input:not([type="hidden"]):not([type="password"]):not([type="file"]),textarea,[contenteditable="true"]')]
+                    .filter((item) => item.offsetParent !== null && !item.disabled && item.getAttribute('aria-hidden') !== 'true');
+                const label = [...document.querySelectorAll('label')].find((item) => normalize(item.innerText) === target);
+                let element = label?.htmlFor ? document.getElementById(label.htmlFor) : label?.querySelector('input,textarea,[contenteditable="true"]');
+                if (!element || !fields.includes(element)) element = fields.find((item) => [item.getAttribute('aria-label'), item.getAttribute('placeholder'), item.getAttribute('name')].some((candidate) => normalize(candidate) === target));
+                if (!element) return JSON.stringify({{status: 'not_found', target}});
+                if (element.matches('[contenteditable="true"]')) {{
+                    element.textContent = value;
+                }} else {{
+                    const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+                    if (setter) setter.call(element, value); else element.value = value;
+                }}
+                element.dispatchEvent(new Event('input', {{bubbles: true}}));
+                element.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return JSON.stringify({{status: 'filled', target}});
+            }})()"#,
+            target = target,
+            value = value
+        ),
+    }
+}
+
+const BROWSER_INTERACTION_APPLESCRIPT: &str = r#"
+on run argv
+    if (count of argv) is not 1 then error "网页交互参数数量不正确。"
+    set javascriptSource to item 1 of argv
+    tell application "System Events"
+        set foregroundApplication to name of first application process whose frontmost is true
+    end tell
+    if foregroundApplication is "Google Chrome" then
+        tell application "Google Chrome"
+            if (count of windows) is 0 then error "Google Chrome 没有打开的窗口。"
+            set activeTab to active tab of front window
+            set currentUrl to URL of activeTab
+            if currentUrl does not start with "http://" and currentUrl does not start with "https://" then error "当前页面不是 HTTP(S) 网页。"
+            set resultValue to execute activeTab javascript javascriptSource
+        end tell
+    else if foregroundApplication is "Safari" then
+        tell application "Safari"
+            if (count of windows) is 0 then error "Safari 没有打开的窗口。"
+            set activeDocument to document of front window
+            set currentUrl to URL of activeDocument
+            if currentUrl does not start with "http://" and currentUrl does not start with "https://" then error "当前页面不是 HTTP(S) 网页。"
+            set resultValue to do JavaScript javascriptSource in activeDocument
+        end tell
+    else
+        error "请先将 Google Chrome 或 Safari 的网页窗口置于前台。"
+    end if
+    return currentUrl & (ASCII character 9) & resultValue
+end run
+"#;
+
+async fn interact_with_active_browser(
+    action: BrowserInteractionKind,
+    target: &str,
+    value: Option<&str>,
+) -> Result<String, AppError> {
+    let javascript = browser_interaction_javascript(action, target, value);
+    #[cfg(target_os = "macos")]
+    {
+        let output = tokio::time::timeout(
+            Duration::from_secs(20),
+            tokio::process::Command::new("/usr/bin/osascript")
+                .args(["-e", BROWSER_INTERACTION_APPLESCRIPT, "--"])
+                .arg(&javascript)
+                .output(),
+        )
+        .await
+        .map_err(|_| AppError::new("tool_execution_timeout", "网页交互超过 20 秒未完成。", true))?
+        .map_err(|error| {
+            AppError::new(
+                "tool_execution_failed",
+                format!("无法启动 macOS 网页交互：{error}"),
+                true,
+            )
+        })?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(AppError::new(
+                "browser_execution_failed",
+                if detail.is_empty() {
+                    "前台浏览器没有执行这次网页交互，请确认 Chrome/Safari 在前台并允许自动化控制。"
+                        .into()
+                } else {
+                    format!("网页交互未执行：{detail}")
+                },
+                false,
+            ));
+        }
+        let response = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let Some((url, result)) = response.split_once('\t') else {
+            return Err(AppError::new(
+                "browser_protocol_mismatch",
+                "浏览器没有返回有效的网页交互结果。",
+                true,
+            ));
+        };
+        if result.contains("\"status\":\"not_found\"") {
+            return Err(AppError::new(
+                "browser_target_not_found",
+                format!("在当前页面没有找到可见的目标“{target}”（页面：{url}）。"),
+                false,
+            ));
+        }
+        let message = match action {
+            BrowserInteractionKind::ClickText => {
+                format!("已在当前浏览器页面点击“{target}”（页面：{url}）。")
+            }
+            BrowserInteractionKind::FillField => {
+                format!("已在当前浏览器页面填写字段“{target}”（页面：{url}）。")
+            }
+        };
+        Ok(message)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (action, target, value, javascript);
+        Err(AppError::new(
+            "tool_unavailable",
+            "当前版本的网页交互工具仅支持 macOS 上的 Chrome 和 Safari。",
             false,
         ))
     }
@@ -6032,6 +6274,15 @@ mod tests {
     }
 
     #[test]
+    fn refreshed_authorized_voice_state_clears_only_voice_startup_errors() {
+        assert!(is_recoverable_voice_error("system_speech_disabled"));
+        assert!(is_recoverable_voice_error("permission_denied"));
+        assert!(is_recoverable_voice_error("wake_recognition_unavailable"));
+        assert!(!is_recoverable_voice_error("provider_unavailable"));
+        assert!(!is_recoverable_voice_error("storage_error"));
+    }
+
+    #[test]
     fn matches_tool_approval_identity_and_generation() {
         let pending = PendingTool {
             approval: ToolApproval {
@@ -6285,6 +6536,35 @@ mod tests {
     }
 
     #[test]
+    fn browser_actions_require_an_explicit_current_page_request() {
+        assert!(has_explicit_browser_action_request("请在当前页面点击提交"));
+        assert!(has_explicit_browser_action_request(
+            "帮我在这个网页填写搜索框"
+        ));
+        assert!(!has_explicit_browser_action_request("帮我看看这个结果"));
+        assert!(!has_explicit_browser_action_request("当前页面不要点击提交"));
+        assert!(!has_explicit_browser_action_request("请评价当前页面"));
+
+        let javascript = browser_interaction_javascript(
+            BrowserInteractionKind::FillField,
+            "姓\"名",
+            Some("老师\n爱丽丝"),
+        );
+        assert!(javascript.contains("status: 'filled'"));
+        assert!(javascript.contains("姓\\\"名"));
+        assert!(javascript.contains("老师\\n爱丽丝"));
+        assert!(BROWSER_INTERACTION_APPLESCRIPT.contains("当前页面不是 HTTP(S) 网页"));
+
+        let audit = browser_interaction_audit_arguments_json(
+            BrowserInteractionKind::FillField,
+            "搜索",
+            Some("不应落入审计日志的内容"),
+        );
+        assert!(audit.contains("[redacted in audit]"));
+        assert!(!audit.contains("不应落入审计日志的内容"));
+    }
+
+    #[test]
     fn screen_automatic_mode_requires_session_consent_and_vision() {
         assert!(!screen_mode_allows_automatic_analysis(
             ScreenUnderstandingMode::AskEachTime,
@@ -6339,6 +6619,60 @@ mod tests {
         .unwrap();
         assert_eq!(web.url.as_deref(), Some("https://example.com/docs"));
         assert_eq!(web.host.as_deref(), Some("example.com"));
+
+        let click = ToolPolicy::validate_model_call(
+            &ToolCall {
+                id: "call-browser-click".into(),
+                name: "browser.interact".into(),
+                arguments: r#"{"action":"click_text","target":"提交"}"#.into(),
+            },
+            1_000,
+        )
+        .unwrap();
+        assert!(matches!(
+            click.action,
+            ToolAction::BrowserInteract {
+                action: BrowserInteractionKind::ClickText,
+                target,
+                value: None,
+            } if target == "提交"
+        ));
+
+        let fill = ToolPolicy::validate_model_call(
+            &ToolCall {
+                id: "call-browser-fill".into(),
+                name: "browser.interact".into(),
+                arguments: r#"{"action":"fill_field","target":"搜索","value":"爱丽丝"}"#.into(),
+            },
+            1_000,
+        )
+        .unwrap();
+        assert!(matches!(
+            fill.action,
+            ToolAction::BrowserInteract {
+                action: BrowserInteractionKind::FillField,
+                target,
+                value: Some(value),
+            } if target == "搜索" && value == "爱丽丝"
+        ));
+        assert!(ToolPolicy::validate_model_call(
+            &ToolCall {
+                id: "call-browser-click-with-value".into(),
+                name: "browser.interact".into(),
+                arguments: r#"{"action":"click_text","target":"提交","value":"不应出现"}"#.into(),
+            },
+            1_000,
+        )
+        .is_err());
+        assert!(ToolPolicy::validate_model_call(
+            &ToolCall {
+                id: "call-browser-fill-without-value".into(),
+                name: "browser.interact".into(),
+                arguments: r#"{"action":"fill_field","target":"搜索"}"#.into(),
+            },
+            1_000,
+        )
+        .is_err());
 
         let timer = ToolPolicy::validate_model_call(
             &ToolCall {

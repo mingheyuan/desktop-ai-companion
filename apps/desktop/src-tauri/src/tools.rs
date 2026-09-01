@@ -21,6 +21,11 @@ pub(crate) enum ToolAction {
         url: String,
         host: String,
     },
+    BrowserInteract {
+        action: BrowserInteractionKind,
+        target: String,
+        value: Option<String>,
+    },
     CreateTimer {
         title: String,
         due_at_ms: i64,
@@ -66,6 +71,37 @@ pub(crate) struct OpenUrlRequest {
     pub host: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BrowserInteractionKind {
+    ClickText,
+    FillField,
+}
+
+pub(crate) fn browser_interaction_audit_arguments_json(
+    action: BrowserInteractionKind,
+    target: &str,
+    value: Option<&str>,
+) -> String {
+    json!({
+        "action": match action {
+            BrowserInteractionKind::ClickText => "click_text",
+            BrowserInteractionKind::FillField => "fill_field",
+        },
+        "target": target,
+        "value": value.map(|_| "[redacted in audit]"),
+    })
+    .to_string()
+}
+
+fn browser_value_preview(value: &str) -> String {
+    let preview = value.chars().take(200).collect::<String>();
+    if value.chars().count() > 200 {
+        format!("{preview}…")
+    } else {
+        preview
+    }
+}
+
 pub(crate) struct ToolRegistry;
 
 impl ToolRegistry {
@@ -99,6 +135,33 @@ impl ToolRegistry {
                     }
                 },
                 "required": ["url"]
+            }),
+        },
+        ToolDefinition {
+            name: "browser.interact".into(),
+            description: "在用户当前置于前台的 Chrome 或 Safari HTTP(S) 页面中，按可见按钮文字点击，或按可见字段标签/占位符填入文本；不会执行任意 JavaScript，执行前必须请求用户确认。".into(),
+            parameters: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["click_text", "fill_field"],
+                        "description": "click_text 点击可见按钮/链接；fill_field 填入可见文本字段"
+                    },
+                    "target": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "description": "点击目标的可见文字，或输入框的可见标签、占位符、名称"
+                    },
+                    "value": {
+                        "type": "string",
+                        "maxLength": 2000,
+                        "description": "fill_field 要填入的文本；click_text 不得提供"
+                    }
+                },
+                "required": ["action", "target"]
             }),
         },
         ToolDefinition {
@@ -295,6 +358,107 @@ impl ToolPolicy {
                     title: None,
                     due_at_ms: None,
                     arguments_json: json!({ "url": request.url }).to_string(),
+                })
+            }
+            "browser.interact" => {
+                reject_unknown_tool_arguments(object, &["action", "target", "value"])?;
+                let action = object
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        AppError::new(
+                            "invalid_tool_arguments",
+                            "网页交互需要 action 参数。",
+                            false,
+                        )
+                    })?;
+                let action = match action {
+                    "click_text" => BrowserInteractionKind::ClickText,
+                    "fill_field" => BrowserInteractionKind::FillField,
+                    _ => {
+                        return Err(AppError::new(
+                            "invalid_tool_arguments",
+                            "网页交互 action 只支持 click_text 或 fill_field。",
+                            false,
+                        ))
+                    }
+                };
+                let target = object
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        AppError::new(
+                            "invalid_tool_arguments",
+                            "网页交互需要非空 target 参数。",
+                            false,
+                        )
+                    })?;
+                if target.chars().count() > 200 {
+                    return Err(AppError::new(
+                        "invalid_tool_arguments",
+                        "网页交互目标不能超过 200 个字符。",
+                        false,
+                    ));
+                }
+                let value = object
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                match action {
+                    BrowserInteractionKind::ClickText if value.is_some() => {
+                        return Err(AppError::new(
+                            "invalid_tool_arguments",
+                            "点击网页目标不能提供 value 参数。",
+                            false,
+                        ))
+                    }
+                    BrowserInteractionKind::FillField if value.is_none() => {
+                        return Err(AppError::new(
+                            "invalid_tool_arguments",
+                            "填入网页字段需要 value 参数。",
+                            false,
+                        ))
+                    }
+                    _ => {}
+                }
+                if value
+                    .as_ref()
+                    .is_some_and(|value| value.chars().count() > 2_000)
+                {
+                    return Err(AppError::new(
+                        "invalid_tool_arguments",
+                        "网页填入内容不能超过 2000 个字符。",
+                        false,
+                    ));
+                }
+                Ok(ModelToolCandidate {
+                    action: ToolAction::BrowserInteract {
+                        action,
+                        target: target.to_owned(),
+                        value: value.clone(),
+                    },
+                    display_name: if action == BrowserInteractionKind::ClickText {
+                        "点击当前网页"
+                    } else {
+                        "填写当前网页"
+                    }
+                    .into(),
+                    summary: if action == BrowserInteractionKind::ClickText {
+                        format!("模型请求在当前前台浏览器页面点击可见目标“{target}”；只执行这一个点击，执行前需要你的确认。")
+                    } else {
+                        format!("模型请求在当前前台浏览器页面向字段“{target}”填入文本“{}”；不会填入密码字段，执行前需要你的确认。", browser_value_preview(value.as_deref().unwrap_or_default()))
+                    },
+                    url: None,
+                    host: None,
+                    title: Some(target.to_owned()),
+                    due_at_ms: None,
+                    arguments_json: browser_interaction_audit_arguments_json(
+                        action,
+                        target,
+                        value.as_deref(),
+                    ),
                 })
             }
             "timer.create" => {

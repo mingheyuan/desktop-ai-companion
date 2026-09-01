@@ -2,7 +2,7 @@
 
 > 版本：v0.2 实现方案
 >
-> 状态：已完成参考项目调研和真实 Agent Loop。`system.open_url`、受限 `web.read`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete` 和需确认的本地 `screen.observe` 已支持显式入口；模型也可以根据工具描述在普通对话中按需提出工具调用，经过 Registry、Policy 和用户确认后执行，再把结果回传模型继续生成。当前保持单次一个 ToolCall、每轮最多 3 步，并对连接建立失败做有限重试。`memory.save` 候选已持久化并可在记忆面板审核；工具审计摘要已投影到主面板；独立 Vision Provider 已支持二次确认后的 PNG 请求和文本结果回传，模型发起的屏幕观察也会把 Vision 结果回到原 Agent Loop；本地 macOS Vision OCR 仍作为本地补充。网页点击/填表、GUI 自动化、重复提醒、Apple 提醒事项、多工具并行和 MCP 尚未进入实现。
+> 状态：已完成参考项目调研和真实 Agent Loop。`system.open_url`、受限 `web.read`、当前前台 Chrome/Safari 的受限 `browser.interact`、一次性本地计时提醒、需确认的 `memory.save`、用户明确请求的本地 `memory.delete` 和需确认的本地 `screen.observe` 已支持显式入口；模型也可以根据工具描述在普通对话中按需提出工具调用，经过 Registry、Policy 和用户确认后执行，再把结果回传模型继续生成。当前保持单次一个 ToolCall、每轮最多 3 步，并对连接建立失败做有限重试。`memory.save` 候选已持久化并可在记忆面板审核；工具审计摘要已投影到主面板；独立 Vision Provider 已支持二次确认后的 PNG 请求和文本结果回传，模型发起的屏幕观察也会把 Vision 结果回到原 Agent Loop；本地 macOS Vision OCR 仍作为本地补充。通用 GUI 自动化、重复提醒、Apple 提醒事项、多工具并行和 MCP 尚未进入实现。
 >
 > 更新日期：2026-08-31
 
@@ -170,7 +170,22 @@ web.read
 
 ### 6.3 后续网页交互
 
-如果未来需要读取页面结构、点击或填表，优先研究 Microsoft Playwright MCP 的 accessibility snapshot 路线。它与 `system.open_url`、`web.read` 分开授权、分开开关；浏览器自动化本身不是安全边界，仍需本项目的域名策略和最终动作确认。
+当前已落地一个明确收敛的网页交互切片：
+
+```text
+browser.interact
+  action: click_text | fill_field
+  target: 可见按钮/链接文字，或字段标签、占位符、name
+  value: fill_field 时的普通文本
+```
+
+- 只在用户当前请求明确提到当前页面/网页操作时，模型才可以提出该工具；仍需单独确认卡片。
+- macOS 只控制当前置于前台的 Chrome 或 Safari，并检查活动页面为 HTTP(S)。
+- `click_text` 只匹配可见、未禁用的按钮/链接；`fill_field` 排除密码、文件和隐藏字段，并派发 `input/change` 事件以兼容常见前端表单。
+- Rust 不接受 CSS 选择器、任意 JavaScript、脚本片段、批量动作或自动跟进动作；目标找不到、浏览器不在前台、页面不是 HTTP(S) 或系统未允许自动化时均失败并写入审计。
+- 该切片不等同于通用 GUI 自动化，也不绕过网站登录、验证码或最终提交确认。
+
+如果未来需要跨浏览器、读取 accessibility snapshot、处理多步表单或更可靠地定位页面结构，优先研究 Microsoft Playwright MCP 的 accessibility snapshot 路线。它与 `system.open_url`、`web.read` 分开授权、分开开关；浏览器自动化本身不是安全边界，仍需本项目的域名策略和最终动作确认。
 
 ## 7. 计时、闹钟与提醒
 
@@ -326,14 +341,14 @@ MCP 的价值是让用户以后接入经过选择的外部工具，而不是替�
 
 这组能力建议作为核心对话 MVP 后的 **Tool MVP**：
 
-1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust `tools.rs`、Provider 和 SQLite 审计实现，现有六种模型工具可做真实 ToolCall 循环。
-2. `system.open_url`、`web.read`、`timer.create`、`timer.cancel`、`memory.save` 和本地 `screen.observe` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；`web.read` 只读取用户当前请求明确给出的 HTTP(S) 地址，受大小、超时和文本长度限制；`screen.observe` 由模型根据工具描述判断是否需要，图片先进入本机临时预览，之后只有第二次确认才进入 Vision Provider，模型发起的观察会继续原 Agent Loop；本地显式 `memory.delete` 也已接入确认、版本校验和审计。当前已完成单工具串行循环、工具结果回传和 3 步上限，后续再补多工具并行和更细的风险策略。
+1. `ToolRegistry + ToolPolicyEngine + ToolRunStore` 的首批行为已由 Rust `tools.rs`、Provider 和 SQLite 审计实现，现有七种模型工具可做真实 ToolCall 循环。
+2. `system.open_url`、`web.read`、受限 `browser.interact`、`timer.create`、`timer.cancel`、`memory.save` 和本地 `screen.observe` 的模型 ToolCall 接入、参数安全策略和授权 UI 已完成；`web.read` 只读取用户当前请求明确给出的 HTTP(S) 地址，受大小、超时和文本长度限制；`browser.interact` 只允许当前前台 Chrome/Safari 页面中的单次可见目标点击或普通文本填入，填写值不写入工具审计参数；`screen.observe` 由模型根据工具描述判断是否需要，图片先进入本机临时预览，之后只有第二次确认才进入 Vision Provider，模型发起的观察会继续原 Agent Loop；本地显式 `memory.delete` 也已接入确认、版本校验和审计。当前已完成单工具串行循环、工具结果回传和 3 步上限，后续再补多工具并行和更细的风险策略。
 3. 完善 `timer.create/list/cancel`，验证 LaunchAgent 在休眠、重启、时区变化、取消竞态和退出登录场景下的行为；后续再评估 UserNotifications/EventKit。
 4. `screen.observe` 本地单帧、所有显示器/主显示器范围和本地 Vision OCR 已完成最小切片；后续验证 ScreenCaptureKit 权限、窗口排除、区域选择和临时文件清理。
 5. 独立 Vision Provider 的实际图片请求已接入 OpenAI-compatible 协议，模型 ToolCall 的 Vision 结果回传也已接通；仍需用一个云端兼容模型和一个本地兼容模型分别做端到端验证。
 6. EventKit 提醒事项。
 7. 可选本地 MCP Client。
-8. 浏览器或 GUI 自动化必须另行评审，不随 Tool MVP 自动获得授权。
+8. 通用浏览器或 GUI 自动化必须另行评审，不随这个受限 `browser.interact` 切片自动获得授权。
 
 ## 12. 开始 Tool MVP 前的冻结门槛
 

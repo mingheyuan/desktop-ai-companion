@@ -31,7 +31,7 @@ export function splitSubtitleSentences(text: string): string[] {
 
 export function buildPetSubtitle(messages: ChatMessage[], streamingText: string): PetSubtitle {
   const completedAssistantSentences = messages
-    .filter((message) => message.role === "assistant" && message.canonical_text.trim())
+    .filter((message) => message.role === "assistant" && message.status === "completed" && message.canonical_text.trim())
     .flatMap((message) => splitSubtitleSentences(message.canonical_text));
   const activeSentences = splitSubtitleSentences(streamingText);
 
