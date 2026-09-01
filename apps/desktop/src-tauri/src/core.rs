@@ -200,6 +200,10 @@ impl AppCore {
             .map_err(storage_error)?;
         let secrets = SecretStore;
         let mut provider = storage.load_provider_settings().map_err(storage_error)?;
+        // In debug builds, `.env` is loaded before Tauri setup. Re-apply its
+        // explicit Provider overrides after loading persisted settings so an
+        // old database value such as `mock` cannot silently win at startup.
+        provider.apply_environment_overrides();
         provider.has_api_key = secrets.resolve_llm_api_key()?.is_some();
         provider.vision.has_api_key = secrets.resolve_vision_api_key()?.is_some();
         let pet = storage.load_pet_settings().map_err(storage_error)?;
