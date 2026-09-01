@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::contracts::{
     CharacterSettings, ChatMessage, DataSummary, MemoryCandidate, MemoryItem, MemorySettings,
-    MessageRole, MessageStatus, PetSettings, ProviderSettings, RelationshipState, TimerHistoryItem,
-    TimerItem, ToolRunSummary, VoiceSettings,
+    MemorySource, MessageRole, MessageStatus, PetSettings, ProviderSettings, RelationshipState,
+    TimerHistoryItem, TimerItem, ToolRunSummary, VoiceSettings,
 };
 
 pub struct Storage {
@@ -907,10 +907,31 @@ impl Storage {
         fact_key: Option<&str>,
         now_ms: i64,
     ) -> Result<MemoryItem, rusqlite::Error> {
+        self.create_user_memory_with_validity(
+            content,
+            kind,
+            sensitivity,
+            fact_key,
+            None,
+            memory_valid_until_for_kind(kind, now_ms),
+            now_ms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_user_memory_with_validity(
+        &self,
+        content: &str,
+        kind: &str,
+        sensitivity: &str,
+        fact_key: Option<&str>,
+        valid_from_ms: Option<i64>,
+        valid_until_ms: Option<i64>,
+        now_ms: i64,
+    ) -> Result<MemoryItem, rusqlite::Error> {
         let mut connection = self.connection.lock().expect("storage mutex poisoned");
         let transaction = connection.transaction()?;
         let normalized_key = normalize_memory_text(content);
-        let valid_until_ms = memory_valid_until_for_kind(kind, now_ms);
         let duplicate_query = format!(
             "SELECT {MEMORY_SELECT_COLUMNS}
                FROM memories m
@@ -946,7 +967,7 @@ impl Storage {
             fact_key: fact_key.map(str::to_owned),
             source_turn_id: None,
             source_message_id: None,
-            valid_from_ms: None,
+            valid_from_ms,
             valid_until_ms,
             last_confirmed_at_ms: Some(now_ms),
             version: 1,
@@ -957,8 +978,8 @@ impl Storage {
             "INSERT INTO memories(
                 id, scope, character_id, kind, content, normalized_key, importance,
                 confidence, sensitivity, origin, source_turn_id, fact_key,
-                valid_until_ms, last_confirmed_at_ms, version, created_at_ms, updated_at_ms
-             ) VALUES(?1, 'user', NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13, ?13)",
+                valid_from_ms, valid_until_ms, last_confirmed_at_ms, version, created_at_ms, updated_at_ms
+             ) VALUES(?1, 'user', NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?14)",
             params![
                 item.id,
                 item.kind,
@@ -970,6 +991,7 @@ impl Storage {
                 item.origin,
                 item.source_turn_id,
                 item.fact_key,
+                item.valid_from_ms,
                 item.valid_until_ms,
                 item.last_confirmed_at_ms,
                 now_ms,
@@ -1006,6 +1028,33 @@ impl Storage {
         expected_version: u64,
         next_fact_key: Option<&str>,
         next_sensitivity: Option<&str>,
+        now_ms: i64,
+    ) -> Result<Option<MemoryItem>, rusqlite::Error> {
+        let Some(previous) = self.memory_by_id(id)? else {
+            return Ok(None);
+        };
+        self.update_memory_with_validity(
+            id,
+            content,
+            expected_version,
+            next_fact_key,
+            next_sensitivity,
+            previous.valid_from_ms,
+            previous.valid_until_ms,
+            now_ms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_memory_with_validity(
+        &self,
+        id: &str,
+        content: &str,
+        expected_version: u64,
+        next_fact_key: Option<&str>,
+        next_sensitivity: Option<&str>,
+        next_valid_from_ms: Option<i64>,
+        next_valid_until_ms: Option<i64>,
         now_ms: i64,
     ) -> Result<Option<MemoryItem>, rusqlite::Error> {
         let mut connection = self.connection.lock().expect("storage mutex poisoned");
@@ -1057,8 +1106,8 @@ impl Storage {
             _previous_fact_key,
             source_turn_id,
             source_message_id,
-            valid_from_ms,
-            valid_until_ms,
+            _valid_from_ms,
+            _valid_until_ms,
             _last_confirmed_at_ms,
         )) = previous
         else {
@@ -1075,14 +1124,17 @@ impl Storage {
         transaction.execute(
             "UPDATE memories
                 SET content=?1, normalized_key=?2, fact_key=?3,
-                    sensitivity=COALESCE(?4, sensitivity), version=version+1,
-                    updated_at_ms=?5, last_confirmed_at_ms=?5
-              WHERE id=?6 AND version=?7",
+                    sensitivity=COALESCE(?4, sensitivity), valid_from_ms=?5,
+                    valid_until_ms=?6, version=version+1,
+                    updated_at_ms=?7, last_confirmed_at_ms=?7
+              WHERE id=?8 AND version=?9",
             params![
                 content,
                 normalized_key,
                 next_fact_key,
                 next_sensitivity,
+                next_valid_from_ms,
+                next_valid_until_ms,
                 now_ms,
                 id,
                 expected_version
@@ -1112,8 +1164,8 @@ impl Storage {
             fact_key: next_fact_key.map(str::to_owned),
             source_turn_id,
             source_message_id,
-            valid_from_ms,
-            valid_until_ms,
+            valid_from_ms: next_valid_from_ms,
+            valid_until_ms: next_valid_until_ms,
             last_confirmed_at_ms: Some(now_ms),
             version: version + 1,
             created_at_ms,
@@ -1127,6 +1179,82 @@ impl Storage {
         connection
             .query_row(&query, [id], map_memory_row)
             .optional()
+    }
+
+    pub fn memory_source(&self, id: &str) -> Result<Option<MemorySource>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let source = connection
+            .query_row(
+                "SELECT source_turn_id, source_message_id FROM memories WHERE id=?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((source_turn_id, source_message_id)) = source else {
+            return Ok(None);
+        };
+        if source_turn_id.is_none() && source_message_id.is_none() {
+            return Ok(None);
+        }
+        let message = match source_message_id.as_deref() {
+            Some(message_id) => connection
+                .query_row(
+                    "SELECT id, turn_id, role, canonical_text, status, created_at_ms
+                           FROM messages WHERE id=?1",
+                    [message_id],
+                    |row| {
+                        let role: String = row.get(2)?;
+                        let status: String = row.get(4)?;
+                        Ok(ChatMessage {
+                            id: row.get(0)?,
+                            turn_id: row.get(1)?,
+                            role: if role == "user" {
+                                MessageRole::User
+                            } else {
+                                MessageRole::Assistant
+                            },
+                            canonical_text: row.get(3)?,
+                            status: match status.as_str() {
+                                "pending" => MessageStatus::Pending,
+                                "streaming" => MessageStatus::Streaming,
+                                "cancelled" => MessageStatus::Cancelled,
+                                "failed" => MessageStatus::Failed,
+                                _ => MessageStatus::Completed,
+                            },
+                            created_at_ms: row.get(5)?,
+                        })
+                    },
+                )
+                .optional()?,
+            None => None,
+        };
+        Ok(Some(MemorySource {
+            memory_id: id.to_owned(),
+            source_turn_id,
+            source_message_id,
+            message,
+        }))
+    }
+
+    pub fn list_memories_for_export(
+        &self,
+        character_id: &str,
+    ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
+        let connection = self.connection.lock().expect("storage mutex poisoned");
+        let query = format!(
+            "SELECT {MEMORY_SELECT_COLUMNS}
+               FROM memories m
+              WHERE m.scope='user' OR (m.scope='relationship' AND m.character_id=?1)
+              ORDER BY m.created_at_ms ASC, m.id ASC"
+        );
+        let mut statement = connection.prepare(&query)?;
+        let rows = statement.query_map([character_id], map_memory_row)?;
+        rows.collect()
     }
 
     pub fn find_active_memory_conflict(
@@ -1243,7 +1371,16 @@ impl Storage {
         character_id: &str,
         limit: usize,
     ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
-        self.search_memories_internal(query, character_id, limit, false)
+        self.search_memories_internal(query, character_id, limit, false, false)
+    }
+
+    pub fn search_memories_for_management(
+        &self,
+        query: &str,
+        character_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
+        self.search_memories_internal(query, character_id, limit, false, true)
     }
 
     pub fn search_memories_for_context(
@@ -1252,7 +1389,7 @@ impl Storage {
         character_id: &str,
         limit: usize,
     ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
-        self.search_memories_internal(query, character_id, limit, true)
+        self.search_memories_internal(query, character_id, limit, true, false)
     }
 
     fn search_memories_internal(
@@ -1261,6 +1398,7 @@ impl Storage {
         character_id: &str,
         limit: usize,
         normal_only: bool,
+        include_expired: bool,
     ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
         let connection = self.connection.lock().expect("storage mutex poisoned");
         let limit = limit.clamp(1, 20) as i64;
@@ -1270,6 +1408,21 @@ impl Storage {
         } else {
             ""
         };
+        let expiry_clause_empty = if include_expired {
+            ""
+        } else {
+            "AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?2)"
+        };
+        let expiry_clause_fts = if include_expired {
+            ""
+        } else {
+            "AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?3)"
+        };
+        let expiry_clause_fallback = if include_expired {
+            ""
+        } else {
+            "AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?4)"
+        };
         let normalized = normalize_memory_text(query);
         let fts = memory_fts_query(&normalized);
         let mut items = if normalized.is_empty() {
@@ -1277,7 +1430,7 @@ impl Storage {
                 "SELECT {MEMORY_SELECT_COLUMNS}
                    FROM memories m
                   WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
-                    AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?2)
+                    {expiry_clause_empty}
                     {sensitivity_clause}
                     AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
                   ORDER BY m.updated_at_ms DESC LIMIT ?3"
@@ -1291,7 +1444,7 @@ impl Storage {
                    FROM memory_fts JOIN memories m ON m.rowid=memory_fts.rowid
                   WHERE memory_fts MATCH ?1
                     AND (m.scope='user' OR (m.scope='relationship' AND m.character_id=?2))
-                    AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?3)
+                    {expiry_clause_fts}
                     {sensitivity_clause}
                     AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
                   ORDER BY bm25(memory_fts), m.importance DESC, m.updated_at_ms DESC LIMIT ?4"
@@ -1308,7 +1461,7 @@ impl Storage {
                    FROM memories m
                   WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
                     AND (m.normalized_key LIKE ?2 ESCAPE '\\' OR lower(m.content) LIKE ?3 ESCAPE '\\')
-                    AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?4)
+                    {expiry_clause_fallback}
                     {sensitivity_clause}
                     AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
                   ORDER BY m.importance DESC, m.updated_at_ms DESC LIMIT ?5"
@@ -1327,6 +1480,7 @@ impl Storage {
                 character_id,
                 limit,
                 normal_only,
+                include_expired,
                 now_ms,
             )?;
         }
@@ -1615,6 +1769,25 @@ impl Storage {
         resolution: Option<MemoryConflictResolution>,
         now_ms: i64,
     ) -> Result<MemoryConfirmResult, rusqlite::Error> {
+        self.confirm_memory_candidate_with_validity(
+            candidate_id,
+            character_id,
+            resolution,
+            None,
+            None,
+            now_ms,
+        )
+    }
+
+    pub fn confirm_memory_candidate_with_validity(
+        &self,
+        candidate_id: &str,
+        character_id: &str,
+        resolution: Option<MemoryConflictResolution>,
+        valid_from_ms: Option<i64>,
+        valid_until_ms: Option<i64>,
+        now_ms: i64,
+    ) -> Result<MemoryConfirmResult, rusqlite::Error> {
         let mut connection = self.connection.lock().expect("storage mutex poisoned");
         let transaction = connection.transaction()?;
         let candidate = transaction
@@ -1722,7 +1895,8 @@ impl Storage {
             }
             (Some(_), Some(MemoryConflictResolution::KeepBoth)) | (None, _) => (None, None),
         };
-        let valid_until_ms = memory_valid_until_for_kind(&kind, created_at_ms);
+        let valid_until_ms =
+            valid_until_ms.or_else(|| memory_valid_until_for_kind(&kind, created_at_ms));
         let item = MemoryItem {
             id: Uuid::now_v7().to_string(),
             scope,
@@ -1736,7 +1910,7 @@ impl Storage {
             fact_key,
             source_turn_id,
             source_message_id,
-            valid_from_ms: Some(created_at_ms),
+            valid_from_ms: valid_from_ms.or(Some(created_at_ms)),
             valid_until_ms,
             last_confirmed_at_ms: Some(now_ms),
             version: 1,
@@ -2170,6 +2344,7 @@ fn lexical_memory_fallback(
     character_id: &str,
     limit: i64,
     normal_only: bool,
+    include_expired: bool,
     now_ms: i64,
 ) -> Result<Vec<MemoryItem>, rusqlite::Error> {
     let query_terms = memory_lexical_terms(query);
@@ -2182,18 +2357,27 @@ fn lexical_memory_fallback(
     } else {
         ""
     };
+    let expiry_clause = if include_expired {
+        ""
+    } else {
+        "AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?2)"
+    };
     let query = format!(
         "SELECT {MEMORY_SELECT_COLUMNS}
            FROM memories m
           WHERE (m.scope='user' OR (m.scope='relationship' AND m.character_id=?1))
-            AND (m.valid_until_ms IS NULL OR m.valid_until_ms > ?2)
+            {expiry_clause}
             {sensitivity_clause}
             AND NOT EXISTS (SELECT 1 FROM memories newer WHERE newer.supersedes_id=m.id)
           ORDER BY m.importance DESC, m.updated_at_ms DESC
           LIMIT 200"
     );
     let mut statement = connection.prepare(&query)?;
-    let rows = statement.query_map(params![character_id, now_ms], map_memory_row)?;
+    let rows = if include_expired {
+        statement.query_map(params![character_id], map_memory_row)?
+    } else {
+        statement.query_map(params![character_id, now_ms], map_memory_row)?
+    };
     let mut scored = rows
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
@@ -2821,6 +3005,71 @@ mod tests {
             .unwrap()
             .is_empty());
         assert_eq!(sensitive.sensitivity, "sensitive");
+    }
+
+    #[test]
+    fn management_search_keeps_expired_memories_out_of_context_but_visible_to_user() {
+        let storage = Storage::open_in_memory().unwrap();
+        let expired = storage
+            .create_user_memory_with_validity(
+                "旧项目已经结束",
+                "project",
+                "normal",
+                None,
+                Some(1),
+                Some(2),
+                1,
+            )
+            .unwrap();
+        assert!(storage
+            .search_memories_for_context("旧项目", "aris", 20)
+            .unwrap()
+            .is_empty());
+        let visible = storage
+            .search_memories_for_management("旧项目", "aris", 20)
+            .unwrap();
+        assert_eq!(visible[0].id, expired.id);
+        assert_eq!(visible[0].valid_until_ms, Some(2));
+    }
+
+    #[test]
+    fn memory_source_round_trips_the_original_user_message() {
+        let storage = Storage::open_in_memory().unwrap();
+        let conversation = storage.ensure_conversation(1).unwrap();
+        let message = storage
+            .begin_turn(
+                &conversation,
+                "source-memory-turn",
+                1,
+                "text",
+                "请记住我喜欢蓝色",
+                2,
+            )
+            .unwrap();
+        storage
+            .create_memory_candidate(MemoryCandidateInput {
+                id: "source-memory-candidate",
+                source_turn_id: "source-memory-turn",
+                source_message_id: Some(&message.id),
+                scope: "user",
+                kind: "preference",
+                content: "我喜欢蓝色",
+                confidence: 1.0,
+                sensitivity: "normal",
+                created_at_ms: 3,
+            })
+            .unwrap();
+        let memory = storage
+            .confirm_memory_candidate("source-memory-candidate", "aris", 4)
+            .unwrap()
+            .unwrap();
+        let source = storage.memory_source(&memory.id).unwrap().unwrap();
+        assert_eq!(source.source_turn_id.as_deref(), Some("source-memory-turn"));
+        assert_eq!(
+            source.source_message_id.as_deref(),
+            Some(message.id.as_str())
+        );
+        assert_eq!(source.message.unwrap().canonical_text, "请记住我喜欢蓝色");
     }
 
     #[test]

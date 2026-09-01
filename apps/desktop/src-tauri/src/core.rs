@@ -26,8 +26,8 @@ use crate::{
     contracts::{
         AppError, AppSnapshot, AvatarSemanticState, CharacterSettings, ChatMessage, DataSummary,
         EventEnvelope, GenerationState, InputState, ListeningMode, MemoryCandidate,
-        MemoryContextEntry, MemoryItem, MemorySettings, MouthLevelPayload, PetSettings,
-        PlaybackState, ProviderSettings, ScreenCaptureScope, ScreenObservation,
+        MemoryContextEntry, MemoryItem, MemorySettings, MemorySource, MouthLevelPayload,
+        PetSettings, PlaybackState, ProviderSettings, ScreenCaptureScope, ScreenObservation,
         ScreenObservationPreview, ScreenUnderstandingMode, TextDeltaPayload, TimerItem,
         ToolApproval, TurnEndedPayload, TurnState, VoicePermissions, VoiceSettings,
     },
@@ -2275,12 +2275,16 @@ impl AppCore {
                     )),
                 }
             }
-            PendingToolAction::SaveMemory { .. } => {
+            PendingToolAction::SaveMemory { content, kind, .. } => {
                 let character_id = self.character.read().await.character_id.clone();
-                match self.storage.confirm_memory_candidate_with_resolution(
+                let (valid_from_ms, valid_until_ms) =
+                    derive_memory_validity(&kind, &content, now_ms());
+                match self.storage.confirm_memory_candidate_with_validity(
                     &pending_tool_id,
                     &character_id,
                     None,
+                    valid_from_ms,
+                    valid_until_ms,
                     now_ms(),
                 ) {
                     Ok(
@@ -2965,7 +2969,7 @@ impl AppCore {
     ) -> Result<Vec<MemoryItem>, AppError> {
         let character_id = self.character.read().await.character_id.clone();
         self.storage
-            .search_memories(query, &character_id, limit)
+            .search_memories_for_management(query, &character_id, limit)
             .map_err(storage_error)
     }
 
@@ -2973,6 +2977,31 @@ impl AppCore {
         self.storage
             .list_pending_memory_candidates(limit)
             .map_err(storage_error)
+    }
+
+    pub fn memory_source(&self, id: &str) -> Result<Option<MemorySource>, AppError> {
+        self.storage.memory_source(id).map_err(storage_error)
+    }
+
+    pub async fn export_memories(&self) -> Result<String, AppError> {
+        let character_id = self.character.read().await.character_id.clone();
+        let memories = self
+            .storage
+            .list_memories_for_export(&character_id)
+            .map_err(storage_error)?;
+        serde_json::to_string_pretty(&json!({
+            "schema_version": "memory-v2",
+            "exported_at_ms": now_ms(),
+            "character_id": character_id,
+            "memories": memories,
+        }))
+        .map_err(|error| {
+            AppError::new(
+                "memory_export",
+                format!("记忆导出序列化失败：{error}"),
+                false,
+            )
+        })
     }
 
     pub fn memory_settings(&self) -> Result<MemorySettings, AppError> {
@@ -3044,12 +3073,24 @@ impl AppCore {
                     ));
                 }
             };
+            let (valid_from_ms, valid_until_ms) = self
+                .storage
+                .list_pending_memory_candidates(50)
+                .map_err(storage_error)?
+                .into_iter()
+                .find(|candidate| candidate.id == candidate_id)
+                .map(|candidate| {
+                    derive_memory_validity(&candidate.kind, &candidate.content, now_ms())
+                })
+                .unwrap_or((None, None));
             match self
                 .storage
-                .confirm_memory_candidate_with_resolution(
+                .confirm_memory_candidate_with_validity(
                     candidate_id,
                     &character_id,
                     resolution,
+                    valid_from_ms,
+                    valid_until_ms,
                     now_ms(),
                 )
                 .map_err(storage_error)?
@@ -3163,13 +3204,17 @@ impl AppCore {
                 true,
             ));
         }
+        let created_at_ms = now_ms();
+        let (valid_from_ms, valid_until_ms) = derive_memory_validity(kind, &content, created_at_ms);
         self.storage
-            .create_user_memory_with_metadata(
+            .create_user_memory_with_validity(
                 &content,
                 kind,
                 sensitivity,
                 fact_key.as_deref(),
-                now_ms(),
+                valid_from_ms,
+                valid_until_ms,
+                created_at_ms,
             )
             .map_err(storage_error)
     }
@@ -3207,14 +3252,19 @@ impl AppCore {
                 true,
             ));
         }
+        let updated_at_ms = now_ms();
+        let (valid_from_ms, valid_until_ms) =
+            derive_memory_validity(&current.kind, &content, updated_at_ms);
         self.storage
-            .update_memory_with_metadata(
+            .update_memory_with_validity(
                 id,
                 &content,
                 expected_version,
                 fact_key.as_deref(),
                 Some(sensitivity),
-                now_ms(),
+                valid_from_ms,
+                valid_until_ms,
+                updated_at_ms,
             )
             .map_err(storage_error)?
             .ok_or_else(|| AppError::new("conflict", "记忆已被修改或删除，请刷新后重试。", true))
@@ -4487,6 +4537,36 @@ fn derive_memory_fact_key(scope: &str, kind: &str, content: &str) -> Option<Stri
         .collect::<Vec<_>>()
         .join(" ");
     (!normalized.is_empty()).then(|| format!("{scope}:{kind}:{normalized}"))
+}
+
+fn derive_memory_validity(kind: &str, content: &str, now_ms: i64) -> (Option<i64>, Option<i64>) {
+    let valid_from_ms = Some(now_ms);
+    let default_valid_until_ms = || match kind {
+        "goal" => Some(now_ms.saturating_add(90 * 24 * 60 * 60 * 1_000)),
+        "project" => Some(now_ms.saturating_add(180 * 24 * 60 * 60 * 1_000)),
+        _ => None,
+    };
+    let Some(now) = Local.timestamp_millis_opt(now_ms).single() else {
+        return (valid_from_ms, default_valid_until_ms());
+    };
+    let Ok((Some(date), _)) = parse_absolute_date(content, now.date_naive()) else {
+        return (valid_from_ms, default_valid_until_ms());
+    };
+    let Some(next_date) = date.checked_add_signed(ChronoDuration::days(1)) else {
+        return (valid_from_ms, None);
+    };
+    let Some(naive) = next_date.and_hms_opt(0, 0, 0) else {
+        return (valid_from_ms, None);
+    };
+    let valid_until_ms = match Local.from_local_datetime(&naive) {
+        LocalResult::Single(value) => Some(value.timestamp_millis()),
+        LocalResult::Ambiguous(first, second) => Some(first.min(second).timestamp_millis()),
+        LocalResult::None => None,
+    };
+    (
+        valid_from_ms,
+        valid_until_ms.or_else(default_valid_until_ms),
+    )
 }
 
 fn derive_relationship_signal(text: &str) -> (f64, &'static str) {
@@ -6419,6 +6499,24 @@ mod tests {
         assert!(derive_memory_fact_key("user", "note", "我喜欢咖啡").is_none());
         assert!(parse_explicit_memory_intent("请记住我喜欢咖啡")
             .is_some_and(|intent| intent.kind == "preference"));
+    }
+
+    #[test]
+    fn memory_validity_uses_an_explicit_date_before_default_ttl() {
+        let now = Local
+            .with_ymd_and_hms(2026, 9, 1, 12, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let expected_until = Local
+            .with_ymd_and_hms(2099, 1, 1, 0, 0, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis();
+        let (valid_from_ms, valid_until_ms) =
+            derive_memory_validity("project", "我的项目截止 2098年12月31日完成", now);
+        assert_eq!(valid_from_ms, Some(now));
+        assert_eq!(valid_until_ms, Some(expected_until));
     }
 
     #[test]

@@ -343,7 +343,7 @@ MVP 记忆范围：
 - 检索综合文本相关性、时间、新鲜度、重要度和作用域，结果数量设置硬上限。
 - 记忆作为引用数据放入清晰分隔的提示词区域，不能被解释成系统指令，降低历史内容中的提示注入风险。
 
-完整表结构、FTS 同事务同步、确认事务、检索预算、迁移与崩溃恢复见 [`implementation/database.md`](implementation/database.md)。Memory V2 的来源追踪、敏感信息边界、事实冲突和过期规则见 [`memory-v2.md`](memory-v2.md)；该文档目前是待确认设计，不代表已经完成对应迁移。
+完整表结构、FTS 同事务同步、确认事务、检索预算、迁移与崩溃恢复见 [`implementation/database.md`](implementation/database.md)。Memory V2 的来源追踪、敏感信息边界、事实冲突和过期规则见 [`memory-v2.md`](memory-v2.md)；当前规则已落地到数据库、核心逻辑和记忆管理面板。
 
 ## 10. 桌宠交互组织
 

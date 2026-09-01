@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import type { DataSummary, MemoryCandidate, MemoryItem, MemorySettings } from "../contracts";
-import { clearConversationData, clearMemoryData, createMemory, deleteMemory, getDataSummary, getMemorySettings, isTauri, listMemoryCandidates, reviewMemoryCandidate, searchMemories, updateMemory, updateMemoryCandidate, updateMemorySettings } from "../lib/tauri";
+import type { DataSummary, MemoryCandidate, MemoryItem, MemorySettings, MemorySource } from "../contracts";
+import { clearConversationData, clearMemoryData, createMemory, deleteMemory, exportMemories, getDataSummary, getMemorySettings, getMemorySource, isTauri, listMemoryCandidates, reviewMemoryCandidate, searchMemories, updateMemory, updateMemoryCandidate, updateMemorySettings } from "../lib/tauri";
 
 function errorMessage(reason: unknown, fallback: string) {
   if (typeof reason === "string") return reason;
@@ -20,7 +20,7 @@ function memoryOriginLabel(origin: string) {
   return "自动候选";
 }
 
-export function MemoryPanel({ onClose }: { onClose: () => void }) {
+export function MemoryPanel({ onClose, onJumpToMessage }: { onClose: () => void; onJumpToMessage?: (messageId: string) => void }) {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [candidates, setCandidates] = useState<MemoryCandidate[]>([]);
@@ -31,6 +31,8 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState("");
   const [summary, setSummary] = useState<DataSummary | null>(null);
   const [memorySettings, setMemorySettings] = useState<MemorySettings | null>(null);
+  const [source, setSource] = useState<MemorySource | null>(null);
+  const [exportedPath, setExportedPath] = useState("");
   const [confirming, setConfirming] = useState<"conversation" | "memories" | null>(null);
   const requestSequence = useRef(0);
 
@@ -126,6 +128,38 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
       await refresh();
     } catch (reason) {
       setError(errorMessage(reason, "更新记忆失败。"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const showSource = async (memory: MemoryItem) => {
+    if (busy || !isTauri()) return;
+    if (source?.memory_id === memory.id) {
+      setSource(null);
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      setSource(await getMemorySource(memory.id));
+    } catch (reason) {
+      setError(errorMessage(reason, "读取记忆来源失败。"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportAllMemories = async () => {
+    if (busy || !isTauri() || !window.confirm("将导出当前角色可见的全部长期记忆，包括已过期和敏感记忆元数据。继续吗？")) return;
+    setBusy(true);
+    setError("");
+    setExportedPath("");
+    try {
+      const path = await exportMemories();
+      if (path) setExportedPath(path);
+    } catch (reason) {
+      setError(errorMessage(reason, "导出记忆失败。"));
     } finally {
       setBusy(false);
     }
@@ -296,10 +330,19 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
           {items.map((memory) => (
             <article className="memory-card" key={memory.id}>
               <span className="memory-scope-label">{memoryScopeLabel(memory.scope)}</span>
+              {memory.valid_until_ms && memory.valid_until_ms <= Date.now() && <span className="memory-expired">已过期 · 仅在管理界面保留</span>}
               {editing?.id === memory.id ? (
                 <textarea value={editing.content} maxLength={1000} rows={3} onChange={(event) => setEditing({ id: memory.id, content: event.target.value })} />
               ) : (
                 <p>{memory.content}</p>
+              )}
+              {memory.valid_until_ms && memory.valid_until_ms > Date.now() && <p className="memory-validity">有效至 {new Date(memory.valid_until_ms).toLocaleDateString()}</p>}
+              {source?.memory_id === memory.id && (
+                <div className="memory-source">
+                  <strong>来源</strong>
+                  <p>{source.message?.canonical_text ?? (source.source_turn_id ? `原对话已清理（Turn ${source.source_turn_id}）` : "来源消息不可用")}</p>
+                  {source.message && onJumpToMessage && <button type="button" onClick={() => onJumpToMessage(source.message!.id)}>定位聊天</button>}
+                </div>
               )}
               <footer>
                 <span>v{memory.version} · {memory.kind} · {memory.sensitivity === "normal" ? "普通" : "敏感"} · {new Date(memory.updated_at_ms).toLocaleDateString()}</span>
@@ -311,6 +354,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
                     </>
                   ) : (
                     <>
+                      {(memory.source_turn_id || memory.source_message_id) && <button type="button" disabled={busy} onClick={() => void showSource(memory)}>{source?.memory_id === memory.id ? "收起来源" : "查看来源"}</button>}
                       <button type="button" onClick={() => setEditing({ id: memory.id, content: memory.content })}>编辑</button>
                       <button type="button" className="danger" disabled={busy} onClick={() => remove(memory)}>删除</button>
                     </>
@@ -327,6 +371,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
             <p>聊天 {summary?.message_count ?? "—"} 条 · 长期记忆 {summary?.memory_count ?? "—"} 条 · 待确认候选 {summary?.memory_candidate_count ?? "—"} 条</p>
           </div>
           <div className="data-actions">
+            <button type="button" disabled={busy || !isTauri()} onClick={() => void exportAllMemories()}>导出 JSON</button>
             {confirming === "conversation" ? (
               <span className="confirm-actions">
                 <button type="button" onClick={() => setConfirming(null)}>取消</button>
@@ -344,6 +389,7 @@ export function MemoryPanel({ onClose }: { onClose: () => void }) {
               <button type="button" className="danger" disabled={busy || !isTauri() || !summary || (summary.memory_count === 0 && summary.memory_candidate_count === 0)} onClick={() => setConfirming("memories")}>清空全部记忆</button>
             )}
           </div>
+          {exportedPath && <p className="data-success">已导出到：{exportedPath}</p>}
           <p className="data-warning">两项操作相互独立，均保留 Provider、角色模型和桌宠设置；确认后不可撤销。</p>
         </section>
       </section>

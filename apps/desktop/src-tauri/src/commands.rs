@@ -7,10 +7,11 @@ use crate::{
     contracts::{
         ActionRequest, AppError, AppSnapshot, CancelTimerRequest, CancelTurnRequest,
         CharacterSettings, CreateMemoryRequest, DataSummary, DeleteMemoryRequest, MemoryCandidate,
-        MemoryItem, MemorySettings, PetSettings, ProviderSettings, ReviewMemoryCandidateRequest,
-        ScreenObservationPreview, ScreenObservationRequest, ScreenUnderstandingMode,
-        SearchMemoriesRequest, SetListeningRequest, SetScreenUnderstandingModeRequest,
-        SubmitTextRequest, ToolDecisionRequest, UpdateMemoryCandidateRequest, UpdateMemoryRequest,
+        MemoryItem, MemorySettings, MemorySource, MemorySourceRequest, PetSettings,
+        ProviderSettings, ReviewMemoryCandidateRequest, ScreenObservationPreview,
+        ScreenObservationRequest, ScreenUnderstandingMode, SearchMemoriesRequest,
+        SetListeningRequest, SetScreenUnderstandingModeRequest, SubmitTextRequest,
+        ToolDecisionRequest, UpdateMemoryCandidateRequest, UpdateMemoryRequest,
         UpdateMemorySettingsRequest, UpdatePetSettingsRequest, UpdateProviderRequest,
         UpdateVoiceSettingsRequest, VisionProviderSettings, VoiceSettings,
     },
@@ -238,6 +239,50 @@ pub fn memory_list_candidates(
 ) -> Result<Vec<MemoryCandidate>, AppError> {
     validate_request_id(&request.request_id)?;
     state.0.list_memory_candidates(20)
+}
+
+#[tauri::command]
+pub fn memory_get_source(
+    state: State<'_, CoreState>,
+    request: MemorySourceRequest,
+) -> Result<Option<MemorySource>, AppError> {
+    validate_request_id(&request.request_id)?;
+    state.0.memory_source(&request.id)
+}
+
+#[tauri::command]
+pub async fn memory_export(
+    app: AppHandle,
+    state: State<'_, CoreState>,
+    request: ActionRequest,
+) -> Result<Option<String>, AppError> {
+    validate_request_id(&request.request_id)?;
+    let selected = app
+        .dialog()
+        .file()
+        .set_title("导出爱丽丝记忆")
+        .set_file_name("aris-memory.json")
+        .add_filter("JSON 文件", &["json"])
+        .blocking_save_file();
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let path = selected.into_path().map_err(|error| {
+        AppError::new(
+            "memory_export",
+            format!("无法读取导出文件路径：{error}"),
+            false,
+        )
+    })?;
+    let payload = state.0.export_memories().await?;
+    std::fs::write(&path, payload).map_err(|error| {
+        AppError::new(
+            "memory_export",
+            format!("无法写入记忆导出文件：{error}"),
+            true,
+        )
+    })?;
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]

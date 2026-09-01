@@ -84,6 +84,13 @@ export interface MemoryCandidate {
   conflict_content?: string | null;
 }
 
+export interface MemorySource {
+  memory_id: string;
+  source_turn_id: string | null;
+  source_message_id: string | null;
+  message: ChatMessage | null;
+}
+
 export interface MemorySettings {
   automatic_candidates_enabled: boolean;
   revision: number;

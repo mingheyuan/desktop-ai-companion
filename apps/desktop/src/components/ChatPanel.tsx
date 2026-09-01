@@ -27,6 +27,7 @@ export function ChatPanel() {
   const [screenOcrText, setScreenOcrText] = useState<string | null>(null);
   const [screenPreviewError, setScreenPreviewError] = useState("");
   const [screenPreviewBusy, setScreenPreviewBusy] = useState(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [clockMs, setClockMs] = useState(() => Date.now());
   const pttStart = useRef<Promise<void> | null>(null);
   const voicePermissionNotDetermined = snapshot.voice_permissions.microphone === "not_determined"
@@ -37,6 +38,15 @@ export function ChatPanel() {
     || snapshot.voice_permissions.speech_recognition === "restricted";
   const voiceSystemSpeechDisabled = snapshot.last_error?.code === "system_speech_disabled";
   const browserPreview = !isTauri();
+
+  const jumpToMessage = (messageId: string) => {
+    setMemoryOpen(false);
+    setHighlightedMessageId(messageId);
+    window.setTimeout(() => {
+      document.querySelector(`[data-message-id="${messageId}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
+    window.setTimeout(() => setHighlightedMessageId(null), 2_000);
+  };
 
   useEffect(() => {
     const observation = snapshot.screen_observation;
@@ -532,7 +542,7 @@ export function ChatPanel() {
           </div>
         )}
         {snapshot.messages.map((message) => (
-          <article className={`message message-${message.role}`} key={message.id}>
+          <article className={`message message-${message.role}${highlightedMessageId === message.id ? " message-highlighted" : ""}`} data-message-id={message.id} key={message.id}>
             <span>{message.role === "user" ? "老师" : "爱丽丝"}</span>
             <p>{message.canonical_text}</p>
           </article>
@@ -578,7 +588,7 @@ export function ChatPanel() {
           onScreenUnderstandingModeChanged={setScreenUnderstandingMode}
         />
       )}
-      {memoryOpen && <MemoryPanel onClose={() => setMemoryOpen(false)} />}
+      {memoryOpen && <MemoryPanel onClose={() => setMemoryOpen(false)} onJumpToMessage={jumpToMessage} />}
     </main>
   );
 }

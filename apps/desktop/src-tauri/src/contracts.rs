@@ -87,7 +87,7 @@ pub enum MessageStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
     pub id: String,
     pub turn_id: String,
@@ -299,6 +299,14 @@ pub struct MemoryCandidate {
     pub conflict_of: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conflict_content: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemorySource {
+    pub memory_id: String,
+    pub source_turn_id: Option<String>,
+    pub source_message_id: Option<String>,
+    pub message: Option<ChatMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -585,6 +593,12 @@ pub struct SearchMemoriesRequest {
     pub query: String,
     #[serde(default = "default_memory_limit")]
     pub limit: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MemorySourceRequest {
+    pub request_id: String,
+    pub id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
