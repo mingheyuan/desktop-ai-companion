@@ -522,7 +522,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
                         json!({
                             "type": "function",
                             "function": {
-                                "name": tool.name,
+                                "name": provider_tool_name(&tool.name),
                                 "description": tool.description,
                                 "parameters": tool.parameters,
                             }
@@ -543,13 +543,18 @@ impl LlmProvider for OpenAiCompatibleProvider {
         if !response.status().is_success() {
             let status = response.status();
             let retryable = status.as_u16() == 429 || status.is_server_error();
+            let response_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "无法读取 Provider 错误详情。".into());
+            let response_body = compact_provider_error(&response_body);
             return Err(AppError::new(
                 if status.as_u16() == 401 {
                     "authentication_failed"
                 } else {
                     "provider_unavailable"
                 },
-                format!("LLM 返回 HTTP {status}"),
+                format!("LLM 返回 HTTP {status}：{response_body}"),
                 retryable,
             ));
         }
@@ -650,7 +655,7 @@ fn serialize_message(message: LlmMessage) -> Value {
                                 "id": call.id,
                                 "type": "function",
                                 "function": {
-                                    "name": call.name,
+                                    "name": provider_tool_name(&call.name),
                                     "arguments": call.arguments,
                                 }
                             })
@@ -669,6 +674,45 @@ fn serialize_message(message: LlmMessage) -> Value {
             "content": content,
         }),
     }
+}
+
+/// Provider-facing function names must follow the OpenAI-compatible function
+/// name grammar. The rest of the app intentionally keeps dotted names because
+/// they act as stable internal capability identifiers (for example,
+/// `screen.observe`).
+fn provider_tool_name(name: &str) -> &str {
+    match name {
+        "system.open_url" => "system_open_url",
+        "web.read" => "web_read",
+        "browser.interact" => "browser_interact",
+        "timer.create" => "timer_create",
+        "timer.cancel" => "timer_cancel",
+        "memory.save" => "memory_save",
+        "screen.observe" => "screen_observe",
+        other => other,
+    }
+}
+
+fn internal_tool_name(name: &str) -> String {
+    match name {
+        "system_open_url" => "system.open_url".into(),
+        "web_read" => "web.read".into(),
+        "browser_interact" => "browser.interact".into(),
+        "timer_create" => "timer.create".into(),
+        "timer_cancel" => "timer.cancel".into(),
+        "memory_save" => "memory.save".into(),
+        "screen_observe" => "screen.observe".into(),
+        other => other.into(),
+    }
+}
+
+fn compact_provider_error(body: &str) -> String {
+    let compact = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let compact = compact.trim();
+    if compact.is_empty() {
+        return "Provider 未提供错误详情。".into();
+    }
+    compact.chars().take(500).collect()
 }
 
 #[derive(Debug, Default)]
@@ -696,7 +740,16 @@ impl PendingToolCall {
 }
 
 fn finish_tool_calls(pending: Vec<PendingToolCall>) -> Result<Vec<ToolCall>, AppError> {
-    pending.into_iter().map(PendingToolCall::finish).collect()
+    pending
+        .into_iter()
+        .map(PendingToolCall::finish)
+        .map(|result| {
+            result.map(|mut call| {
+                call.name = internal_tool_name(&call.name);
+                call
+            })
+        })
+        .collect()
 }
 
 fn append_tool_call_delta(
@@ -858,13 +911,36 @@ mod tests {
             tool_calls: vec![call.clone()],
         });
         assert_eq!(serialized["role"], "assistant");
-        assert_eq!(serialized["tool_calls"][0]["function"]["name"], call.name);
+        assert_eq!(
+            serialized["tool_calls"][0]["function"]["name"],
+            "system_open_url"
+        );
         let tool_definitions = ToolRegistry::definitions();
         assert_eq!(tool_definitions.len(), 7);
         assert!(tool_definitions
             .iter()
             .any(|tool| tool.name == "screen.observe"));
         assert!(tool_definitions.iter().any(|tool| tool.name == "web.read"));
+    }
+
+    #[test]
+    fn provider_tool_names_round_trip_without_dots() {
+        for internal in [
+            "system.open_url",
+            "web.read",
+            "browser.interact",
+            "timer.create",
+            "timer.cancel",
+            "memory.save",
+            "screen.observe",
+        ] {
+            let external = provider_tool_name(internal);
+            assert!(!external.contains('.'));
+            assert!(external.chars().all(
+                |character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            ));
+            assert_eq!(internal_tool_name(external), internal);
+        }
     }
 
     #[test]
@@ -996,7 +1072,7 @@ mod tests {
             assert_eq!(tools.len(), 7);
             assert!(tools
                 .iter()
-                .any(|tool| tool["function"]["name"] == "screen.observe"));
+                .any(|tool| tool["function"]["name"] == "screen_observe"));
             assert_eq!(body["tool_choice"], "auto");
 
             let first = json!({
@@ -1007,7 +1083,7 @@ mod tests {
                             "id": "call_",
                             "type": "function",
                             "function": {
-                                "name": "system.open_url",
+                                "name": "system_open_url",
                                 "arguments": r#"{"url":"https://"#
                             }
                         }]
